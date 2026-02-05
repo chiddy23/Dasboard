@@ -1,0 +1,222 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* JustInsurance Custom Styles */
+
+:root {
+  --ji-navy: #192f4d;
+  --ji-navy-dark: #0f2b47;
+  --ji-navy-light: #15355f;
+  --ji-blue: #1a3a52;
+  --ji-blue-medium: #2c5282;
+  --ji-blue-bright: #3182ce;
+  --ji-blue-accent: #5b9bd5;
+  --ji-blue-light: #63b3ed;
+
+  --status-active: #22c55e;
+  --status-warning: #f97316;
+  --status-reengage: #ef4444;
+
+  --progress-high: #22c55e;
+  --progress-med: #f97316;
+  --progress-low: #ef4444;
+}
+
+body {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background-color: #f3f4f6;
+  margin: 0;
+  padding: 0;
+}
+
+/* Login Page Background */
+.login-bg {
+  background: linear-gradient(145deg, #0f2b47 0%, #1a3a52 50%, #2a5575 100%);
+  min-height: 100vh;
+}
+
+/* Card Styles */
+.card {
+  @apply bg-white rounded-xl shadow-lg;
+}
+
+.card-hover {
+  @apply transition-all duration-200 hover:shadow-xl hover:-translate-y-0.5;
+}
+
+/* KPI Card Styles */
+.kpi-card {
+  @apply bg-white rounded-xl p-5 shadow-md transition-all duration-200;
+}
+
+.kpi-card:hover {
+  @apply shadow-lg -translate-y-0.5;
+}
+
+.kpi-icon {
+  @apply w-12 h-12 rounded-lg flex items-center justify-center text-2xl;
+}
+
+.kpi-value {
+  @apply text-3xl font-bold text-gray-800;
+}
+
+.kpi-label {
+  @apply text-sm text-gray-500 font-medium;
+}
+
+/* Status Badges */
+.badge {
+  @apply inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold;
+}
+
+.badge-active {
+  @apply bg-green-100 text-green-800;
+}
+
+.badge-warning {
+  @apply bg-orange-100 text-orange-800;
+}
+
+.badge-reengage {
+  @apply bg-red-100 text-red-800;
+}
+
+/* Progress Bar */
+.progress-bar {
+  @apply w-full bg-gray-200 rounded-full h-3 overflow-hidden;
+}
+
+.progress-fill {
+  @apply h-full rounded-full transition-all duration-300;
+}
+
+.progress-high {
+  @apply bg-green-500;
+}
+
+.progress-med {
+  @apply bg-orange-500;
+}
+
+.progress-low {
+  @apply bg-red-500;
+}
+
+/* Table Styles */
+.data-table {
+  @apply w-full;
+}
+
+.data-table thead {
+  @apply bg-gray-50;
+}
+
+.data-table th {
+  @apply px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider;
+}
+
+.data-table td {
+  @apply px-4 py-4 whitespace-nowrap;
+}
+
+.data-table tbody tr {
+  @apply border-b border-gray-100 hover:bg-gray-50 transition-colors;
+}
+
+/* Button Styles */
+.btn {
+  @apply inline-flex items-center justify-center px-4 py-2 rounded-lg font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2;
+}
+
+.btn-primary {
+  @apply bg-ji-blue-bright text-white hover:bg-ji-blue-medium focus:ring-ji-blue-bright;
+}
+
+.btn-secondary {
+  @apply bg-gray-100 text-gray-700 hover:bg-gray-200 focus:ring-gray-400;
+}
+
+.btn-icon {
+  @apply p-2 rounded-lg hover:bg-gray-100 transition-colors;
+}
+
+/* Input Styles */
+.input {
+  @apply w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-ji-blue-bright focus:border-transparent transition-all;
+}
+
+.input-label {
+  @apply block text-sm font-medium text-gray-700 mb-1;
+}
+
+/* Header */
+.header {
+  background: linear-gradient(145deg, #0f2b47 0%, #1a3a52 50%, #2a5575 100%);
+  @apply text-white;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-gray-100 rounded;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-gray-300 rounded hover:bg-gray-400;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.3s ease-out;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.animate-spin-slow {
+  animation: spin 1s linear infinite;
+}
+
+/* Loading Spinner */
+.spinner {
+  @apply w-6 h-6 border-2 border-gray-300 border-t-ji-blue-bright rounded-full;
+  animation: spin 0.8s linear infinite;
+}
+
+/* Modal */
+.modal-overlay {
+  @apply fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50;
+}
+
+.modal-content {
+  @apply bg-white rounded-xl shadow-2xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .kpi-card {
+    @apply p-4;
+  }
+
+  .kpi-value {
+    @apply text-2xl;
+  }
+
+  .data-table th,
+  .data-table td {
+    @apply px-2 py-2;
+  }
+}

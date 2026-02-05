@@ -1,0 +1,302 @@
+"""Formatting utilities for dates, times, and data."""
+
+from datetime import datetime, timezone
+from typing import Optional, Dict, Any
+
+
+def parse_absorb_date(date_string: Optional[str]) -> Optional[datetime]:
+    """
+    Parse a date string from Absorb API.
+
+    Args:
+        date_string: ISO format date string from Absorb
+
+    Returns:
+        datetime object or None if invalid
+    """
+    if not date_string:
+        return None
+
+    try:
+        # Handle various ISO formats
+        if date_string.endswith('Z'):
+            date_string = date_string[:-1] + '+00:00'
+
+        # Try parsing with timezone
+        try:
+            return datetime.fromisoformat(date_string)
+        except ValueError:
+            # Try without timezone
+            return datetime.fromisoformat(date_string.replace('+00:00', ''))
+    except (ValueError, AttributeError):
+        return None
+
+
+def format_relative_time(dt: Optional[datetime]) -> str:
+    """
+    Format a datetime as relative time (e.g., "2 hours ago").
+
+    Args:
+        dt: datetime object
+
+    Returns:
+        Formatted relative time string
+    """
+    if not dt:
+        return "Never"
+
+    now = datetime.now(timezone.utc) if dt.tzinfo else datetime.now()
+
+    diff = now - dt
+
+    seconds = diff.total_seconds()
+
+    if seconds < 0:
+        return "Just now"
+
+    if seconds < 60:
+        return "Just now"
+    elif seconds < 3600:
+        minutes = int(seconds / 60)
+        return f"{minutes}m ago"
+    elif seconds < 86400:
+        hours = int(seconds / 3600)
+        return f"{hours}h ago"
+    elif seconds < 604800:
+        days = int(seconds / 86400)
+        return f"{days}d ago"
+    else:
+        return dt.strftime("%b %d, %Y")
+
+
+def format_datetime(dt: Optional[datetime], format_str: str = "%b %d, %Y %I:%M %p") -> str:
+    """
+    Format a datetime for display.
+
+    Args:
+        dt: datetime object
+        format_str: strftime format string
+
+    Returns:
+        Formatted date string
+    """
+    if not dt:
+        return "N/A"
+
+    return dt.strftime(format_str)
+
+
+def get_status_from_last_login(last_login: Optional[str]) -> Dict[str, Any]:
+    """
+    Determine student status based on last login date.
+
+    Args:
+        last_login: ISO format date string of last login
+
+    Returns:
+        Dictionary with status, class, and emoji
+    """
+    if not last_login:
+        return {
+            'status': 'RE-ENGAGE',
+            'class': 'red',
+            'emoji': '🔴',
+            'priority': 3
+        }
+
+    last_login_dt = parse_absorb_date(last_login)
+
+    if not last_login_dt:
+        return {
+            'status': 'RE-ENGAGE',
+            'class': 'red',
+            'emoji': '🔴',
+            'priority': 3
+        }
+
+    now = datetime.now(timezone.utc) if last_login_dt.tzinfo else datetime.now()
+    hours_diff = (now - last_login_dt).total_seconds() / 3600
+
+    if hours_diff <= 24:
+        return {
+            'status': 'ACTIVE',
+            'class': 'green',
+            'emoji': '🟢',
+            'priority': 1
+        }
+    elif hours_diff <= 72:
+        return {
+            'status': 'WARNING',
+            'class': 'orange',
+            'emoji': '🟡',
+            'priority': 2
+        }
+    else:
+        return {
+            'status': 'RE-ENGAGE',
+            'class': 'red',
+            'emoji': '🔴',
+            'priority': 3
+        }
+
+
+def parse_time_spent_to_minutes(time_value) -> int:
+    """
+    Parse time spent value to minutes.
+    Absorb API returns time as HH:MM:SS.microseconds string (e.g., '01:26:11.9878697')
+
+    Args:
+        time_value: Time value (can be HH:MM:SS string, int minutes, or None)
+
+    Returns:
+        Time in minutes as integer
+    """
+    if not time_value:
+        return 0
+
+    # If it's already a number, assume it's minutes
+    if isinstance(time_value, (int, float)):
+        return int(time_value)
+
+    # If it's a string in HH:MM:SS format
+    if isinstance(time_value, str):
+        try:
+            # Handle HH:MM:SS.microseconds format
+            time_part = time_value.split('.')[0]  # Remove microseconds
+            parts = time_part.split(':')
+            if len(parts) == 3:
+                hours = int(parts[0])
+                mins = int(parts[1])
+                # Ignore seconds for display
+                return hours * 60 + mins
+            elif len(parts) == 2:
+                hours = int(parts[0])
+                mins = int(parts[1])
+                return hours * 60 + mins
+            else:
+                # Try parsing as a number
+                return int(float(time_value))
+        except (ValueError, TypeError):
+            return 0
+
+    return 0
+
+
+def format_time_spent(time_value) -> str:
+    """
+    Format time spent to human-readable format.
+
+    Args:
+        time_value: Time value (HH:MM:SS string or minutes as int/float)
+
+    Returns:
+        Formatted time string (e.g., "2h 30m")
+    """
+    minutes = parse_time_spent_to_minutes(time_value)
+
+    if minutes <= 0:
+        return "0m"
+
+    hours = minutes // 60
+    remaining_minutes = minutes % 60
+
+    if hours > 0:
+        if remaining_minutes > 0:
+            return f"{hours}h {remaining_minutes}m"
+        return f"{hours}h"
+    else:
+        return f"{remaining_minutes}m"
+
+
+def format_progress(progress) -> Dict[str, Any]:
+    """
+    Format progress percentage with color coding.
+
+    Args:
+        progress: Progress percentage (0-100), can be int, float, or string
+
+    Returns:
+        Dictionary with formatted progress data
+    """
+    # Convert to float, handling strings and None
+    try:
+        progress = float(progress) if progress else 0
+    except (ValueError, TypeError):
+        progress = 0
+
+    progress = max(0, min(100, progress))
+
+    if progress >= 75:
+        color_class = 'high'
+        color = '#22c55e'  # Green
+    elif progress >= 40:
+        color_class = 'med'
+        color = '#f97316'  # Orange
+    else:
+        color_class = 'low'
+        color = '#ef4444'  # Red
+
+    return {
+        'value': round(progress, 1),
+        'display': f"{round(progress)}%",
+        'colorClass': color_class,
+        'color': color
+    }
+
+
+def format_student_for_response(student: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Format a student record for API response.
+
+    Args:
+        student: Raw student data from Absorb
+
+    Returns:
+        Formatted student dictionary
+    """
+    last_login = student.get('lastLoginDate')
+    status_info = get_status_from_last_login(last_login)
+    progress_info = format_progress(student.get('progress', 0))
+
+    return {
+        'id': student.get('id'),
+        'firstName': student.get('firstName', ''),
+        'lastName': student.get('lastName', ''),
+        'fullName': f"{student.get('firstName', '')} {student.get('lastName', '')}".strip(),
+        'email': student.get('emailAddress', ''),
+        'username': student.get('username', ''),
+        'lastLogin': {
+            'raw': last_login,
+            'formatted': format_datetime(parse_absorb_date(last_login)),
+            'relative': format_relative_time(parse_absorb_date(last_login))
+        },
+        'status': status_info,
+        'courseName': student.get('courseName', 'No Course'),
+        'progress': progress_info,
+        'timeSpent': {
+            'minutes': student.get('timeSpent', 0),
+            'formatted': format_time_spent(student.get('timeSpent', 0))
+        },
+        'enrollmentStatus': student.get('enrollmentStatus', 0),
+        'enrollmentStatusText': get_enrollment_status_text(student.get('enrollmentStatus', 0))
+    }
+
+
+def get_enrollment_status_text(status: int) -> str:
+    """
+    Get human-readable enrollment status.
+
+    Args:
+        status: Enrollment status code from Absorb API
+
+    Returns:
+        Status text
+    """
+    status_map = {
+        0: 'Not Started',
+        1: 'In Progress',
+        2: 'Complete',
+        3: 'Complete',  # Absorb API uses 3 for completed
+        4: 'Failed'
+    }
+    return status_map.get(status, 'Unknown')
