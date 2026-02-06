@@ -19,7 +19,7 @@ FRONTEND_DIST = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'fronte
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from config import get_config, Config
-from routes import auth_bp, dashboard_bp, students_bp
+from routes import auth_bp, dashboard_bp, students_bp, exam_bp
 
 
 def create_app():
@@ -51,6 +51,7 @@ def create_app():
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(dashboard_bp, url_prefix='/api/dashboard')
     app.register_blueprint(students_bp, url_prefix='/api/students')
+    app.register_blueprint(exam_bp, url_prefix='/api/exam')
 
     # Health check endpoint
     @app.route('/api/health', methods=['GET'])

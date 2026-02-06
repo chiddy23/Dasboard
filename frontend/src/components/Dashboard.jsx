@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import KPICards from './KPICards'
 import StudentTable from './StudentTable'
+import ExamTable from './ExamTable'
 import StudentModal from './StudentModal'
 import Charts from './Charts'
 
@@ -16,6 +17,12 @@ function Dashboard({ user, department, onLogout, initialData }) {
   const [lastSynced, setLastSynced] = useState(initialData ? new Date() : null)
   const [selectedStudent, setSelectedStudent] = useState(null)
   const [showCharts, setShowCharts] = useState(false)
+
+  // Tab state
+  const [activeTab, setActiveTab] = useState('students')
+  const [examStudents, setExamStudents] = useState([])
+  const [examLoading, setExamLoading] = useState(false)
+  const [examLoaded, setExamLoaded] = useState(false)
 
   // Filtering and search
   const [searchTerm, setSearchTerm] = useState('')
@@ -35,6 +42,37 @@ function Dashboard({ user, department, onLogout, initialData }) {
       }
     }
   }, [])
+
+  // Fetch exam data when exam tab is selected for the first time
+  useEffect(() => {
+    if (activeTab === 'exam' && !examLoaded && !examLoading) {
+      fetchExamData()
+    }
+  }, [activeTab])
+
+  const fetchExamData = async () => {
+    setExamLoading(true)
+    try {
+      const res = await fetch(`${API_BASE}/exam/students`, { credentials: 'include' })
+      if (!res.ok) {
+        if (res.status === 401) {
+          onLogout()
+          return
+        }
+        throw new Error('Failed to fetch exam data')
+      }
+      const data = await res.json()
+      if (data.success) {
+        setExamStudents(data.students)
+        setExamLoaded(true)
+      }
+    } catch (err) {
+      setError('Failed to load exam data. Please try again.')
+      console.error('[DASHBOARD] Exam data error:', err)
+    } finally {
+      setExamLoading(false)
+    }
+  }
 
   // Load full data with enrollments in background
   const loadFullDataInBackground = async () => {
@@ -127,6 +165,13 @@ function Dashboard({ user, department, onLogout, initialData }) {
         setSummary(data.summary)
         setStudents(data.students)
         setLastSynced(new Date())
+        // Also refresh exam data if it was loaded
+        if (examLoaded) {
+          setExamLoaded(false)
+          if (activeTab === 'exam') {
+            fetchExamData()
+          }
+        }
       }
     } catch (err) {
       setError('Failed to sync data. Please try again.')
@@ -160,17 +205,28 @@ function Dashboard({ user, department, onLogout, initialData }) {
     }
   }
 
-  // Filter students
+  // Filter students (works for both tabs)
   const filteredStudents = students.filter(student => {
-    // Search filter
     const searchLower = searchTerm.toLowerCase()
     const matchesSearch = !searchTerm ||
       student.fullName.toLowerCase().includes(searchLower) ||
       student.email.toLowerCase().includes(searchLower)
 
-    // Status filter
     const matchesStatus = statusFilter === 'all' ||
       student.status.status.toLowerCase() === statusFilter.toLowerCase()
+
+    return matchesSearch && matchesStatus
+  })
+
+  const filteredExamStudents = examStudents.filter(student => {
+    const searchLower = searchTerm.toLowerCase()
+    const matchesSearch = !searchTerm ||
+      (student.fullName || '').toLowerCase().includes(searchLower) ||
+      (student.email || '').toLowerCase().includes(searchLower) ||
+      (student.departmentName || '').toLowerCase().includes(searchLower)
+
+    const matchesStatus = statusFilter === 'all' ||
+      (student.status?.status || '').toLowerCase() === statusFilter.toLowerCase()
 
     return matchesSearch && matchesStatus
   })
@@ -331,104 +387,216 @@ function Dashboard({ user, department, onLogout, initialData }) {
           </div>
         )}
 
-        {/* Last Synced Info */}
-        <div className="mb-6 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <p className="text-sm text-gray-500">
-              Last updated: {formatLastSynced()}
-            </p>
-            {loadingFull && (
-              <span className="text-xs text-ji-blue-bright flex items-center gap-1">
-                <svg className="animate-spin h-3 w-3" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
-                </svg>
-                Loading progress data...
-              </span>
-            )}
-          </div>
+        {/* Tab Navigation */}
+        <div className="flex space-x-1 mb-6 bg-white rounded-lg shadow-md p-1 max-w-xs">
           <button
-            onClick={() => setShowCharts(!showCharts)}
-            className="text-sm text-ji-blue-bright hover:text-ji-blue-medium flex items-center space-x-1"
+            className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-colors ${
+              activeTab === 'students'
+                ? 'bg-ji-blue-bright text-white shadow-sm'
+                : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+            }`}
+            onClick={() => setActiveTab('students')}
           >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-            </svg>
-            <span>{showCharts ? 'Hide Charts' : 'Show Charts'}</span>
+            <div className="flex items-center justify-center gap-2">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+              <span>Students</span>
+            </div>
+          </button>
+          <button
+            className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-colors ${
+              activeTab === 'exam'
+                ? 'bg-ji-blue-bright text-white shadow-sm'
+                : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+            }`}
+            onClick={() => setActiveTab('exam')}
+          >
+            <div className="flex items-center justify-center gap-2">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+              <span>Exam</span>
+            </div>
           </button>
         </div>
 
-        {/* KPI Cards */}
-        {summary && <KPICards summary={summary} />}
-
-        {/* Charts (collapsible) */}
-        {showCharts && summary && (
-          <div className="mb-8 animate-fadeIn">
-            <Charts summary={summary} students={students} />
-          </div>
-        )}
-
-        {/* Filters and Search */}
-        <div className="bg-white rounded-xl shadow-md p-4 mb-6">
-          <div className="flex flex-col sm:flex-row gap-4 items-center justify-between">
-            {/* Search */}
-            <div className="relative flex-1 max-w-md">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                </svg>
-              </span>
-              <input
-                type="text"
-                placeholder="Search by name or email..."
-                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-ji-blue-bright"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
-            </div>
-
-            <div className="flex items-center gap-4">
-              {/* Status Filter */}
-              <select
-                className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-ji-blue-bright"
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
-              >
-                <option value="all">All Status</option>
-                <option value="complete">Complete</option>
-                <option value="active">Active</option>
-                <option value="warning">Warning</option>
-                <option value="re-engage">Re-engage</option>
-              </select>
-
-              {/* Export Button */}
+        {/* Students Tab Content */}
+        {activeTab === 'students' && (
+          <>
+            {/* Last Synced Info */}
+            <div className="mb-6 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <p className="text-sm text-gray-500">
+                  Last updated: {formatLastSynced()}
+                </p>
+                {loadingFull && (
+                  <span className="text-xs text-ji-blue-bright flex items-center gap-1">
+                    <svg className="animate-spin h-3 w-3" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
+                    </svg>
+                    Loading progress data...
+                  </span>
+                )}
+              </div>
               <button
-                onClick={handleExport}
-                className="btn btn-secondary flex items-center space-x-2"
+                onClick={() => setShowCharts(!showCharts)}
+                className="text-sm text-ji-blue-bright hover:text-ji-blue-medium flex items-center space-x-1"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
                 </svg>
-                <span>Export CSV</span>
+                <span>{showCharts ? 'Hide Charts' : 'Show Charts'}</span>
               </button>
             </div>
-          </div>
 
-          {/* Filter Results Count */}
-          <div className="mt-3 text-sm text-gray-500">
-            Showing {filteredStudents.length} of {students.length} students
-          </div>
-        </div>
+            {/* KPI Cards */}
+            {summary && <KPICards summary={summary} />}
 
-        {/* Student Table */}
-        <StudentTable
-          students={filteredStudents}
-          onViewStudent={setSelectedStudent}
-        />
+            {/* Charts (collapsible) */}
+            {showCharts && summary && (
+              <div className="mb-8 animate-fadeIn">
+                <Charts summary={summary} students={students} />
+              </div>
+            )}
+
+            {/* Filters and Search */}
+            <div className="bg-white rounded-xl shadow-md p-4 mb-6">
+              <div className="flex flex-col sm:flex-row gap-4 items-center justify-between">
+                {/* Search */}
+                <div className="relative flex-1 max-w-md">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                  </span>
+                  <input
+                    type="text"
+                    placeholder="Search by name or email..."
+                    className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-ji-blue-bright"
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                  />
+                </div>
+
+                <div className="flex items-center gap-4">
+                  {/* Status Filter */}
+                  <select
+                    className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-ji-blue-bright"
+                    value={statusFilter}
+                    onChange={(e) => setStatusFilter(e.target.value)}
+                  >
+                    <option value="all">All Status</option>
+                    <option value="complete">Complete</option>
+                    <option value="active">Active</option>
+                    <option value="warning">Warning</option>
+                    <option value="re-engage">Re-engage</option>
+                  </select>
+
+                  {/* Export Button */}
+                  <button
+                    onClick={handleExport}
+                    className="btn btn-secondary flex items-center space-x-2"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                    </svg>
+                    <span>Export CSV</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Filter Results Count */}
+              <div className="mt-3 text-sm text-gray-500">
+                Showing {filteredStudents.length} of {students.length} students
+              </div>
+            </div>
+
+            {/* Student Table */}
+            <StudentTable
+              students={filteredStudents}
+              onViewStudent={setSelectedStudent}
+            />
+          </>
+        )}
+
+        {/* Exam Tab Content */}
+        {activeTab === 'exam' && (
+          <>
+            {/* Exam Tab Header */}
+            <div className="mb-6 flex items-center justify-between">
+              <p className="text-sm text-gray-500">
+                Students with scheduled exams (from Google Sheet)
+              </p>
+              <button
+                onClick={fetchExamData}
+                disabled={examLoading}
+                className="text-sm text-ji-blue-bright hover:text-ji-blue-medium flex items-center space-x-1"
+              >
+                <svg className={`w-4 h-4 ${examLoading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                <span>{examLoading ? 'Refreshing...' : 'Refresh'}</span>
+              </button>
+            </div>
+
+            {/* Search/Filter for Exam Tab */}
+            <div className="bg-white rounded-xl shadow-md p-4 mb-6">
+              <div className="flex flex-col sm:flex-row gap-4 items-center justify-between">
+                <div className="relative flex-1 max-w-md">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                  </span>
+                  <input
+                    type="text"
+                    placeholder="Search by name, email, or department..."
+                    className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-ji-blue-bright"
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                  />
+                </div>
+
+                <div className="flex items-center gap-4">
+                  <select
+                    className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-ji-blue-bright"
+                    value={statusFilter}
+                    onChange={(e) => setStatusFilter(e.target.value)}
+                  >
+                    <option value="all">All Status</option>
+                    <option value="complete">Complete</option>
+                    <option value="active">Active</option>
+                    <option value="warning">Warning</option>
+                    <option value="re-engage">Re-engage</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="mt-3 text-sm text-gray-500">
+                Showing {filteredExamStudents.length} of {examStudents.length} exam students
+              </div>
+            </div>
+
+            {/* Exam Loading State */}
+            {examLoading && !examLoaded ? (
+              <div className="bg-white rounded-xl shadow-md p-8 text-center">
+                <div className="spinner mx-auto mb-4"></div>
+                <p className="text-gray-500">Loading exam schedule...</p>
+              </div>
+            ) : (
+              <ExamTable
+                students={filteredExamStudents}
+                onViewStudent={setSelectedStudent}
+              />
+            )}
+          </>
+        )}
       </main>
 
       {/* Student Detail Modal */}
-      {selectedStudent && (
+      {selectedStudent && selectedStudent.id && (
         <StudentModal
           studentId={selectedStudent.id}
           onClose={() => setSelectedStudent(null)}
