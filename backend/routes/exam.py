@@ -4,18 +4,25 @@ from flask import Blueprint, jsonify, g
 import sys
 import os
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from absorb_api import AbsorbAPIClient, AbsorbAPIError
 from middleware import login_required
+from utils import format_student_for_response
 from google_sheets import fetch_exam_sheet, invalidate_sheet_cache, parse_exam_date_for_sort
 
 exam_bp = Blueprint('exam', __name__)
 
 # Cache for department names (departmentId -> name)
 _dept_name_cache = {}
+
+# Cache for cross-department Absorb lookups (email -> {'raw': ..., 'formatted': ...})
+_exam_absorb_cache = {}
+_exam_absorb_timestamp = None
+EXAM_ABSORB_CACHE_TTL = 300  # 5 minutes
 
 
 def get_department_name(client, department_id):
@@ -36,6 +43,23 @@ def get_department_name(client, department_id):
         return 'Unknown'
 
 
+def is_exam_absorb_cache_valid():
+    """Check if the exam Absorb cache is still valid."""
+    global _exam_absorb_timestamp
+    if not _exam_absorb_timestamp:
+        return False
+    age = (datetime.utcnow() - _exam_absorb_timestamp).total_seconds()
+    return age < EXAM_ABSORB_CACHE_TTL
+
+
+def invalidate_exam_absorb_cache():
+    """Clear the exam Absorb lookup cache."""
+    global _exam_absorb_cache, _exam_absorb_timestamp
+    _exam_absorb_cache = {}
+    _exam_absorb_timestamp = None
+    print("[EXAM] Absorb cache invalidated")
+
+
 @exam_bp.route('/students', methods=['GET'])
 @login_required
 def get_exam_students():
@@ -48,16 +72,17 @@ def get_exam_students():
             return jsonify({
                 'success': True,
                 'students': [],
+                'examSummary': _empty_summary(),
                 'count': 0
             })
 
-        # 2. Get cached Absorb students for matching
+        # 2. Get cached Absorb students from current department (fast match)
         from routes.dashboard import get_cached_students
         raw_students, formatted_students = get_cached_students(
             g.department_id, g.absorb_token
         )
 
-        # 3. Build email -> student maps (raw for departmentId, formatted for display)
+        # 3. Build email maps from current department cache
         raw_email_map = {}
         for s in raw_students:
             email = (s.get('emailAddress') or '').lower().strip()
@@ -70,91 +95,108 @@ def get_exam_students():
             if email:
                 formatted_email_map[email] = s
 
-        # 4. Set up Absorb client for department name lookups
+        # 4. Find emails that need cross-department lookup
+        sheet_emails = set(s['email'] for s in sheet_students)
+        matched_emails = sheet_emails & set(formatted_email_map.keys())
+        unmatched_emails = sheet_emails - matched_emails
+
+        # Remove emails already in the Absorb cache (if cache is valid)
+        if is_exam_absorb_cache_valid():
+            cached_emails = unmatched_emails & set(_exam_absorb_cache.keys())
+            emails_to_lookup = unmatched_emails - cached_emails
+            print(f"[EXAM] {len(matched_emails)} dept-matched, {len(cached_emails)} cached, {len(emails_to_lookup)} to look up")
+        else:
+            emails_to_lookup = unmatched_emails
+            print(f"[EXAM] {len(matched_emails)} dept-matched, {len(emails_to_lookup)} to look up (cache expired)")
+
+        # 5. Parallel Absorb lookup for unmatched students
         client = AbsorbAPIClient()
         client.set_token(g.absorb_token)
 
-        # 5. Match sheet students with Absorb data and combine
+        if emails_to_lookup:
+            global _exam_absorb_timestamp
+            print(f"[EXAM] Looking up {len(emails_to_lookup)} students across departments...")
+
+            max_workers = min(50, len(emails_to_lookup))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_email = {
+                    executor.submit(client.lookup_and_process_student, email): email
+                    for email in emails_to_lookup
+                }
+
+                completed = 0
+                found = 0
+                for future in as_completed(future_to_email):
+                    completed += 1
+                    email = future_to_email[future]
+                    try:
+                        result = future.result()
+                        if result:
+                            formatted = format_student_for_response(result)
+                            _exam_absorb_cache[email] = {
+                                'raw': result,
+                                'formatted': formatted
+                            }
+                            found += 1
+                        else:
+                            # Mark as not found so we don't look up again
+                            _exam_absorb_cache[email] = None
+                    except Exception as e:
+                        print(f"[EXAM] Error processing {email}: {e}")
+                        _exam_absorb_cache[email] = None
+
+                    if completed % 20 == 0 or completed == len(emails_to_lookup):
+                        print(f"[EXAM] Processed {completed}/{len(emails_to_lookup)} lookups ({found} found)")
+
+            _exam_absorb_timestamp = datetime.utcnow()
+            print(f"[EXAM] Lookup complete: {found}/{len(emails_to_lookup)} found")
+
+        # 6. Build combined exam student list
         exam_students = []
 
         for sheet_student in sheet_students:
             email = sheet_student['email']
 
+            # Try department cache first
             formatted = formatted_email_map.get(email)
             raw = raw_email_map.get(email)
 
             if formatted and raw:
-                # Found in Absorb - combine data
+                # Found in current department
                 dept_id = raw.get('departmentId') or ''
                 dept_name = get_department_name(client, dept_id) if dept_id else g.user.get('departmentName', 'Unknown')
 
-                exam_entry = {
-                    **formatted,
-                    'examDate': sheet_student['examDateFormatted'],
-                    'examDateRaw': sheet_student['examDate'],
-                    'examTime': sheet_student['examTime'],
-                    'examState': sheet_student['state'],
-                    'examCourse': sheet_student['course'],
-                    'agencyOwner': sheet_student['agencyOwner'],
-                    'passFail': sheet_student['passFail'],
-                    'finalOutcome': sheet_student['finalOutcome'],
-                    'departmentName': dept_name,
-                    'matched': True
-                }
+                exam_entry = _build_exam_entry(formatted, sheet_student, dept_name, True)
+            elif email in _exam_absorb_cache and _exam_absorb_cache[email] is not None:
+                # Found via cross-department lookup
+                cached = _exam_absorb_cache[email]
+                dept_id = cached['raw'].get('departmentId') or ''
+                dept_name = get_department_name(client, dept_id) if dept_id else 'Unknown'
+
+                exam_entry = _build_exam_entry(cached['formatted'], sheet_student, dept_name, True)
             else:
-                # Not found in Absorb - show sheet data only
-                exam_entry = {
-                    'id': None,
-                    'fullName': sheet_student['name'],
-                    'email': email,
-                    'status': {
-                        'status': 'UNKNOWN',
-                        'class': 'gray',
-                        'emoji': '',
-                        'priority': 99
-                    },
-                    'lastLogin': {
-                        'raw': None,
-                        'formatted': 'N/A',
-                        'relative': 'N/A'
-                    },
-                    'progress': {
-                        'value': 0,
-                        'display': '0%',
-                        'colorClass': 'low',
-                        'color': '#ef4444'
-                    },
-                    'courseName': sheet_student['course'] or 'N/A',
-                    'timeSpent': {'minutes': 0, 'formatted': '0m'},
-                    'examPrepTime': {'minutes': 0, 'formatted': '0m'},
-                    'examDate': sheet_student['examDateFormatted'],
-                    'examDateRaw': sheet_student['examDate'],
-                    'examTime': sheet_student['examTime'],
-                    'examState': sheet_student['state'],
-                    'examCourse': sheet_student['course'],
-                    'agencyOwner': sheet_student['agencyOwner'],
-                    'passFail': sheet_student['passFail'],
-                    'finalOutcome': sheet_student['finalOutcome'],
-                    'departmentName': 'Not in department',
-                    'matched': False
-                }
+                # Not found in Absorb at all
+                exam_entry = _build_unmatched_entry(sheet_student)
 
             exam_students.append(exam_entry)
 
-        # Sort by exam date (upcoming first, then past)
+        # 7. Sort: upcoming first, then past
         now = datetime.utcnow()
 
         def sort_key(s):
             dt = parse_exam_date_for_sort(s.get('examDateRaw', ''))
-            # Upcoming exams first (sorted ascending), then past exams (sorted descending)
             is_past = dt < now if dt != datetime.min else True
             return (is_past, dt if not is_past else datetime.max - dt)
 
         exam_students.sort(key=sort_key)
 
+        # 8. Calculate exam KPIs
+        exam_summary = _calculate_exam_summary(exam_students, now)
+
         return jsonify({
             'success': True,
             'students': exam_students,
+            'examSummary': exam_summary,
             'count': len(exam_students)
         })
 
@@ -174,12 +216,114 @@ def get_exam_students():
         }), 500
 
 
+def _build_exam_entry(formatted, sheet_student, dept_name, matched):
+    """Build an exam entry from formatted Absorb data + sheet data."""
+    return {
+        **formatted,
+        'examDate': sheet_student['examDateFormatted'],
+        'examDateRaw': sheet_student['examDate'],
+        'examTime': sheet_student['examTime'],
+        'examState': sheet_student['state'],
+        'examCourse': sheet_student['course'],
+        'agencyOwner': sheet_student['agencyOwner'],
+        'passFail': sheet_student['passFail'],
+        'finalOutcome': sheet_student['finalOutcome'],
+        'departmentName': dept_name,
+        'matched': matched
+    }
+
+
+def _build_unmatched_entry(sheet_student):
+    """Build an exam entry for a student not found in Absorb."""
+    return {
+        'id': None,
+        'fullName': sheet_student['name'],
+        'email': sheet_student['email'],
+        'status': {
+            'status': 'UNKNOWN',
+            'class': 'gray',
+            'emoji': '',
+            'priority': 99
+        },
+        'lastLogin': {
+            'raw': None,
+            'formatted': 'N/A',
+            'relative': 'N/A'
+        },
+        'progress': {
+            'value': 0,
+            'display': '0%',
+            'colorClass': 'low',
+            'color': '#ef4444'
+        },
+        'courseName': sheet_student['course'] or 'N/A',
+        'timeSpent': {'minutes': 0, 'formatted': '0m'},
+        'examPrepTime': {'minutes': 0, 'formatted': '0m'},
+        'examDate': sheet_student['examDateFormatted'],
+        'examDateRaw': sheet_student['examDate'],
+        'examTime': sheet_student['examTime'],
+        'examState': sheet_student['state'],
+        'examCourse': sheet_student['course'],
+        'agencyOwner': sheet_student['agencyOwner'],
+        'passFail': sheet_student['passFail'],
+        'finalOutcome': sheet_student['finalOutcome'],
+        'departmentName': 'Not found',
+        'matched': False
+    }
+
+
+def _calculate_exam_summary(exam_students, now):
+    """Calculate KPI summary for exam students."""
+    total = len(exam_students)
+    passed = sum(1 for s in exam_students if (s.get('passFail') or '').upper() == 'PASS')
+    failed = sum(1 for s in exam_students if (s.get('passFail') or '').upper() == 'FAIL')
+
+    upcoming = 0
+    for s in exam_students:
+        dt = parse_exam_date_for_sort(s.get('examDateRaw', ''))
+        has_result = bool(s.get('passFail', '').strip())
+        if dt > now and not has_result:
+            upcoming += 1
+
+    matched_students = [s for s in exam_students if s.get('matched')]
+    if matched_students:
+        avg_progress = round(
+            sum(s['progress']['value'] for s in matched_students) / len(matched_students), 1
+        )
+    else:
+        avg_progress = 0
+
+    no_result = total - passed - failed - upcoming
+
+    return {
+        'total': total,
+        'upcoming': upcoming,
+        'passed': passed,
+        'failed': failed,
+        'noResult': no_result,
+        'averageProgress': avg_progress
+    }
+
+
+def _empty_summary():
+    """Return an empty exam summary."""
+    return {
+        'total': 0,
+        'upcoming': 0,
+        'passed': 0,
+        'failed': 0,
+        'noResult': 0,
+        'averageProgress': 0
+    }
+
+
 @exam_bp.route('/sync', methods=['POST'])
 @login_required
 def sync_exam_data():
-    """Force refresh exam data from Google Sheet."""
+    """Force refresh exam data from Google Sheet and Absorb lookups."""
     try:
         invalidate_sheet_cache()
+        invalidate_exam_absorb_cache()
         sheet_students = fetch_exam_sheet()
 
         return jsonify({

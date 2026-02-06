@@ -21,6 +21,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
   // Tab state
   const [activeTab, setActiveTab] = useState('students')
   const [examStudents, setExamStudents] = useState([])
+  const [examSummary, setExamSummary] = useState(null)
   const [examLoading, setExamLoading] = useState(false)
   const [examLoaded, setExamLoaded] = useState(false)
 
@@ -64,6 +65,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
       const data = await res.json()
       if (data.success) {
         setExamStudents(data.students)
+        setExamSummary(data.examSummary)
         setExamLoaded(true)
       }
     } catch (err) {
@@ -540,6 +542,31 @@ function Dashboard({ user, department, onLogout, initialData }) {
                 <span>{examLoading ? 'Refreshing...' : 'Refresh'}</span>
               </button>
             </div>
+
+            {/* Exam KPI Cards */}
+            {examSummary && (
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-8">
+                {[
+                  { title: 'Total', value: examSummary.total, emoji: '\uD83D\uDCCB', bg: 'bg-gray-50', border: 'border-l-4 border-gray-500', text: 'text-gray-800', sub: 'Exam students' },
+                  { title: 'Upcoming', value: examSummary.upcoming, emoji: '\uD83D\uDCC5', bg: 'bg-blue-50', border: 'border-l-4 border-blue-500', text: 'text-blue-800', sub: 'Scheduled' },
+                  { title: 'Passed', value: examSummary.passed, emoji: '\u2705', bg: 'bg-green-50', border: 'border-l-4 border-green-500', text: 'text-green-800', sub: 'Exam result' },
+                  { title: 'Failed', value: examSummary.failed, emoji: '\u274C', bg: 'bg-red-50', border: 'border-l-4 border-red-500', text: 'text-red-800', sub: 'Exam result' },
+                  { title: 'Pending', value: examSummary.noResult, emoji: '\u23F3', bg: 'bg-orange-50', border: 'border-l-4 border-orange-500', text: 'text-orange-800', sub: 'No result yet' },
+                  { title: 'Avg Progress', value: `${examSummary.averageProgress}%`, emoji: '\uD83D\uDCCA', bg: 'bg-purple-50', border: 'border-l-4 border-purple-500', text: 'text-purple-800', sub: 'Course completion' },
+                ].map((card, i) => (
+                  <div key={i} className={`kpi-card ${card.bg} ${card.border} animate-fadeIn`} style={{ animationDelay: `${i * 50}ms` }}>
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <p className="text-sm font-medium text-gray-600">{card.title}</p>
+                        <p className={`kpi-value ${card.text}`}>{card.value}</p>
+                        <p className="text-xs text-gray-500 mt-1">{card.sub}</p>
+                      </div>
+                      <span className="text-2xl">{card.emoji}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
 
             {/* Search/Filter for Exam Tab */}
             <div className="bg-white rounded-xl shadow-md p-4 mb-6">

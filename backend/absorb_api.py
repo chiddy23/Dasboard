@@ -114,6 +114,35 @@ class AbsorbAPIClient:
         self._token = token
         self._token_expiry = datetime.utcnow() + timedelta(hours=4)
 
+    def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
+        """Look up a user by email address across all departments."""
+        url = f"{self.base_url}/users"
+        params = {
+            "_filter": f"emailAddress eq '{email}'",
+            "_limit": 1
+        }
+        try:
+            response = self._session.get(url, params=params, headers=self._get_headers(), timeout=30)
+            if response.status_code == 200:
+                data = response.json()
+                users = data if isinstance(data, list) else []
+                if users:
+                    return users[0]
+        except Exception as e:
+            print(f"[API] Error looking up user by email {email}: {e}")
+        return None
+
+    def lookup_and_process_student(self, email: str) -> Optional[Dict[str, Any]]:
+        """Look up a student by email and process their enrollment data."""
+        try:
+            user = self.get_user_by_email(email)
+            if not user:
+                return None
+            return self._process_single_user(user)
+        except Exception as e:
+            print(f"[API] Error processing exam student {email}: {e}")
+            return None
+
     def get_users_by_department(self, department_id: str) -> List[Dict[str, Any]]:
         """Get users in a specific department using OData filter (matches Apps Script pattern)."""
         url = f"{self.base_url}/users"
