@@ -114,34 +114,58 @@ class AbsorbAPIClient:
         self._token = token
         self._token_expiry = datetime.utcnow() + timedelta(hours=4)
 
-    def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
-        """Look up a user by email address across all departments."""
+    def get_all_users(self) -> List[Dict[str, Any]]:
+        """Fetch ALL users accessible to this admin (no department filter).
+        Used for cross-department email matching on the exam tab."""
         url = f"{self.base_url}/users"
-        params = {
-            "_filter": f"emailAddress eq '{email}'",
-            "_limit": 1
-        }
-        try:
-            response = self._session.get(url, params=params, headers=self._get_headers(), timeout=30)
-            if response.status_code == 200:
-                data = response.json()
-                users = data if isinstance(data, list) else []
-                if users:
-                    return users[0]
-        except Exception as e:
-            print(f"[API] Error looking up user by email {email}: {e}")
-        return None
+        all_users = []
+        offset = 0
+        limit = 500
 
-    def lookup_and_process_student(self, email: str) -> Optional[Dict[str, Any]]:
-        """Look up a student by email and process their enrollment data."""
-        try:
-            user = self.get_user_by_email(email)
-            if not user:
-                return None
-            return self._process_single_user(user)
-        except Exception as e:
-            print(f"[API] Error processing exam student {email}: {e}")
-            return None
+        print(f"[API] Fetching ALL accessible users (no department filter)...")
+
+        while True:
+            params = {
+                "_limit": limit,
+                "_offset": offset
+            }
+
+            try:
+                response = self._session.get(url, params=params, headers=self._get_headers(), timeout=120)
+            except Exception as e:
+                print(f"[API] Request error at offset {offset}: {e}")
+                break
+
+            if response.status_code == 401:
+                raise AbsorbAPIError("Session expired. Please log in again.", 401)
+
+            if response.status_code != 200:
+                print(f"[API] All-users fetch failed at offset {offset}: {response.status_code}")
+                break
+
+            data = response.json()
+
+            if isinstance(data, dict) and 'users' in data:
+                users = data['users']
+            elif isinstance(data, list):
+                users = data
+            else:
+                print(f"[API] Unexpected response format at offset {offset}")
+                break
+
+            if not users:
+                break
+
+            all_users.extend(users)
+            print(f"[API] Fetched {len(users)} users (total: {len(all_users)})")
+
+            if len(users) < limit:
+                break
+
+            offset += limit
+
+        print(f"[API] ALL USERS COMPLETE: {len(all_users)} total users fetched")
+        return all_users
 
     def get_users_by_department(self, department_id: str) -> List[Dict[str, Any]]:
         """Get users in a specific department using OData filter (matches Apps Script pattern)."""
