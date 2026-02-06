@@ -349,6 +349,14 @@ class AbsorbAPIClient:
             # Find primary enrollment (prioritizes Pre-Licensing course)
             primary, calculated_progress, total_time, course_name = self._find_primary_course(enrollments)
 
+            # Calculate exam prep time (combined time from all exam prep courses)
+            exam_prep_time = 0
+            for e in enrollments:
+                e_name = e.get('courseName') or e.get('CourseName') or ''
+                if self._is_exam_prep_course(e_name):
+                    time_val = e.get('timeSpent') or e.get('TimeSpent') or e.get('ActiveTime') or e.get('activeTime') or 0
+                    exam_prep_time += parse_time_to_minutes(time_val)
+
             # Build student data
             return {
                 'id': user_id,
@@ -361,6 +369,7 @@ class AbsorbAPIClient:
                 'primaryEnrollment': primary,
                 'progress': calculated_progress,
                 'timeSpent': total_time,
+                'examPrepTime': exam_prep_time,
                 'courseName': course_name,
                 'enrollmentStatus': (primary.get('status') or primary.get('Status') or 0) if primary else 0
             }

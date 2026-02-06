@@ -287,6 +287,10 @@ def format_student_for_response(student: Dict[str, Any]) -> Dict[str, Any]:
             'minutes': student.get('timeSpent', 0),
             'formatted': format_time_spent(student.get('timeSpent', 0))
         },
+        'examPrepTime': {
+            'minutes': student.get('examPrepTime', 0),
+            'formatted': format_time_spent(student.get('examPrepTime', 0))
+        },
         'enrollmentStatus': student.get('enrollmentStatus', 0),
         'enrollmentStatusText': get_enrollment_status_text(student.get('enrollmentStatus', 0))
     }

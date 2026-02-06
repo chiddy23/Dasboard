@@ -164,7 +164,10 @@ function StudentTable({ students, onViewStudent }) {
                 <td>
                   <div className="w-32">
                     <ProgressBar progress={student.progress} />
-                    <p className="text-xs text-gray-500 mt-1">{student.timeSpent?.formatted || '0m'}</p>
+                    <p className="text-xs text-gray-500 mt-1">Course: {student.timeSpent?.formatted || '0m'}</p>
+                    {student.examPrepTime?.minutes > 0 && (
+                      <p className="text-xs text-purple-500">Prep: {student.examPrepTime.formatted}</p>
+                    )}
                   </div>
                 </td>
                 <td className="sticky right-0 bg-white">
