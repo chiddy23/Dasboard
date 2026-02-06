@@ -115,10 +115,10 @@ function Charts({ summary, students }) {
     }
   }
 
-  // Calculate additional stats
-  const completedCount = students.filter(s => s.enrollmentStatus === 2).length
-  const inProgressCount = students.filter(s => s.enrollmentStatus === 1).length
-  const notStartedCount = students.filter(s => s.enrollmentStatus === 0).length
+  // Calculate additional stats based on progress (more reliable than enrollmentStatus codes)
+  const completedCount = students.filter(s => s.progress.value >= 100).length
+  const inProgressCount = students.filter(s => s.progress.value > 0 && s.progress.value < 100).length
+  const notStartedCount = students.filter(s => s.progress.value === 0).length
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
