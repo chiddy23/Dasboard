@@ -287,7 +287,6 @@ class AbsorbAPIClient:
         if all_prelicensing:
             # Calculate average progress across all Pre-Licensing enrollments
             valid_progress = []
-            total_time = 0
             for e in all_prelicensing:
                 # Handle progress (might be string or number)
                 prog = e.get('progress') or e.get('Progress') or 0
@@ -297,14 +296,15 @@ class AbsorbAPIClient:
                 except (ValueError, TypeError):
                     pass
 
-                # Handle time spent (might be HH:MM:SS string or number)
-                time_val = e.get('timeSpent') or e.get('TimeSpent') or e.get('ActiveTime') or e.get('activeTime') or 0
-                total_time += parse_time_to_minutes(time_val)
-
             if valid_progress:
                 avg_progress = sum(valid_progress) / len(valid_progress)
             else:
                 avg_progress = 0
+
+            # Use only the main pre-licensing course's time (not chapters/modules)
+            primary = prelicensing_main or all_prelicensing[0]
+            time_val = primary.get('timeSpent') or primary.get('TimeSpent') or primary.get('ActiveTime') or primary.get('activeTime') or 0
+            main_time = parse_time_to_minutes(time_val)
 
             # Determine display name
             if prelicensing_main:
@@ -312,8 +312,7 @@ class AbsorbAPIClient:
             else:
                 display_name = 'Pre-License Course'
 
-            primary = prelicensing_main or all_prelicensing[0]
-            return primary, avg_progress, total_time, display_name
+            return primary, avg_progress, main_time, display_name
 
         # Fall back to exam prep, other in-progress, or first enrollment
         if exam_prep_courses:

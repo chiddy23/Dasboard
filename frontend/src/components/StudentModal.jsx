@@ -19,7 +19,7 @@ function isChapterOrModule(name) {
 // Helper to check if course is exam prep
 function isExamPrepCourse(name) {
   const lower = name.toLowerCase()
-  return lower.includes('practice') || lower.includes('prep') || lower.includes('final exam')
+  return lower.includes('practice') || lower.includes('prep') || lower.includes('study')
 }
 
 // Helper to categorize courses
