@@ -25,12 +25,12 @@ ChartJS.register(
 function Charts({ summary, students }) {
   // Status Distribution Doughnut Chart
   const statusData = {
-    labels: ['Active', 'Warning', 'Re-engage'],
+    labels: ['Complete', 'Active', 'Warning', 'Re-engage'],
     datasets: [
       {
-        data: [summary.activeCount, summary.warningCount, summary.reengageCount],
-        backgroundColor: ['#22c55e', '#f97316', '#ef4444'],
-        borderColor: ['#ffffff', '#ffffff', '#ffffff'],
+        data: [summary.completeCount || 0, summary.activeCount, summary.warningCount, summary.reengageCount],
+        backgroundColor: ['#3b82f6', '#22c55e', '#f97316', '#ef4444'],
+        borderColor: ['#ffffff', '#ffffff', '#ffffff', '#ffffff'],
         borderWidth: 2
       }
     ]

@@ -255,8 +255,18 @@ def format_student_for_response(student: Dict[str, Any]) -> Dict[str, Any]:
         Formatted student dictionary
     """
     last_login = student.get('lastLoginDate')
-    status_info = get_status_from_last_login(last_login)
     progress_info = format_progress(student.get('progress', 0))
+
+    # If student completed the course (100% progress), mark as COMPLETE
+    if progress_info['value'] >= 100:
+        status_info = {
+            'status': 'COMPLETE',
+            'class': 'blue',
+            'emoji': '\u2705',
+            'priority': 0
+        }
+    else:
+        status_info = get_status_from_last_login(last_login)
 
     return {
         'id': student.get('id'),

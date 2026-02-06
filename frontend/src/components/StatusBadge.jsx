@@ -3,6 +3,8 @@ import React from 'react'
 function StatusBadge({ status }) {
   const getBadgeClass = () => {
     switch (status.class) {
+      case 'blue':
+        return 'badge-complete'
       case 'green':
         return 'badge-active'
       case 'orange':

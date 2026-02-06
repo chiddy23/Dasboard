@@ -83,6 +83,10 @@ body {
   @apply bg-red-100 text-red-800;
 }
 
+.badge-complete {
+  @apply bg-blue-100 text-blue-800;
+}
+
 /* Progress Bar */
 .progress-bar {
   @apply w-full bg-gray-200 rounded-full h-3 overflow-hidden;

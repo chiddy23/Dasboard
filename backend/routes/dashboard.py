@@ -94,6 +94,7 @@ def get_summary_quick():
     try:
         formatted_students = get_quick_students(g.department_id, g.absorb_token)
         total = len(formatted_students)
+        complete = sum(1 for s in formatted_students if s['status']['status'] == 'COMPLETE')
         active = sum(1 for s in formatted_students if s['status']['status'] == 'ACTIVE')
         warning = sum(1 for s in formatted_students if s['status']['status'] == 'WARNING')
         reengage = sum(1 for s in formatted_students if s['status']['status'] == 'RE-ENGAGE')
@@ -102,6 +103,7 @@ def get_summary_quick():
             'success': True,
             'summary': {
                 'totalStudents': total,
+                'completeCount': complete,
                 'activeCount': active,
                 'warningCount': warning,
                 'reengageCount': reengage,
@@ -123,27 +125,16 @@ def get_summary():
         JSON response with summary statistics
     """
     try:
-        # Get students from cache
-        students, _ = get_cached_students(g.department_id, g.absorb_token)
+        # Get students from cache (formatted students have correct COMPLETE status)
+        students, formatted_students = get_cached_students(g.department_id, g.absorb_token)
 
-        # Calculate KPIs
-        total_students = len(students)
-        active_count = 0
-        warning_count = 0
-        reengage_count = 0
-        total_progress = 0
-
-        for student in students:
-            status = get_status_from_last_login(student.get('lastLoginDate'))
-
-            if status['status'] == 'ACTIVE':
-                active_count += 1
-            elif status['status'] == 'WARNING':
-                warning_count += 1
-            else:
-                reengage_count += 1
-
-            total_progress += student.get('progress', 0)
+        # Calculate KPIs from formatted students (which have progress-aware status)
+        total_students = len(formatted_students)
+        complete_count = sum(1 for s in formatted_students if s['status']['status'] == 'COMPLETE')
+        active_count = sum(1 for s in formatted_students if s['status']['status'] == 'ACTIVE')
+        warning_count = sum(1 for s in formatted_students if s['status']['status'] == 'WARNING')
+        reengage_count = sum(1 for s in formatted_students if s['status']['status'] == 'RE-ENGAGE')
+        total_progress = sum(s['progress']['value'] for s in formatted_students)
 
         avg_progress = round(total_progress / total_students, 1) if total_students > 0 else 0
 
@@ -151,6 +142,7 @@ def get_summary():
             'success': True,
             'summary': {
                 'totalStudents': total_students,
+                'completeCount': complete_count,
                 'activeCount': active_count,
                 'warningCount': warning_count,
                 'reengageCount': reengage_count,
@@ -263,24 +255,13 @@ def sync_data():
             for student in students
         ]
 
-        # Calculate summary
-        total_students = len(students)
-        active_count = 0
-        warning_count = 0
-        reengage_count = 0
-        total_progress = 0
-
-        for student in students:
-            status = get_status_from_last_login(student.get('lastLoginDate'))
-
-            if status['status'] == 'ACTIVE':
-                active_count += 1
-            elif status['status'] == 'WARNING':
-                warning_count += 1
-            else:
-                reengage_count += 1
-
-            total_progress += student.get('progress', 0)
+        # Calculate summary from formatted students (which have progress-aware status)
+        total_students = len(formatted_students)
+        complete_count = sum(1 for s in formatted_students if s['status']['status'] == 'COMPLETE')
+        active_count = sum(1 for s in formatted_students if s['status']['status'] == 'ACTIVE')
+        warning_count = sum(1 for s in formatted_students if s['status']['status'] == 'WARNING')
+        reengage_count = sum(1 for s in formatted_students if s['status']['status'] == 'RE-ENGAGE')
+        total_progress = sum(s['progress']['value'] for s in formatted_students)
 
         avg_progress = round(total_progress / total_students, 1) if total_students > 0 else 0
 
@@ -295,6 +276,7 @@ def sync_data():
             'message': 'Data synced successfully',
             'summary': {
                 'totalStudents': total_students,
+                'completeCount': complete_count,
                 'activeCount': active_count,
                 'warningCount': warning_count,
                 'reengageCount': reengage_count,

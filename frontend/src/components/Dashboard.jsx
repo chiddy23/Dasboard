@@ -395,6 +395,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
                 onChange={(e) => setStatusFilter(e.target.value)}
               >
                 <option value="all">All Status</option>
+                <option value="complete">Complete</option>
                 <option value="active">Active</option>
                 <option value="warning">Warning</option>
                 <option value="re-engage">Re-engage</option>
