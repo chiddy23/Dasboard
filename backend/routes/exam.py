@@ -19,11 +19,6 @@ exam_bp = Blueprint('exam', __name__)
 # Cache for department names (departmentId -> name)
 _dept_name_cache = {}
 
-# Cache for ALL Absorb users (email -> user dict)
-_all_users_cache = {}       # email (lowercase) -> raw user dict
-_all_users_timestamp = None
-ALL_USERS_CACHE_TTL = 300   # 5 minutes
-
 # Cache for processed exam students (email -> {'raw': ..., 'formatted': ...})
 _exam_absorb_cache = {}
 _exam_absorb_timestamp = None
@@ -48,39 +43,6 @@ def get_department_name(client, department_id):
         return 'Unknown'
 
 
-def is_all_users_cache_valid():
-    """Check if the all-users cache is still valid."""
-    global _all_users_timestamp
-    if not _all_users_timestamp:
-        return False
-    age = (datetime.utcnow() - _all_users_timestamp).total_seconds()
-    return age < ALL_USERS_CACHE_TTL
-
-
-def get_all_users_email_map(client):
-    """Get or refresh the all-users email map from Absorb."""
-    global _all_users_cache, _all_users_timestamp
-
-    if is_all_users_cache_valid() and _all_users_cache:
-        print(f"[EXAM] Using cached all-users map ({len(_all_users_cache)} users)")
-        return _all_users_cache
-
-    print("[EXAM] Fetching all users from Absorb for email matching...")
-    all_users = client.get_all_users()
-
-    # Build case-insensitive email -> user map
-    email_map = {}
-    for user in all_users:
-        email = (user.get('emailAddress') or user.get('EmailAddress') or '').lower().strip()
-        if email:
-            email_map[email] = user
-
-    _all_users_cache = email_map
-    _all_users_timestamp = datetime.utcnow()
-    print(f"[EXAM] All-users map built: {len(email_map)} users with emails")
-    return email_map
-
-
 def is_exam_absorb_cache_valid():
     """Check if the exam Absorb cache is still valid."""
     global _exam_absorb_timestamp
@@ -92,11 +54,9 @@ def is_exam_absorb_cache_valid():
 
 def invalidate_exam_absorb_cache():
     """Clear the exam Absorb lookup cache."""
-    global _exam_absorb_cache, _exam_absorb_timestamp, _all_users_cache, _all_users_timestamp
+    global _exam_absorb_cache, _exam_absorb_timestamp
     _exam_absorb_cache = {}
     _exam_absorb_timestamp = None
-    _all_users_cache = {}
-    _all_users_timestamp = None
     print("[EXAM] Absorb cache invalidated")
 
 
@@ -152,66 +112,43 @@ def get_exam_students():
             emails_to_lookup = unmatched_emails
             print(f"[EXAM] {len(matched_emails)} dept-matched, {len(emails_to_lookup)} to look up (cache expired)")
 
-        # 5. Bulk fetch ALL users and match by email (much more reliable than individual filters)
+        # 5. Parallel email lookup for unmatched students (search + filter strategies)
         if emails_to_lookup:
             global _exam_absorb_timestamp
+            print(f"[EXAM] Looking up {len(emails_to_lookup)} students by email...")
 
-            # Get the all-users email map (cached or fresh)
-            all_users_map = get_all_users_email_map(client)
+            max_workers = min(50, len(emails_to_lookup))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_email = {
+                    executor.submit(client.lookup_and_process_student, email): email
+                    for email in emails_to_lookup
+                }
 
-            # Find which unmatched emails exist in the all-users map
-            users_to_process = {}
-            not_found_emails = []
-            for email in emails_to_lookup:
-                user = all_users_map.get(email)
-                if user:
-                    users_to_process[email] = user
-                else:
-                    not_found_emails.append(email)
-
-            print(f"[EXAM] Bulk match: {len(users_to_process)} found, {len(not_found_emails)} not in Absorb")
-
-            # Mark not-found emails so we don't look them up again
-            for email in not_found_emails:
-                _exam_absorb_cache[email] = None
-
-            # Process matched users in parallel (fetch enrollments + format)
-            if users_to_process:
-                print(f"[EXAM] Processing {len(users_to_process)} students for enrollment data...")
-                max_workers = min(50, len(users_to_process))
-
-                with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                    future_to_email = {
-                        executor.submit(client._process_single_user, user): email
-                        for email, user in users_to_process.items()
-                    }
-
-                    completed = 0
-                    found = 0
-                    for future in as_completed(future_to_email):
-                        completed += 1
-                        email = future_to_email[future]
-                        try:
-                            result = future.result()
-                            if result:
-                                formatted = format_student_for_response(result)
-                                _exam_absorb_cache[email] = {
-                                    'raw': result,
-                                    'formatted': formatted
-                                }
-                                found += 1
-                            else:
-                                _exam_absorb_cache[email] = None
-                        except Exception as e:
-                            print(f"[EXAM] Error processing {email}: {e}")
+                completed = 0
+                found = 0
+                for future in as_completed(future_to_email):
+                    completed += 1
+                    email = future_to_email[future]
+                    try:
+                        result = future.result()
+                        if result:
+                            formatted = format_student_for_response(result)
+                            _exam_absorb_cache[email] = {
+                                'raw': result,
+                                'formatted': formatted
+                            }
+                            found += 1
+                        else:
                             _exam_absorb_cache[email] = None
+                    except Exception as e:
+                        print(f"[EXAM] Error processing {email}: {e}")
+                        _exam_absorb_cache[email] = None
 
-                        if completed % 20 == 0 or completed == len(users_to_process):
-                            print(f"[EXAM] Processed {completed}/{len(users_to_process)} enrollments ({found} complete)")
-
-                print(f"[EXAM] Enrollment processing complete: {found}/{len(users_to_process)} successful")
+                    if completed % 20 == 0 or completed == len(emails_to_lookup):
+                        print(f"[EXAM] Processed {completed}/{len(emails_to_lookup)} lookups ({found} found)")
 
             _exam_absorb_timestamp = datetime.utcnow()
+            print(f"[EXAM] Lookup complete: {found}/{len(emails_to_lookup)} found")
 
         # 6. Build combined exam student list
         exam_students = []

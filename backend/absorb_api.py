@@ -114,58 +114,64 @@ class AbsorbAPIClient:
         self._token = token
         self._token_expiry = datetime.utcnow() + timedelta(hours=4)
 
-    def get_all_users(self) -> List[Dict[str, Any]]:
-        """Fetch ALL users accessible to this admin (no department filter).
-        Used for cross-department email matching on the exam tab."""
+    def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
+        """Look up a user by email address across all departments.
+        Tries multiple search strategies for reliability."""
         url = f"{self.base_url}/users"
-        all_users = []
-        offset = 0
-        limit = 500
+        email_lower = email.lower().strip()
 
-        print(f"[API] Fetching ALL accessible users (no department filter)...")
+        # Strategy 1: Use _search parameter (broad text search, then filter locally)
+        try:
+            # Search by the username part of the email for broader matching
+            search_term = email_lower.split('@')[0] if '@' in email_lower else email_lower
+            params = {"_search": search_term, "_limit": 50}
+            response = self._session.get(url, params=params, headers=self._get_headers(), timeout=30)
+            if response.status_code == 200:
+                data = response.json()
+                users = data if isinstance(data, list) else []
+                for u in users:
+                    u_email = (u.get('emailAddress') or u.get('EmailAddress') or '').lower().strip()
+                    if u_email == email_lower:
+                        return u
+        except Exception as e:
+            print(f"[API] Search lookup error for {email}: {e}")
 
-        while True:
-            params = {
-                "_limit": limit,
-                "_offset": offset
-            }
+        # Strategy 2: OData filter with exact email (fallback)
+        try:
+            params = {"_filter": f"emailAddress eq '{email}'", "_limit": 1}
+            response = self._session.get(url, params=params, headers=self._get_headers(), timeout=30)
+            if response.status_code == 200:
+                data = response.json()
+                users = data if isinstance(data, list) else []
+                if users:
+                    return users[0]
+        except Exception as e:
+            print(f"[API] Filter lookup error for {email}: {e}")
 
-            try:
-                response = self._session.get(url, params=params, headers=self._get_headers(), timeout=120)
-            except Exception as e:
-                print(f"[API] Request error at offset {offset}: {e}")
-                break
+        # Strategy 3: Try with EmailAddress casing
+        try:
+            params = {"_filter": f"EmailAddress eq '{email}'", "_limit": 1}
+            response = self._session.get(url, params=params, headers=self._get_headers(), timeout=30)
+            if response.status_code == 200:
+                data = response.json()
+                users = data if isinstance(data, list) else []
+                if users:
+                    return users[0]
+        except Exception as e:
+            pass
 
-            if response.status_code == 401:
-                raise AbsorbAPIError("Session expired. Please log in again.", 401)
+        return None
 
-            if response.status_code != 200:
-                print(f"[API] All-users fetch failed at offset {offset}: {response.status_code}")
-                break
-
-            data = response.json()
-
-            if isinstance(data, dict) and 'users' in data:
-                users = data['users']
-            elif isinstance(data, list):
-                users = data
-            else:
-                print(f"[API] Unexpected response format at offset {offset}")
-                break
-
-            if not users:
-                break
-
-            all_users.extend(users)
-            print(f"[API] Fetched {len(users)} users (total: {len(all_users)})")
-
-            if len(users) < limit:
-                break
-
-            offset += limit
-
-        print(f"[API] ALL USERS COMPLETE: {len(all_users)} total users fetched")
-        return all_users
+    def lookup_and_process_student(self, email: str) -> Optional[Dict[str, Any]]:
+        """Look up a student by email and process their enrollment data."""
+        try:
+            user = self.get_user_by_email(email)
+            if not user:
+                return None
+            return self._process_single_user(user)
+        except Exception as e:
+            print(f"[API] Error processing exam student {email}: {e}")
+            return None
 
     def get_users_by_department(self, department_id: str) -> List[Dict[str, Any]]:
         """Get users in a specific department using OData filter (matches Apps Script pattern)."""
