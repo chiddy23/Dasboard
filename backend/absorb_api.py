@@ -226,7 +226,7 @@ class AbsorbAPIClient:
         name_lower = course_name.lower()
         return ('practice' in name_lower or
                 'prep' in name_lower or
-                'study guide' in name_lower)
+                'study' in name_lower)
 
     def _is_module_or_chapter(self, course_name: str) -> bool:
         """Check if a course name indicates it's a module/chapter."""
