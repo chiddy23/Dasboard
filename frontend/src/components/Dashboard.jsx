@@ -5,6 +5,7 @@ import ExamTable from './ExamTable'
 import StudentModal from './StudentModal'
 import ExamSheetModal from './ExamSheetModal'
 import Charts from './Charts'
+import ExamCharts from './ExamCharts'
 
 const API_BASE = '/api'
 
@@ -18,6 +19,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
   const [lastSynced, setLastSynced] = useState(initialData ? new Date() : null)
   const [selectedStudent, setSelectedStudent] = useState(null)
   const [showCharts, setShowCharts] = useState(false)
+  const [showExamCharts, setShowExamCharts] = useState(false)
 
   // Tab state
   const [activeTab, setActiveTab] = useState('students')
@@ -556,20 +558,38 @@ function Dashboard({ user, department, onLogout, initialData }) {
           <>
             {/* Exam Tab Header */}
             <div className="mb-6 flex items-center justify-between">
-              <p className="text-sm text-gray-500">
-                Exam scheduling, pass rates & study tracking
-              </p>
+              <div className="flex items-center gap-4">
+                <p className="text-sm text-gray-500">
+                  Exam scheduling, pass rates & study tracking
+                </p>
+                <button
+                  onClick={fetchExamData}
+                  disabled={examLoading}
+                  className="text-sm text-ji-blue-bright hover:text-ji-blue-medium flex items-center space-x-1"
+                >
+                  <svg className={`w-4 h-4 ${examLoading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                  <span>{examLoading ? 'Refreshing...' : 'Refresh'}</span>
+                </button>
+              </div>
               <button
-                onClick={fetchExamData}
-                disabled={examLoading}
+                onClick={() => setShowExamCharts(!showExamCharts)}
                 className="text-sm text-ji-blue-bright hover:text-ji-blue-medium flex items-center space-x-1"
               >
-                <svg className={`w-4 h-4 ${examLoading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
                 </svg>
-                <span>{examLoading ? 'Refreshing...' : 'Refresh'}</span>
+                <span>{showExamCharts ? 'Hide Charts' : 'Show Charts'}</span>
               </button>
             </div>
+
+            {/* Exam Charts (collapsible) */}
+            {showExamCharts && examSummary && (
+              <div className="mb-8 animate-fadeIn">
+                <ExamCharts examSummary={examSummary} students={examStudents} />
+              </div>
+            )}
 
             {/* Exam KPI Row 1 - Core Metrics */}
             {examSummary && (
