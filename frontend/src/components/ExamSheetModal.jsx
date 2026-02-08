@@ -1,8 +1,8 @@
-import React, { useEffect } from 'react'
+import React, { useEffect, useState } from 'react'
 import ProgressBar from './ProgressBar'
 import StatusBadge from './StatusBadge'
 
-function ExamSheetModal({ student, adminMode, onClose }) {
+function ExamSheetModal({ student, adminMode, onClose, onUpdateResult }) {
   // Close on escape key
   useEffect(() => {
     const handleEscape = (e) => {
@@ -98,11 +98,36 @@ function ExamSheetModal({ student, adminMode, onClose }) {
                 </div>
                 <div className="bg-white rounded-lg p-3">
                   <p className="text-sm text-gray-500">Result</p>
-                  <p className="font-semibold">
-                    {hasPassed && <span className="text-green-700 bg-green-100 px-2 py-0.5 rounded">PASS</span>}
-                    {hasFailed && <span className="text-red-700 bg-red-100 px-2 py-0.5 rounded">FAIL</span>}
-                    {!hasPassed && !hasFailed && <span className="text-gray-600">Pending</span>}
-                  </p>
+                  {onUpdateResult ? (
+                    <div className="flex gap-2 mt-1">
+                      <button
+                        onClick={() => onUpdateResult(student.email, hasPassed ? '' : 'PASS')}
+                        className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
+                          hasPassed
+                            ? 'bg-green-600 text-white shadow-sm'
+                            : 'bg-green-50 text-green-700 hover:bg-green-100 border border-green-200'
+                        }`}
+                      >
+                        PASS
+                      </button>
+                      <button
+                        onClick={() => onUpdateResult(student.email, hasFailed ? '' : 'FAIL')}
+                        className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
+                          hasFailed
+                            ? 'bg-red-600 text-white shadow-sm'
+                            : 'bg-red-50 text-red-700 hover:bg-red-100 border border-red-200'
+                        }`}
+                      >
+                        FAIL
+                      </button>
+                    </div>
+                  ) : (
+                    <p className="font-semibold">
+                      {hasPassed && <span className="text-green-700 bg-green-100 px-2 py-0.5 rounded">PASS</span>}
+                      {hasFailed && <span className="text-red-700 bg-red-100 px-2 py-0.5 rounded">FAIL</span>}
+                      {!hasPassed && !hasFailed && <span className="text-gray-600">Pending</span>}
+                    </p>
+                  )}
                 </div>
               </div>
             </div>

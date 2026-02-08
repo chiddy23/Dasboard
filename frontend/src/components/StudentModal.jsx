@@ -201,7 +201,7 @@ function EnrollmentGroups({ enrollments }) {
   )
 }
 
-function StudentModal({ studentId, examInfo, onClose, onSessionExpired }) {
+function StudentModal({ studentId, examInfo, onClose, onSessionExpired, onUpdateResult }) {
   const [student, setStudent] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -331,11 +331,36 @@ function StudentModal({ studentId, examInfo, onClose, onSessionExpired }) {
                     </div>
                     <div className="bg-white rounded-lg p-2.5">
                       <p className="text-xs text-gray-500">Result</p>
-                      <p className="font-semibold text-sm">
-                        {(examInfo.passFail || '').toUpperCase() === 'PASS' && <span className="text-green-700 bg-green-100 px-2 py-0.5 rounded text-xs">PASS</span>}
-                        {(examInfo.passFail || '').toUpperCase() === 'FAIL' && <span className="text-red-700 bg-red-100 px-2 py-0.5 rounded text-xs">FAIL</span>}
-                        {!(examInfo.passFail || '').trim() && <span className="text-gray-500">Pending</span>}
-                      </p>
+                      {onUpdateResult && examInfo.email ? (
+                        <div className="flex gap-1.5 mt-0.5">
+                          <button
+                            onClick={() => onUpdateResult(examInfo.email, (examInfo.passFail || '').toUpperCase() === 'PASS' ? '' : 'PASS')}
+                            className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
+                              (examInfo.passFail || '').toUpperCase() === 'PASS'
+                                ? 'bg-green-600 text-white shadow-sm'
+                                : 'bg-green-50 text-green-700 hover:bg-green-100 border border-green-200'
+                            }`}
+                          >
+                            PASS
+                          </button>
+                          <button
+                            onClick={() => onUpdateResult(examInfo.email, (examInfo.passFail || '').toUpperCase() === 'FAIL' ? '' : 'FAIL')}
+                            className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
+                              (examInfo.passFail || '').toUpperCase() === 'FAIL'
+                                ? 'bg-red-600 text-white shadow-sm'
+                                : 'bg-red-50 text-red-700 hover:bg-red-100 border border-red-200'
+                            }`}
+                          >
+                            FAIL
+                          </button>
+                        </div>
+                      ) : (
+                        <p className="font-semibold text-sm">
+                          {(examInfo.passFail || '').toUpperCase() === 'PASS' && <span className="text-green-700 bg-green-100 px-2 py-0.5 rounded text-xs">PASS</span>}
+                          {(examInfo.passFail || '').toUpperCase() === 'FAIL' && <span className="text-red-700 bg-red-100 px-2 py-0.5 rounded text-xs">FAIL</span>}
+                          {!(examInfo.passFail || '').trim() && <span className="text-gray-500">Pending</span>}
+                        </p>
+                      )}
                     </div>
                   </div>
                   {(examInfo.departmentName || examInfo.agencyOwner) && (

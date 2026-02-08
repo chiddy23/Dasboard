@@ -26,6 +26,9 @@ _exam_absorb_cache = {}
 _exam_absorb_timestamp = None
 EXAM_ABSORB_CACHE_TTL = 300  # 5 minutes
 
+# In-memory pass/fail overrides (email -> 'PASS'|'FAIL')
+_passfail_overrides = {}
+
 
 def get_department_name(client, department_id):
     """Get department name from Absorb, with caching."""
@@ -185,6 +188,10 @@ def get_exam_students():
             else:
                 # Not found in Absorb at all
                 exam_entry = _build_unmatched_entry(sheet_student)
+
+            # Apply any pass/fail overrides
+            if email in _passfail_overrides:
+                exam_entry['passFail'] = _passfail_overrides[email]
 
             # Include full sheet tracking data in admin mode
             if is_admin:
@@ -430,6 +437,41 @@ def verify_admin():
     if password == ADMIN_PASSWORD:
         return jsonify({'success': True, 'admin': True})
     return jsonify({'success': False, 'error': 'Invalid password'}), 401
+
+
+@exam_bp.route('/update-result', methods=['POST'])
+@login_required
+def update_exam_result():
+    """Update pass/fail result for a student (in-memory override)."""
+    data = request.get_json() or {}
+    email = (data.get('email') or '').lower().strip()
+    result = (data.get('result') or '').upper().strip()
+    admin_key = data.get('adminKey', '')
+
+    if not email:
+        return jsonify({'success': False, 'error': 'Email required'}), 400
+
+    if result not in ('PASS', 'FAIL', ''):
+        return jsonify({'success': False, 'error': 'Result must be PASS, FAIL, or empty'}), 400
+
+    is_admin = admin_key == ADMIN_PASSWORD
+
+    # Authorization: admin or student must be in user's department
+    if not is_admin:
+        from routes.dashboard import get_cached_students
+        _, formatted_students = get_cached_students(g.department_id, g.absorb_token)
+        dept_emails = {(s.get('email') or '').lower().strip() for s in formatted_students}
+        if email not in dept_emails:
+            return jsonify({'success': False, 'error': 'Not authorized for this student'}), 403
+
+    if result:
+        _passfail_overrides[email] = result
+        print(f"[EXAM] Pass/fail override set: {email} -> {result}")
+    else:
+        _passfail_overrides.pop(email, None)
+        print(f"[EXAM] Pass/fail override cleared: {email}")
+
+    return jsonify({'success': True, 'email': email, 'result': result})
 
 
 @exam_bp.route('/sync', methods=['POST'])

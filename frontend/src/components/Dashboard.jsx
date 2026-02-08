@@ -257,6 +257,56 @@ function Dashboard({ user, department, onLogout, initialData }) {
     fetchExamData('')
   }
 
+  const recalcExamSummary = (students) => {
+    const total = students.length
+    const passed = students.filter(s => (s.passFail || '').toUpperCase() === 'PASS').length
+    const failed = students.filter(s => (s.passFail || '').toUpperCase() === 'FAIL').length
+    const now = Date.now()
+    let upcoming = 0, atRisk = 0
+    students.forEach(s => {
+      const dt = s.examDateRaw ? new Date(s.examDateRaw).getTime() : 0
+      const hasResult = (s.passFail || '').trim() !== ''
+      if (dt > now && !hasResult) {
+        upcoming++
+        if (s.matched !== false && (s.progress?.value || 0) < 80) atRisk++
+      }
+    })
+    const completedExams = passed + failed
+    const passRate = completedExams > 0 ? Math.round(passed / completedExams * 1000) / 10 : 0
+    return prev => ({
+      ...prev,
+      total, passed, failed, upcoming, atRisk, passRate,
+      noResult: total - passed - failed - upcoming
+    })
+  }
+
+  const handleUpdateResult = async (email, result) => {
+    try {
+      const res = await fetch(`${API_BASE}/exam/update-result`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ email, result, adminKey })
+      })
+      const data = await res.json()
+      if (data.success) {
+        // Update local state immediately
+        const updated = examStudents.map(s =>
+          s.email === email ? { ...s, passFail: result } : s
+        )
+        setExamStudents(updated)
+        // Recalculate KPIs
+        setExamSummary(recalcExamSummary(updated))
+        // Also update selectedStudent if viewing this student
+        setSelectedStudent(prev =>
+          prev && prev.email === email ? { ...prev, passFail: result } : prev
+        )
+      }
+    } catch (err) {
+      console.error('Failed to update result:', err)
+    }
+  }
+
   // Filter students (works for both tabs)
   const filteredStudents = students.filter(student => {
     const searchLower = searchTerm.toLowerCase()
@@ -866,10 +916,12 @@ function Dashboard({ user, department, onLogout, initialData }) {
             passFail: selectedStudent.passFail,
             finalOutcome: selectedStudent.finalOutcome,
             departmentName: selectedStudent.departmentName,
-            sheetTracking: selectedStudent.sheetTracking
+            sheetTracking: selectedStudent.sheetTracking,
+            email: selectedStudent.email
           } : null}
           onClose={() => setSelectedStudent(null)}
           onSessionExpired={onLogout}
+          onUpdateResult={activeTab === 'exam' ? handleUpdateResult : null}
         />
       )}
 
@@ -879,6 +931,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
           student={selectedStudent}
           adminMode={adminMode}
           onClose={() => setSelectedStudent(null)}
+          onUpdateResult={handleUpdateResult}
         />
       )}
     </div>
