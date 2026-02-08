@@ -639,12 +639,13 @@ function Dashboard({ user, department, onLogout, initialData }) {
                   <div className="relative">
                     <button
                       onClick={() => setShowAdminInput(!showAdminInput)}
-                      className="text-sm text-gray-400 hover:text-purple-600 flex items-center space-x-1"
+                      className="text-sm text-purple-500 hover:text-purple-700 flex items-center space-x-1 px-2.5 py-1 rounded-lg border border-purple-200 hover:border-purple-400 hover:bg-purple-50 transition-colors"
                       title="Admin Override"
                     >
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
                       </svg>
+                      <span>Admin</span>
                     </button>
                     {showAdminInput && (
                       <div className="absolute right-0 top-8 bg-white rounded-lg shadow-lg border p-3 z-50 w-64">
