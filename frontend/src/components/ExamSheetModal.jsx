@@ -137,7 +137,7 @@ function ExamSheetModal({ student, onClose }) {
                 </svg>
                 <div>
                   <p className="font-medium text-amber-800">Student not in your department</p>
-                  <p className="text-sm text-amber-700 mt-1">This student is in a different department. Course progress data from Absorb is only available for students in your department. The exam scheduling data shown above is from the Google Sheet.</p>
+                  <p className="text-sm text-amber-700 mt-1">Course progress and study time data from Absorb is only available for students in your department. Log in as their department admin to see full details.</p>
                 </div>
               </div>
             )}

@@ -29,6 +29,8 @@ function Dashboard({ user, department, onLogout, initialData }) {
   // Filtering and search
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
+  const [examResultFilter, setExamResultFilter] = useState('all')
+  const [examCourseFilter, setExamCourseFilter] = useState('all')
 
   // Fetch data on mount only if no initial data provided
   useEffect(() => {
@@ -226,13 +228,38 @@ function Dashboard({ user, department, onLogout, initialData }) {
     const matchesSearch = !searchTerm ||
       (student.fullName || '').toLowerCase().includes(searchLower) ||
       (student.email || '').toLowerCase().includes(searchLower) ||
-      (student.departmentName || '').toLowerCase().includes(searchLower)
+      (student.departmentName || '').toLowerCase().includes(searchLower) ||
+      (student.agencyOwner || '').toLowerCase().includes(searchLower)
 
-    const matchesStatus = statusFilter === 'all' ||
-      (student.status?.status || '').toLowerCase() === statusFilter.toLowerCase()
+    // Exam result filter
+    let matchesResult = true
+    if (examResultFilter !== 'all') {
+      const pf = (student.passFail || '').toUpperCase()
+      const examDateTs = student.examDateRaw ? new Date(student.examDateRaw).getTime() : 0
+      const isPast = examDateTs && examDateTs < Date.now()
+      const hasResult = pf === 'PASS' || pf === 'FAIL'
 
-    return matchesSearch && matchesStatus
+      switch (examResultFilter) {
+        case 'passed': matchesResult = pf === 'PASS'; break
+        case 'failed': matchesResult = pf === 'FAIL'; break
+        case 'upcoming': matchesResult = !isPast && !hasResult; break
+        case 'pending': matchesResult = isPast && !hasResult; break
+        case 'at-risk':
+          matchesResult = !isPast && !hasResult && student.matched !== false && (student.progress?.value || 0) < 80
+          break
+        default: matchesResult = true
+      }
+    }
+
+    // Course type filter
+    const matchesCourse = examCourseFilter === 'all' ||
+      (student.examCourse || '').toLowerCase() === examCourseFilter.toLowerCase()
+
+    return matchesSearch && matchesResult && matchesCourse
   })
+
+  // Get unique course types for filter dropdown
+  const examCourseTypes = [...new Set(examStudents.map(s => (s.examCourse || '').trim()).filter(Boolean))].sort()
 
   const formatLastSynced = () => {
     if (!lastSynced) return 'Never'
@@ -530,7 +557,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
             {/* Exam Tab Header */}
             <div className="mb-6 flex items-center justify-between">
               <p className="text-sm text-gray-500">
-                Students with scheduled exams (from Google Sheet)
+                Exam scheduling, pass rates & study tracking
               </p>
               <button
                 onClick={fetchExamData}
@@ -544,29 +571,94 @@ function Dashboard({ user, department, onLogout, initialData }) {
               </button>
             </div>
 
-            {/* Exam KPI Cards */}
+            {/* Exam KPI Row 1 - Core Metrics */}
             {examSummary && (
-              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-8">
-                {[
-                  { title: 'Total', value: examSummary.total, emoji: '\uD83D\uDCCB', bg: 'bg-gray-50', border: 'border-l-4 border-gray-500', text: 'text-gray-800', sub: 'Exam students' },
-                  { title: 'Upcoming', value: examSummary.upcoming, emoji: '\uD83D\uDCC5', bg: 'bg-blue-50', border: 'border-l-4 border-blue-500', text: 'text-blue-800', sub: 'Scheduled' },
-                  { title: 'Passed', value: examSummary.passed, emoji: '\u2705', bg: 'bg-green-50', border: 'border-l-4 border-green-500', text: 'text-green-800', sub: 'Exam result' },
-                  { title: 'Failed', value: examSummary.failed, emoji: '\u274C', bg: 'bg-red-50', border: 'border-l-4 border-red-500', text: 'text-red-800', sub: 'Exam result' },
-                  { title: 'Pending', value: examSummary.noResult, emoji: '\u23F3', bg: 'bg-orange-50', border: 'border-l-4 border-orange-500', text: 'text-orange-800', sub: 'No result yet' },
-                  { title: 'Avg Progress', value: `${examSummary.averageProgress}%`, emoji: '\uD83D\uDCCA', bg: 'bg-purple-50', border: 'border-l-4 border-purple-500', text: 'text-purple-800', sub: 'Course completion' },
-                ].map((card, i) => (
-                  <div key={i} className={`kpi-card ${card.bg} ${card.border} animate-fadeIn`} style={{ animationDelay: `${i * 50}ms` }}>
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <p className="text-sm font-medium text-gray-600">{card.title}</p>
-                        <p className={`kpi-value ${card.text}`}>{card.value}</p>
-                        <p className="text-xs text-gray-500 mt-1">{card.sub}</p>
-                      </div>
-                      <span className="text-2xl">{card.emoji}</span>
+              <>
+                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4 mb-4">
+                  <div className="kpi-card bg-gray-50 border-l-4 border-gray-500 animate-fadeIn">
+                    <p className="text-sm font-medium text-gray-600">Total Students</p>
+                    <p className="kpi-value text-gray-800">{examSummary.total}</p>
+                    <p className="text-xs text-gray-500 mt-1">Exam scheduled</p>
+                  </div>
+                  <div className="kpi-card bg-blue-50 border-l-4 border-blue-500 animate-fadeIn" style={{animationDelay:'50ms'}}>
+                    <p className="text-sm font-medium text-gray-600">Upcoming</p>
+                    <p className="kpi-value text-blue-800">{examSummary.upcoming}</p>
+                    <p className="text-xs text-gray-500 mt-1">Exams scheduled</p>
+                  </div>
+                  <div className="kpi-card bg-green-50 border-l-4 border-green-500 animate-fadeIn" style={{animationDelay:'100ms'}}>
+                    <p className="text-sm font-medium text-gray-600">Pass Rate</p>
+                    <p className="kpi-value text-green-800">{examSummary.passRate}%</p>
+                    <p className="text-xs text-gray-500 mt-1">{examSummary.passed} passed / {examSummary.passed + examSummary.failed} taken</p>
+                  </div>
+                  <div className="kpi-card bg-red-50 border-l-4 border-red-500 animate-fadeIn" style={{animationDelay:'150ms'}}>
+                    <p className="text-sm font-medium text-gray-600">Failed</p>
+                    <p className="kpi-value text-red-800">{examSummary.failed}</p>
+                    <p className="text-xs text-gray-500 mt-1">Exam result</p>
+                  </div>
+                  <div className="kpi-card bg-amber-50 border-l-4 border-amber-500 animate-fadeIn" style={{animationDelay:'200ms'}}>
+                    <p className="text-sm font-medium text-gray-600">At Risk</p>
+                    <p className="kpi-value text-amber-800">{examSummary.atRisk}</p>
+                    <p className="text-xs text-gray-500 mt-1">Upcoming + &lt;80% progress</p>
+                  </div>
+                </div>
+
+                {/* KPI Row 2 - Study Time Analytics */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                  <div className="kpi-card bg-purple-50 border-l-4 border-purple-500 animate-fadeIn" style={{animationDelay:'250ms'}}>
+                    <p className="text-sm font-medium text-gray-600">Avg Study Time</p>
+                    <p className="kpi-value text-purple-800">{examSummary.avgStudyTimeFormatted}</p>
+                    <p className="text-xs text-gray-500 mt-1">All tracked students</p>
+                  </div>
+                  <div className="kpi-card bg-green-50 border-l-4 border-green-400 animate-fadeIn" style={{animationDelay:'300ms'}}>
+                    <p className="text-sm font-medium text-gray-600">Avg Time (Passed)</p>
+                    <p className="kpi-value text-green-700">{examSummary.avgStudyPassedFormatted}</p>
+                    <p className="text-xs text-gray-500 mt-1">Students who passed</p>
+                  </div>
+                  <div className="kpi-card bg-red-50 border-l-4 border-red-400 animate-fadeIn" style={{animationDelay:'350ms'}}>
+                    <p className="text-sm font-medium text-gray-600">Avg Time (Failed)</p>
+                    <p className="kpi-value text-red-700">{examSummary.avgStudyFailedFormatted}</p>
+                    <p className="text-xs text-gray-500 mt-1">Students who failed</p>
+                  </div>
+                  <div className="kpi-card bg-indigo-50 border-l-4 border-indigo-500 animate-fadeIn" style={{animationDelay:'400ms'}}>
+                    <p className="text-sm font-medium text-gray-600">Avg Progress</p>
+                    <p className="kpi-value text-indigo-800">{examSummary.averageProgress}%</p>
+                    <p className="text-xs text-gray-500 mt-1">Course completion</p>
+                  </div>
+                </div>
+
+                {/* Course Type Pass Rates */}
+                {examSummary.courseTypes && Object.keys(examSummary.courseTypes).length > 0 && (
+                  <div className="bg-white rounded-xl shadow-md p-4 mb-6">
+                    <h3 className="text-sm font-semibold text-gray-700 mb-3">Pass Rate by Course Type</h3>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {Object.entries(examSummary.courseTypes).map(([course, data]) => {
+                        const taken = data.passed + data.failed
+                        const rate = taken > 0 ? Math.round(data.passed / taken * 100) : null
+                        return (
+                          <div key={course} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                            <div>
+                              <p className="font-medium text-gray-900 text-sm">{course}</p>
+                              <p className="text-xs text-gray-500">{data.total} students</p>
+                            </div>
+                            <div className="text-right">
+                              {rate !== null ? (
+                                <>
+                                  <p className={`text-lg font-bold ${rate >= 70 ? 'text-green-600' : rate >= 50 ? 'text-amber-600' : 'text-red-600'}`}>
+                                    {rate}%
+                                  </p>
+                                  <p className="text-xs text-gray-500">{data.passed}P / {data.failed}F</p>
+                                </>
+                              ) : (
+                                <p className="text-sm text-gray-400">No results</p>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
                     </div>
                   </div>
-                ))}
-              </div>
+                )}
+              </>
             )}
 
             {/* Search/Filter for Exam Tab */}
@@ -580,24 +672,38 @@ function Dashboard({ user, department, onLogout, initialData }) {
                   </span>
                   <input
                     type="text"
-                    placeholder="Search by name, email, or department..."
+                    placeholder="Search by name, email, department, agency..."
                     className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-ji-blue-bright"
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                   />
                 </div>
 
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-3 flex-wrap">
+                  {/* Exam Result Filter */}
                   <select
-                    className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-ji-blue-bright"
-                    value={statusFilter}
-                    onChange={(e) => setStatusFilter(e.target.value)}
+                    className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-ji-blue-bright text-sm"
+                    value={examResultFilter}
+                    onChange={(e) => setExamResultFilter(e.target.value)}
                   >
-                    <option value="all">All Status</option>
-                    <option value="complete">Complete</option>
-                    <option value="active">Active</option>
-                    <option value="warning">Warning</option>
-                    <option value="re-engage">Re-engage</option>
+                    <option value="all">All Results</option>
+                    <option value="upcoming">Upcoming</option>
+                    <option value="passed">Passed</option>
+                    <option value="failed">Failed</option>
+                    <option value="pending">Pending</option>
+                    <option value="at-risk">At Risk</option>
+                  </select>
+
+                  {/* Course Type Filter */}
+                  <select
+                    className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-ji-blue-bright text-sm"
+                    value={examCourseFilter}
+                    onChange={(e) => setExamCourseFilter(e.target.value)}
+                  >
+                    <option value="all">All Courses</option>
+                    {examCourseTypes.map(ct => (
+                      <option key={ct} value={ct}>{ct}</option>
+                    ))}
                   </select>
                 </div>
               </div>
@@ -627,6 +733,16 @@ function Dashboard({ user, department, onLogout, initialData }) {
       {selectedStudent && selectedStudent.id && (
         <StudentModal
           studentId={selectedStudent.id}
+          examInfo={selectedStudent.examDate ? {
+            examDate: selectedStudent.examDate,
+            examTime: selectedStudent.examTime,
+            examState: selectedStudent.examState,
+            examCourse: selectedStudent.examCourse,
+            agencyOwner: selectedStudent.agencyOwner,
+            passFail: selectedStudent.passFail,
+            finalOutcome: selectedStudent.finalOutcome,
+            departmentName: selectedStudent.departmentName
+          } : null}
           onClose={() => setSelectedStudent(null)}
           onSessionExpired={onLogout}
         />

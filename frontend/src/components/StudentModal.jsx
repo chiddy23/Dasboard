@@ -201,7 +201,7 @@ function EnrollmentGroups({ enrollments }) {
   )
 }
 
-function StudentModal({ studentId, onClose, onSessionExpired }) {
+function StudentModal({ studentId, examInfo, onClose, onSessionExpired }) {
   const [student, setStudent] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -307,6 +307,56 @@ function StudentModal({ studentId, onClose, onSessionExpired }) {
                 <StatusBadge status={student.status} />
               </div>
 
+              {/* Exam Info (when viewing from Exam tab) */}
+              {examInfo && (
+                <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+                  <h4 className="font-bold text-gray-900 mb-3 flex items-center gap-2 text-sm">
+                    <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                    </svg>
+                    Exam Scheduling
+                  </h4>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <div className="bg-white rounded-lg p-2.5">
+                      <p className="text-xs text-gray-500">Exam Date</p>
+                      <p className="font-semibold text-gray-900 text-sm">{examInfo.examDate || 'TBD'}</p>
+                    </div>
+                    <div className="bg-white rounded-lg p-2.5">
+                      <p className="text-xs text-gray-500">Time</p>
+                      <p className="font-semibold text-gray-900 text-sm">{examInfo.examTime || 'N/A'}</p>
+                    </div>
+                    <div className="bg-white rounded-lg p-2.5">
+                      <p className="text-xs text-gray-500">State</p>
+                      <p className="font-semibold text-gray-900 text-sm">{examInfo.examState || 'N/A'}</p>
+                    </div>
+                    <div className="bg-white rounded-lg p-2.5">
+                      <p className="text-xs text-gray-500">Result</p>
+                      <p className="font-semibold text-sm">
+                        {(examInfo.passFail || '').toUpperCase() === 'PASS' && <span className="text-green-700 bg-green-100 px-2 py-0.5 rounded text-xs">PASS</span>}
+                        {(examInfo.passFail || '').toUpperCase() === 'FAIL' && <span className="text-red-700 bg-red-100 px-2 py-0.5 rounded text-xs">FAIL</span>}
+                        {!(examInfo.passFail || '').trim() && <span className="text-gray-500">Pending</span>}
+                      </p>
+                    </div>
+                  </div>
+                  {(examInfo.departmentName || examInfo.agencyOwner) && (
+                    <div className="grid grid-cols-2 gap-3 mt-3">
+                      {examInfo.departmentName && (
+                        <div className="bg-white rounded-lg p-2.5">
+                          <p className="text-xs text-gray-500">Department</p>
+                          <p className="font-semibold text-gray-900 text-sm">{examInfo.departmentName}</p>
+                        </div>
+                      )}
+                      {examInfo.agencyOwner && (
+                        <div className="bg-white rounded-lg p-2.5">
+                          <p className="text-xs text-gray-500">Agency Owner</p>
+                          <p className="font-semibold text-gray-900 text-sm">{examInfo.agencyOwner}</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Stats Grid */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <div className="bg-gray-50 rounded-lg p-4">
@@ -314,16 +364,24 @@ function StudentModal({ studentId, onClose, onSessionExpired }) {
                   <p className="font-semibold text-gray-900">{student.lastLogin.relative}</p>
                 </div>
                 <div className="bg-gray-50 rounded-lg p-4">
-                  <p className="text-sm text-gray-500">Time Spent</p>
+                  <p className="text-sm text-gray-500">Course Time</p>
                   <p className="font-semibold text-gray-900">{student.timeSpent.formatted}</p>
                 </div>
                 <div className="bg-gray-50 rounded-lg p-4">
-                  <p className="text-sm text-gray-500">Enrollments</p>
-                  <p className="font-semibold text-gray-900">{student.totalEnrollments}</p>
+                  <p className="text-sm text-gray-500">Exam Prep Time</p>
+                  <p className="font-semibold text-purple-700">{student.examPrepTime?.formatted || '0m'}</p>
                 </div>
                 <div className="bg-gray-50 rounded-lg p-4">
-                  <p className="text-sm text-gray-500">Completed</p>
-                  <p className="font-semibold text-gray-900">{student.completedEnrollments}</p>
+                  <p className="text-sm text-gray-500">Total Study Time</p>
+                  <p className="font-semibold text-gray-900">{
+                    (() => {
+                      const courseMin = student.timeSpent?.minutes || 0
+                      const prepMin = student.examPrepTime?.minutes || 0
+                      const total = courseMin + prepMin
+                      if (total >= 60) return `${Math.floor(total / 60)}h ${total % 60}m`
+                      return `${total}m`
+                    })()
+                  }</p>
                 </div>
               </div>
 

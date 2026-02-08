@@ -275,27 +275,85 @@ def _build_unmatched_entry(sheet_student):
 
 
 def _calculate_exam_summary(exam_students, now):
-    """Calculate KPI summary for exam students."""
+    """Calculate comprehensive KPI summary for exam students."""
     total = len(exam_students)
-    passed = sum(1 for s in exam_students if (s.get('passFail') or '').upper() == 'PASS')
-    failed = sum(1 for s in exam_students if (s.get('passFail') or '').upper() == 'FAIL')
+    passed_students = [s for s in exam_students if (s.get('passFail') or '').upper() == 'PASS']
+    failed_students = [s for s in exam_students if (s.get('passFail') or '').upper() == 'FAIL']
+    passed = len(passed_students)
+    failed = len(failed_students)
 
     upcoming = 0
+    at_risk = 0  # upcoming exam but low progress
     for s in exam_students:
         dt = parse_exam_date_for_sort(s.get('examDateRaw', ''))
         has_result = bool(s.get('passFail', '').strip())
         if dt > now and not has_result:
             upcoming += 1
+            # At risk: upcoming exam but < 80% progress (matched students only)
+            if s.get('matched') and s.get('progress', {}).get('value', 0) < 80:
+                at_risk += 1
 
+    no_result = total - passed - failed - upcoming
+
+    # Pass rate (of those who have taken the exam)
+    completed_exams = passed + failed
+    pass_rate = round((passed / completed_exams * 100), 1) if completed_exams > 0 else 0
+
+    # Study time analytics (matched students only)
     matched_students = [s for s in exam_students if s.get('matched')]
+    matched_passed = [s for s in passed_students if s.get('matched')]
+    matched_failed = [s for s in failed_students if s.get('matched')]
+
+    avg_progress = 0
+    avg_study_time = 0
+    avg_study_passed = 0
+    avg_study_failed = 0
+
     if matched_students:
         avg_progress = round(
             sum(s['progress']['value'] for s in matched_students) / len(matched_students), 1
         )
-    else:
-        avg_progress = 0
+        total_study = sum(
+            (s.get('timeSpent', {}).get('minutes', 0) or 0) +
+            (s.get('examPrepTime', {}).get('minutes', 0) or 0)
+            for s in matched_students
+        )
+        avg_study_time = round(total_study / len(matched_students))
 
-    no_result = total - passed - failed - upcoming
+    if matched_passed:
+        total_study_passed = sum(
+            (s.get('timeSpent', {}).get('minutes', 0) or 0) +
+            (s.get('examPrepTime', {}).get('minutes', 0) or 0)
+            for s in matched_passed
+        )
+        avg_study_passed = round(total_study_passed / len(matched_passed))
+
+    if matched_failed:
+        total_study_failed = sum(
+            (s.get('timeSpent', {}).get('minutes', 0) or 0) +
+            (s.get('examPrepTime', {}).get('minutes', 0) or 0)
+            for s in matched_failed
+        )
+        avg_study_failed = round(total_study_failed / len(matched_failed))
+
+    # Course type breakdown
+    course_types = {}
+    for s in exam_students:
+        course = (s.get('examCourse') or 'Unknown').strip()
+        if course not in course_types:
+            course_types[course] = {'total': 0, 'passed': 0, 'failed': 0}
+        course_types[course]['total'] += 1
+        pf = (s.get('passFail') or '').upper()
+        if pf == 'PASS':
+            course_types[course]['passed'] += 1
+        elif pf == 'FAIL':
+            course_types[course]['failed'] += 1
+
+    # Format study times for display
+    def format_mins(m):
+        if m >= 60:
+            return f"{m // 60}h {m % 60}m"
+        return f"{m}m"
 
     return {
         'total': total,
@@ -303,7 +361,16 @@ def _calculate_exam_summary(exam_students, now):
         'passed': passed,
         'failed': failed,
         'noResult': no_result,
-        'averageProgress': avg_progress
+        'passRate': pass_rate,
+        'atRisk': at_risk,
+        'averageProgress': avg_progress,
+        'avgStudyTime': avg_study_time,
+        'avgStudyTimeFormatted': format_mins(avg_study_time),
+        'avgStudyPassed': avg_study_passed,
+        'avgStudyPassedFormatted': format_mins(avg_study_passed),
+        'avgStudyFailed': avg_study_failed,
+        'avgStudyFailedFormatted': format_mins(avg_study_failed),
+        'courseTypes': course_types
     }
 
 
@@ -315,7 +382,16 @@ def _empty_summary():
         'passed': 0,
         'failed': 0,
         'noResult': 0,
-        'averageProgress': 0
+        'passRate': 0,
+        'atRisk': 0,
+        'averageProgress': 0,
+        'avgStudyTime': 0,
+        'avgStudyTimeFormatted': '0m',
+        'avgStudyPassed': 0,
+        'avgStudyPassedFormatted': '0m',
+        'avgStudyFailed': 0,
+        'avgStudyFailedFormatted': '0m',
+        'courseTypes': {}
     }
 
 
