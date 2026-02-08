@@ -114,43 +114,53 @@ class AbsorbAPIClient:
         self._token = token
         self._token_expiry = datetime.utcnow() + timedelta(hours=4)
 
-    def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
+    def get_user_by_email(self, email: str, name_hint: str = '') -> Optional[Dict[str, Any]]:
         """Look up a user by email address across all departments.
-        Tries multiple search strategies for reliability."""
+        Uses name_hint (from Google Sheet) to search Absorb by name, then matches by email."""
         url = f"{self.base_url}/users"
         email_lower = email.lower().strip()
 
-        # Strategy 1: Use _search parameter (broad text search, then filter locally)
+        def _match_email(users_list):
+            """Find exact email match in a list of users (case-insensitive)."""
+            for u in users_list:
+                u_email = (u.get('emailAddress') or u.get('EmailAddress') or '').lower().strip()
+                if u_email == email_lower:
+                    return u
+            return None
+
+        # Strategy 1: Search by last name (most reliable - Absorb _search matches name fields)
+        if name_hint:
+            parts = name_hint.strip().split()
+            last_name = parts[-1] if parts else ''
+            if last_name and len(last_name) >= 2:
+                try:
+                    params = {"_search": last_name, "_limit": 100}
+                    response = self._session.get(url, params=params, headers=self._get_headers(), timeout=30)
+                    if response.status_code == 200:
+                        data = response.json()
+                        users = data if isinstance(data, list) else []
+                        match = _match_email(users)
+                        if match:
+                            return match
+                except Exception as e:
+                    print(f"[API] Name search error for {name_hint}: {e}")
+
+        # Strategy 2: Search by full email
         try:
-            # Search by the username part of the email for broader matching
-            search_term = email_lower.split('@')[0] if '@' in email_lower else email_lower
-            params = {"_search": search_term, "_limit": 50}
+            params = {"_search": email_lower, "_limit": 50}
             response = self._session.get(url, params=params, headers=self._get_headers(), timeout=30)
             if response.status_code == 200:
                 data = response.json()
                 users = data if isinstance(data, list) else []
-                for u in users:
-                    u_email = (u.get('emailAddress') or u.get('EmailAddress') or '').lower().strip()
-                    if u_email == email_lower:
-                        return u
+                match = _match_email(users)
+                if match:
+                    return match
         except Exception as e:
-            print(f"[API] Search lookup error for {email}: {e}")
+            print(f"[API] Email search error for {email}: {e}")
 
-        # Strategy 2: OData filter with exact email (fallback)
+        # Strategy 3: OData filter (original approach)
         try:
             params = {"_filter": f"emailAddress eq '{email}'", "_limit": 1}
-            response = self._session.get(url, params=params, headers=self._get_headers(), timeout=30)
-            if response.status_code == 200:
-                data = response.json()
-                users = data if isinstance(data, list) else []
-                if users:
-                    return users[0]
-        except Exception as e:
-            print(f"[API] Filter lookup error for {email}: {e}")
-
-        # Strategy 3: Try with EmailAddress casing
-        try:
-            params = {"_filter": f"EmailAddress eq '{email}'", "_limit": 1}
             response = self._session.get(url, params=params, headers=self._get_headers(), timeout=30)
             if response.status_code == 200:
                 data = response.json()
@@ -162,10 +172,10 @@ class AbsorbAPIClient:
 
         return None
 
-    def lookup_and_process_student(self, email: str) -> Optional[Dict[str, Any]]:
+    def lookup_and_process_student(self, email: str, name_hint: str = '') -> Optional[Dict[str, Any]]:
         """Look up a student by email and process their enrollment data."""
         try:
-            user = self.get_user_by_email(email)
+            user = self.get_user_by_email(email, name_hint)
             if not user:
                 return None
             return self._process_single_user(user)

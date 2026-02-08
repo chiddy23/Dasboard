@@ -112,15 +112,18 @@ def get_exam_students():
             emails_to_lookup = unmatched_emails
             print(f"[EXAM] {len(matched_emails)} dept-matched, {len(emails_to_lookup)} to look up (cache expired)")
 
-        # 5. Parallel email lookup for unmatched students (search + filter strategies)
+        # 5. Parallel email lookup for unmatched students (search by name + match by email)
         if emails_to_lookup:
             global _exam_absorb_timestamp
-            print(f"[EXAM] Looking up {len(emails_to_lookup)} students by email...")
+            print(f"[EXAM] Looking up {len(emails_to_lookup)} students by name/email...")
+
+            # Build email -> name map from sheet data for name-based search
+            email_to_name = {s['email']: s['name'] for s in sheet_students}
 
             max_workers = min(50, len(emails_to_lookup))
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 future_to_email = {
-                    executor.submit(client.lookup_and_process_student, email): email
+                    executor.submit(client.lookup_and_process_student, email, email_to_name.get(email, '')): email
                     for email in emails_to_lookup
                 }
 
