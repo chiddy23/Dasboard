@@ -62,6 +62,11 @@ function ExamTable({ students, onViewStudent }) {
         aValue = a.progress?.value ?? 0
         bValue = b.progress?.value ?? 0
         break
+      case 'result':
+        // PASS=1 (top), FAIL=2, no result=3
+        aValue = (a.passFail || '').toUpperCase() === 'PASS' ? 1 : (a.passFail || '').toUpperCase() === 'FAIL' ? 2 : 3
+        bValue = (b.passFail || '').toUpperCase() === 'PASS' ? 1 : (b.passFail || '').toUpperCase() === 'FAIL' ? 2 : 3
+        break
       case 'course':
         aValue = (a.courseName || '').toLowerCase()
         bValue = (b.courseName || '').toLowerCase()
@@ -143,6 +148,15 @@ function ExamTable({ students, onViewStudent }) {
               </th>
               <th
                 className="cursor-pointer hover:bg-gray-100"
+                onClick={() => handleSort('result')}
+              >
+                <div className="flex items-center space-x-1">
+                  <span>Result</span>
+                  <SortIcon field="result" />
+                </div>
+              </th>
+              <th
+                className="cursor-pointer hover:bg-gray-100"
                 onClick={() => handleSort('examDate')}
               >
                 <div className="flex items-center space-x-1">
@@ -206,18 +220,25 @@ function ExamTable({ students, onViewStudent }) {
                     )}
                   </td>
                   <td>
+                    {hasPassed ? (
+                      <span className="inline-flex items-center px-2.5 py-1 rounded-full text-sm font-bold bg-green-100 text-green-800 border border-green-300">
+                        PASS
+                      </span>
+                    ) : hasFailed ? (
+                      <span className="inline-flex items-center px-2.5 py-1 rounded-full text-sm font-bold bg-red-100 text-red-800 border border-red-300">
+                        FAIL
+                      </span>
+                    ) : (
+                      <span className="text-gray-400 text-sm">—</span>
+                    )}
+                  </td>
+                  <td>
                     <div>
                       <p className={`font-medium ${past ? 'text-gray-500' : 'text-gray-900'}`}>
                         {student.examDate || 'TBD'}
                       </p>
                       {student.examTime && (
                         <p className="text-xs text-gray-500">{student.examTime}</p>
-                      )}
-                      {hasPassed && (
-                        <span className="inline-block text-xs px-1.5 py-0.5 rounded bg-green-100 text-green-700 font-medium mt-0.5">PASS</span>
-                      )}
-                      {hasFailed && (
-                        <span className="inline-block text-xs px-1.5 py-0.5 rounded bg-red-100 text-red-700 font-medium mt-0.5">FAIL</span>
                       )}
                     </div>
                   </td>
