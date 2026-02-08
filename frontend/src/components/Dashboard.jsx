@@ -623,6 +623,8 @@ function Dashboard({ user, department, onLogout, initialData }) {
                     <option value="active">Active</option>
                     <option value="warning">Warning</option>
                     <option value="re-engage">Re-engage</option>
+                    <option value="abandoned">Abandoned</option>
+                    <option value="course expired">Course Expired</option>
                   </select>
 
                   {/* Export Button */}

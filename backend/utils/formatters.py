@@ -90,53 +90,61 @@ def get_status_from_last_login(last_login: Optional[str]) -> Dict[str, Any]:
     """
     Determine student status based on last login date.
 
-    Args:
-        last_login: ISO format date string of last login
-
-    Returns:
-        Dictionary with status, class, and emoji
+    Thresholds:
+        <= 24h: ACTIVE (green)
+        1-3 days: WARNING (orange)
+        3-7 days: RE-ENGAGE (red)
+        7+ days: ABANDONED (dark gray)
+        No login: ABANDONED
     """
     if not last_login:
         return {
-            'status': 'RE-ENGAGE',
-            'class': 'red',
-            'emoji': '🔴',
-            'priority': 3
+            'status': 'ABANDONED',
+            'class': 'gray',
+            'emoji': '⚫',
+            'priority': 4
         }
 
     last_login_dt = parse_absorb_date(last_login)
 
     if not last_login_dt:
         return {
-            'status': 'RE-ENGAGE',
-            'class': 'red',
-            'emoji': '🔴',
-            'priority': 3
+            'status': 'ABANDONED',
+            'class': 'gray',
+            'emoji': '⚫',
+            'priority': 4
         }
 
     now = datetime.now(timezone.utc) if last_login_dt.tzinfo else datetime.now()
-    hours_diff = (now - last_login_dt).total_seconds() / 3600
+    days_diff = (now - last_login_dt).total_seconds() / 86400
 
-    if hours_diff <= 24:
+    if days_diff <= 1:
         return {
             'status': 'ACTIVE',
             'class': 'green',
             'emoji': '🟢',
             'priority': 1
         }
-    elif hours_diff <= 72:
+    elif days_diff <= 3:
         return {
             'status': 'WARNING',
             'class': 'orange',
             'emoji': '🟡',
             'priority': 2
         }
-    else:
+    elif days_diff <= 7:
         return {
             'status': 'RE-ENGAGE',
             'class': 'red',
             'emoji': '🔴',
             'priority': 3
+        }
+    else:
+        return {
+            'status': 'ABANDONED',
+            'class': 'gray',
+            'emoji': '⚫',
+            'priority': 4
         }
 
 
@@ -244,15 +252,35 @@ def format_progress(progress) -> Dict[str, Any]:
     }
 
 
+def _is_enrollment_expired(student: Dict[str, Any]) -> bool:
+    """Check if the student's primary enrollment is expired."""
+    # Check enrollment status (4 = Expired in some Absorb versions)
+    enrollment_status = student.get('enrollmentStatus', 0)
+    if enrollment_status == 4:
+        return True
+
+    # Check expiry date fields on the primary enrollment
+    primary = student.get('primaryEnrollment') or {}
+    for key in ('dateExpired', 'DateExpired', 'expiryDate', 'ExpiryDate',
+                'dateExpiry', 'DateExpiry', 'expiredDate', 'ExpiredDate'):
+        expiry_str = primary.get(key)
+        if expiry_str:
+            expiry_dt = parse_absorb_date(expiry_str)
+            if expiry_dt:
+                now = datetime.now(timezone.utc) if expiry_dt.tzinfo else datetime.now()
+                if expiry_dt < now:
+                    return True
+    return False
+
+
 def format_student_for_response(student: Dict[str, Any]) -> Dict[str, Any]:
     """
     Format a student record for API response.
 
-    Args:
-        student: Raw student data from Absorb
-
-    Returns:
-        Formatted student dictionary
+    Status priority:
+        1. COMPLETE (100% progress) - skip all warnings
+        2. COURSE EXPIRED - enrollment expired
+        3. ACTIVE / WARNING / RE-ENGAGE / ABANDONED - based on login recency
     """
     last_login = student.get('lastLoginDate')
     progress_info = format_progress(student.get('progress', 0))
@@ -264,6 +292,13 @@ def format_student_for_response(student: Dict[str, Any]) -> Dict[str, Any]:
             'class': 'blue',
             'emoji': '\u2705',
             'priority': 0
+        }
+    elif _is_enrollment_expired(student):
+        status_info = {
+            'status': 'COURSE EXPIRED',
+            'class': 'expired',
+            'emoji': '⏰',
+            'priority': 5
         }
     else:
         status_info = get_status_from_last_login(last_login)
@@ -311,6 +346,6 @@ def get_enrollment_status_text(status: int) -> str:
         1: 'In Progress',
         2: 'Complete',
         3: 'Complete',  # Absorb API uses 3 for completed
-        4: 'Failed'
+        4: 'Expired'
     }
     return status_map.get(status, 'Unknown')

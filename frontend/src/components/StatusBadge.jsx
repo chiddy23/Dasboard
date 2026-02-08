@@ -11,6 +11,10 @@ function StatusBadge({ status }) {
         return 'badge-warning'
       case 'red':
         return 'badge-reengage'
+      case 'gray':
+        return 'badge-abandoned'
+      case 'expired':
+        return 'badge-expired'
       default:
         return 'badge-reengage'
     }
