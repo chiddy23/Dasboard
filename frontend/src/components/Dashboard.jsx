@@ -3,6 +3,7 @@ import KPICards from './KPICards'
 import StudentTable from './StudentTable'
 import ExamTable from './ExamTable'
 import StudentModal from './StudentModal'
+import ExamSheetModal from './ExamSheetModal'
 import Charts from './Charts'
 
 const API_BASE = '/api'
@@ -622,12 +623,20 @@ function Dashboard({ user, department, onLogout, initialData }) {
         )}
       </main>
 
-      {/* Student Detail Modal */}
+      {/* Student Detail Modal - Absorb data available */}
       {selectedStudent && selectedStudent.id && (
         <StudentModal
           studentId={selectedStudent.id}
           onClose={() => setSelectedStudent(null)}
           onSessionExpired={onLogout}
+        />
+      )}
+
+      {/* Exam Sheet Modal - No Absorb data, show sheet info */}
+      {selectedStudent && !selectedStudent.id && (
+        <ExamSheetModal
+          student={selectedStudent}
+          onClose={() => setSelectedStudent(null)}
         />
       )}
     </div>

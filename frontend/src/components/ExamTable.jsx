@@ -241,16 +241,12 @@ function ExamTable({ students, onViewStudent }) {
                     </div>
                   </td>
                   <td className="sticky right-0 bg-white">
-                    {student.matched !== false && student.id ? (
-                      <button
-                        onClick={() => onViewStudent(student)}
-                        className="btn btn-secondary text-sm py-1 px-3 whitespace-nowrap"
-                      >
-                        View
-                      </button>
-                    ) : (
-                      <span className="text-xs text-gray-400">--</span>
-                    )}
+                    <button
+                      onClick={() => onViewStudent(student)}
+                      className="btn btn-secondary text-sm py-1 px-3 whitespace-nowrap"
+                    >
+                      View
+                    </button>
                   </td>
                 </tr>
               )
