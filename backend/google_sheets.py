@@ -73,6 +73,22 @@ def fetch_exam_sheet():
 
         raw_date = (row.get('Exam Date') or '').strip()
 
+        # Weekly tracking data (T-5 through T-0)
+        weekly = []
+        for week in ['T-5', 'T-4', 'T-3', 'T-2', 'T-1']:
+            status = (row.get(f'{week} Status') or '').strip()
+            hours = (row.get(f'{week} Hours') or '').strip()
+            practice = (row.get(f'{week} Practice %') or '').strip()
+            notes = (row.get(f'{week} Notes') or '').strip()
+            if status or hours or practice or notes:
+                weekly.append({
+                    'week': week,
+                    'status': status,
+                    'hours': hours,
+                    'practice': practice,
+                    'notes': notes
+                })
+
         students.append({
             'name': (row.get('Student Name') or '').strip(),
             'email': email,
@@ -85,6 +101,16 @@ def fetch_exam_sheet():
             'agencyOwner': (row.get('Agency Owner') or '').strip(),
             'passFail': (row.get('Pass/Fail') or '').strip(),
             'finalOutcome': (row.get('Final Outcome') or '').strip(),
+            # Extended tracking data
+            'alertDate': (row.get('Alert Date') or '').strip(),
+            'studyHoursAtExam': (row.get('Study Hours at Exam') or '').strip(),
+            'finalPractice': (row.get('Final Practice %') or '').strip(),
+            'chaptersComplete': (row.get('Chapters Complete') or '').strip(),
+            'videosWatched': (row.get('Videos Watched') or '').strip(),
+            'stateLawsDone': (row.get('State Laws Done') or '').strip(),
+            'studyConsistency': (row.get('Study Consistency') or '').strip(),
+            't0Sent': (row.get('T-0 Sent') or '').strip(),
+            'weeklyTracking': weekly,
         })
 
     print(f"[SHEET] Parsed {len(students)} exam students")

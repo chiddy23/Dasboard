@@ -354,6 +354,35 @@ function StudentModal({ studentId, examInfo, onClose, onSessionExpired }) {
                       )}
                     </div>
                   )}
+                  {/* Admin Tracking Data */}
+                  {examInfo.sheetTracking && (examInfo.sheetTracking.studyHoursAtExam || examInfo.sheetTracking.finalPractice) && (
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3 pt-3 border-t border-blue-200">
+                      {examInfo.sheetTracking.studyHoursAtExam && (
+                        <div className="bg-white rounded-lg p-2.5 text-center">
+                          <p className="text-lg font-bold text-purple-700">{examInfo.sheetTracking.studyHoursAtExam}</p>
+                          <p className="text-xs text-gray-500">Study Hours</p>
+                        </div>
+                      )}
+                      {examInfo.sheetTracking.finalPractice && (
+                        <div className="bg-white rounded-lg p-2.5 text-center">
+                          <p className="text-lg font-bold text-blue-700">{examInfo.sheetTracking.finalPractice}</p>
+                          <p className="text-xs text-gray-500">Practice %</p>
+                        </div>
+                      )}
+                      {examInfo.sheetTracking.chaptersComplete && (
+                        <div className="bg-white rounded-lg p-2.5 text-center">
+                          <p className="text-lg font-bold text-green-700">{examInfo.sheetTracking.chaptersComplete}</p>
+                          <p className="text-xs text-gray-500">Chapters</p>
+                        </div>
+                      )}
+                      {examInfo.sheetTracking.studyConsistency && (
+                        <div className="bg-white rounded-lg p-2.5 text-center">
+                          <p className="text-lg font-bold text-gray-700">{examInfo.sheetTracking.studyConsistency}</p>
+                          <p className="text-xs text-gray-500">Consistency</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 

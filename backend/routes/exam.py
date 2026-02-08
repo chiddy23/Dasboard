@@ -1,6 +1,6 @@
 """Exam scheduling routes for JustInsurance Student Dashboard."""
 
-from flask import Blueprint, jsonify, g
+from flask import Blueprint, jsonify, g, request
 import sys
 import os
 from datetime import datetime
@@ -15,6 +15,8 @@ from utils import format_student_for_response
 from google_sheets import fetch_exam_sheet, invalidate_sheet_cache, parse_exam_date_for_sort
 
 exam_bp = Blueprint('exam', __name__)
+
+ADMIN_PASSWORD = os.environ.get('EXAM_ADMIN_PASSWORD', 'Justinsurance123$')
 
 # Cache for department names (departmentId -> name)
 _dept_name_cache = {}
@@ -65,6 +67,10 @@ def invalidate_exam_absorb_cache():
 def get_exam_students():
     """Get exam-scheduled students matched with their Absorb data."""
     try:
+        # Check admin mode
+        admin_key = request.args.get('adminKey', '')
+        is_admin = admin_key == ADMIN_PASSWORD
+
         # 1. Fetch Google Sheet data
         sheet_students = fetch_exam_sheet()
 
@@ -180,6 +186,10 @@ def get_exam_students():
                 # Not found in Absorb at all
                 exam_entry = _build_unmatched_entry(sheet_student)
 
+            # Include full sheet tracking data in admin mode
+            if is_admin:
+                exam_entry['sheetTracking'] = _build_tracking_data(sheet_student)
+
             exam_students.append(exam_entry)
 
         # 7. Sort: upcoming first, then past
@@ -271,6 +281,22 @@ def _build_unmatched_entry(sheet_student):
         'finalOutcome': sheet_student['finalOutcome'],
         'departmentName': sheet_student.get('agencyOwner') or 'N/A',
         'matched': False
+    }
+
+
+def _build_tracking_data(sheet_student):
+    """Build the extended tracking data from the Google Sheet for admin view."""
+    return {
+        'phone': sheet_student.get('phone', ''),
+        'alertDate': sheet_student.get('alertDate', ''),
+        'studyHoursAtExam': sheet_student.get('studyHoursAtExam', ''),
+        'finalPractice': sheet_student.get('finalPractice', ''),
+        'chaptersComplete': sheet_student.get('chaptersComplete', ''),
+        'videosWatched': sheet_student.get('videosWatched', ''),
+        'stateLawsDone': sheet_student.get('stateLawsDone', ''),
+        'studyConsistency': sheet_student.get('studyConsistency', ''),
+        't0Sent': sheet_student.get('t0Sent', ''),
+        'weeklyTracking': sheet_student.get('weeklyTracking', []),
     }
 
 
@@ -393,6 +419,17 @@ def _empty_summary():
         'avgStudyFailedFormatted': '0m',
         'courseTypes': {}
     }
+
+
+@exam_bp.route('/admin-verify', methods=['POST'])
+@login_required
+def verify_admin():
+    """Verify admin password for full exam data access."""
+    data = request.get_json() or {}
+    password = data.get('password', '')
+    if password == ADMIN_PASSWORD:
+        return jsonify({'success': True, 'admin': True})
+    return jsonify({'success': False, 'error': 'Invalid password'}), 401
 
 
 @exam_bp.route('/sync', methods=['POST'])

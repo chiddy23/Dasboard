@@ -28,6 +28,12 @@ function Dashboard({ user, department, onLogout, initialData }) {
   const [examLoading, setExamLoading] = useState(false)
   const [examLoaded, setExamLoaded] = useState(false)
 
+  // Admin mode
+  const [adminMode, setAdminMode] = useState(false)
+  const [adminKey, setAdminKey] = useState('')
+  const [showAdminInput, setShowAdminInput] = useState(false)
+  const [adminError, setAdminError] = useState('')
+
   // Filtering and search
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
@@ -56,10 +62,14 @@ function Dashboard({ user, department, onLogout, initialData }) {
     }
   }, [activeTab])
 
-  const fetchExamData = async () => {
+  const fetchExamData = async (overrideAdminKey) => {
     setExamLoading(true)
     try {
-      const res = await fetch(`${API_BASE}/exam/students`, { credentials: 'include' })
+      const key = overrideAdminKey || adminKey
+      const url = key
+        ? `${API_BASE}/exam/students?adminKey=${encodeURIComponent(key)}`
+        : `${API_BASE}/exam/students`
+      const res = await fetch(url, { credentials: 'include' })
       if (!res.ok) {
         if (res.status === 401) {
           onLogout()
@@ -210,6 +220,41 @@ function Dashboard({ user, department, onLogout, initialData }) {
     } catch (err) {
       setError('Failed to export data. Please try again.')
     }
+  }
+
+  const handleAdminLogin = async (password) => {
+    try {
+      const res = await fetch(`${API_BASE}/exam/admin-verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ password })
+      })
+      const data = await res.json()
+      if (data.success) {
+        setAdminMode(true)
+        setAdminKey(password)
+        setShowAdminInput(false)
+        setAdminError('')
+        // Re-fetch exam data with admin key to get tracking data
+        setExamLoaded(false)
+        fetchExamData(password)
+      } else {
+        setAdminError('Invalid password')
+      }
+    } catch {
+      setAdminError('Failed to verify')
+    }
+  }
+
+  const handleAdminLogout = () => {
+    setAdminMode(false)
+    setAdminKey('')
+    setShowAdminInput(false)
+    setAdminError('')
+    // Re-fetch without admin data
+    setExamLoaded(false)
+    fetchExamData('')
   }
 
   // Filter students (works for both tabs)
@@ -557,13 +602,13 @@ function Dashboard({ user, department, onLogout, initialData }) {
         {activeTab === 'exam' && (
           <>
             {/* Exam Tab Header */}
-            <div className="mb-6 flex items-center justify-between">
+            <div className="mb-6 flex items-center justify-between flex-wrap gap-3">
               <div className="flex items-center gap-4">
                 <p className="text-sm text-gray-500">
                   Exam scheduling, pass rates & study tracking
                 </p>
                 <button
-                  onClick={fetchExamData}
+                  onClick={() => fetchExamData()}
                   disabled={examLoading}
                   className="text-sm text-ji-blue-bright hover:text-ji-blue-medium flex items-center space-x-1"
                 >
@@ -573,15 +618,69 @@ function Dashboard({ user, department, onLogout, initialData }) {
                   <span>{examLoading ? 'Refreshing...' : 'Refresh'}</span>
                 </button>
               </div>
-              <button
-                onClick={() => setShowExamCharts(!showExamCharts)}
-                className="text-sm text-ji-blue-bright hover:text-ji-blue-medium flex items-center space-x-1"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-                </svg>
-                <span>{showExamCharts ? 'Hide Charts' : 'Show Charts'}</span>
-              </button>
+              <div className="flex items-center gap-3">
+                {/* Admin Mode Toggle */}
+                {adminMode ? (
+                  <div className="flex items-center gap-2">
+                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-700">
+                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                      </svg>
+                      Admin Mode
+                    </span>
+                    <button
+                      onClick={handleAdminLogout}
+                      className="text-xs text-gray-500 hover:text-red-500"
+                    >
+                      Exit
+                    </button>
+                  </div>
+                ) : (
+                  <div className="relative">
+                    <button
+                      onClick={() => setShowAdminInput(!showAdminInput)}
+                      className="text-sm text-gray-400 hover:text-purple-600 flex items-center space-x-1"
+                      title="Admin Override"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                      </svg>
+                    </button>
+                    {showAdminInput && (
+                      <div className="absolute right-0 top-8 bg-white rounded-lg shadow-lg border p-3 z-50 w-64">
+                        <p className="text-xs text-gray-500 mb-2">Enter admin password to view all student data</p>
+                        <form onSubmit={(e) => { e.preventDefault(); handleAdminLogin(e.target.password.value) }}>
+                          <input
+                            name="password"
+                            type="password"
+                            placeholder="Admin password"
+                            className="w-full px-3 py-1.5 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            autoFocus
+                          />
+                          {adminError && <p className="text-xs text-red-500 mt-1">{adminError}</p>}
+                          <div className="flex gap-2 mt-2">
+                            <button type="submit" className="flex-1 px-3 py-1.5 bg-purple-600 text-white rounded text-xs font-medium hover:bg-purple-700">
+                              Unlock
+                            </button>
+                            <button type="button" onClick={() => { setShowAdminInput(false); setAdminError('') }} className="px-3 py-1.5 bg-gray-100 rounded text-xs text-gray-600 hover:bg-gray-200">
+                              Cancel
+                            </button>
+                          </div>
+                        </form>
+                      </div>
+                    )}
+                  </div>
+                )}
+                <button
+                  onClick={() => setShowExamCharts(!showExamCharts)}
+                  className="text-sm text-ji-blue-bright hover:text-ji-blue-medium flex items-center space-x-1"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                  </svg>
+                  <span>{showExamCharts ? 'Hide Charts' : 'Show Charts'}</span>
+                </button>
+              </div>
             </div>
 
             {/* Exam Charts (collapsible) */}
@@ -761,7 +860,8 @@ function Dashboard({ user, department, onLogout, initialData }) {
             agencyOwner: selectedStudent.agencyOwner,
             passFail: selectedStudent.passFail,
             finalOutcome: selectedStudent.finalOutcome,
-            departmentName: selectedStudent.departmentName
+            departmentName: selectedStudent.departmentName,
+            sheetTracking: selectedStudent.sheetTracking
           } : null}
           onClose={() => setSelectedStudent(null)}
           onSessionExpired={onLogout}
@@ -772,6 +872,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
       {selectedStudent && !selectedStudent.id && (
         <ExamSheetModal
           student={selectedStudent}
+          adminMode={adminMode}
           onClose={() => setSelectedStudent(null)}
         />
       )}
