@@ -271,6 +271,9 @@ function Dashboard({ user, department, onLogout, initialData }) {
   })
 
   const filteredExamStudents = examStudents.filter(student => {
+    // In normal mode, only show students from logged-in department (matched in Absorb)
+    if (!adminMode && student.matched === false) return false
+
     const searchLower = searchTerm.toLowerCase()
     const matchesSearch = !searchTerm ||
       (student.fullName || '').toLowerCase().includes(searchLower) ||
@@ -306,7 +309,8 @@ function Dashboard({ user, department, onLogout, initialData }) {
   })
 
   // Get unique course types for filter dropdown
-  const examCourseTypes = [...new Set(examStudents.map(s => (s.examCourse || '').trim()).filter(Boolean))].sort()
+  const visibleExamStudents = adminMode ? examStudents : examStudents.filter(s => s.matched !== false)
+  const examCourseTypes = [...new Set(visibleExamStudents.map(s => (s.examCourse || '').trim()).filter(Boolean))].sort()
 
   const formatLastSynced = () => {
     if (!lastSynced) return 'Never'
