@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from absorb_api import AbsorbAPIClient, AbsorbAPIError
 from middleware import login_required
 from utils import format_student_for_response, get_status_from_last_login
+from routes.exam import invalidate_exam_absorb_cache
 
 dashboard_bp = Blueprint('dashboard', __name__)
 
@@ -240,6 +241,7 @@ def sync_data():
 
         # Invalidate cache to force fresh fetch
         invalidate_cache(g.department_id)
+        invalidate_exam_absorb_cache()  # Also clear exam cache
 
         # Initialize API client with user's token
         client = AbsorbAPIClient()
