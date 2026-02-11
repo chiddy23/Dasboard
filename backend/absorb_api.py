@@ -202,6 +202,13 @@ class AbsorbAPIClient:
                 users = data if isinstance(data, list) else []
                 if users:
                     return users[0]
+            else:
+                # Log non-200 responses (first email only to avoid spam)
+                if not hasattr(self, '_logged_odata_error'):
+                    print(f"[API] OData fetch failed for {email}: Status {response.status_code}")
+                    print(f"[API] Response: {response.text[:200]}")
+                    print(f"[API] Has token: {bool(self._token)}")
+                    self._logged_odata_error = True
         except Exception as e:
             print(f"[API] Error fetching {email}: {e}")
         return None
