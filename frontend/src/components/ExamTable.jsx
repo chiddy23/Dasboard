@@ -125,11 +125,11 @@ function ExamTable({ students, onViewStudent }) {
   return (
     <div className="bg-white rounded-xl shadow-md overflow-hidden">
       <div className="overflow-x-auto">
-        <table className="data-table">
+        <table className="data-table min-w-full">
           <thead>
             <tr>
               <th
-                className="cursor-pointer hover:bg-gray-100"
+                className="cursor-pointer hover:bg-gray-100 min-w-[200px]"
                 onClick={() => handleSort('name')}
               >
                 <div className="flex items-center space-x-1">
@@ -138,7 +138,7 @@ function ExamTable({ students, onViewStudent }) {
                 </div>
               </th>
               <th
-                className="cursor-pointer hover:bg-gray-100"
+                className="cursor-pointer hover:bg-gray-100 min-w-[120px]"
                 onClick={() => handleSort('status')}
               >
                 <div className="flex items-center space-x-1">
@@ -147,7 +147,7 @@ function ExamTable({ students, onViewStudent }) {
                 </div>
               </th>
               <th
-                className="cursor-pointer hover:bg-gray-100"
+                className="cursor-pointer hover:bg-gray-100 min-w-[100px]"
                 onClick={() => handleSort('result')}
               >
                 <div className="flex items-center space-x-1">
@@ -156,7 +156,7 @@ function ExamTable({ students, onViewStudent }) {
                 </div>
               </th>
               <th
-                className="cursor-pointer hover:bg-gray-100"
+                className="cursor-pointer hover:bg-gray-100 min-w-[140px]"
                 onClick={() => handleSort('examDate')}
               >
                 <div className="flex items-center space-x-1">
@@ -165,7 +165,7 @@ function ExamTable({ students, onViewStudent }) {
                 </div>
               </th>
               <th
-                className="cursor-pointer hover:bg-gray-100"
+                className="cursor-pointer hover:bg-gray-100 min-w-[150px]"
                 onClick={() => handleSort('department')}
               >
                 <div className="flex items-center space-x-1">
@@ -174,7 +174,7 @@ function ExamTable({ students, onViewStudent }) {
                 </div>
               </th>
               <th
-                className="cursor-pointer hover:bg-gray-100 hidden md:table-cell"
+                className="cursor-pointer hover:bg-gray-100 min-w-[200px]"
                 onClick={() => handleSort('course')}
               >
                 <div className="flex items-center space-x-1">
@@ -183,7 +183,7 @@ function ExamTable({ students, onViewStudent }) {
                 </div>
               </th>
               <th
-                className="cursor-pointer hover:bg-gray-100"
+                className="cursor-pointer hover:bg-gray-100 min-w-[160px]"
                 onClick={() => handleSort('progress')}
               >
                 <div className="flex items-center space-x-1">
@@ -243,17 +243,17 @@ function ExamTable({ students, onViewStudent }) {
                     </div>
                   </td>
                   <td>
-                    <p className="text-gray-900 text-sm truncate max-w-[150px]" title={student.departmentName}>
+                    <p className="text-gray-900 text-sm" title={student.departmentName}>
                       {student.departmentName || 'Unknown'}
                     </p>
                   </td>
-                  <td className="hidden md:table-cell">
-                    <p className="text-gray-900 truncate max-w-xs" title={student.courseName}>
+                  <td>
+                    <p className="text-gray-900" title={student.courseName}>
                       {student.courseName}
                     </p>
                   </td>
                   <td>
-                    <div className="w-32">
+                    <div className="min-w-[160px]">
                       <ProgressBar progress={student.progress} />
                       <p className="text-xs text-gray-500 mt-1">Course: {student.timeSpent?.formatted || '0m'}</p>
                       {student.examPrepTime?.minutes > 0 && (
