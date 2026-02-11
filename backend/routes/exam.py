@@ -117,21 +117,20 @@ def get_exam_students():
         if len(unmatched_emails) > 0 and len(unmatched_emails) <= 5:
             print(f"[EXAM] Unmatched emails sample: {list(unmatched_emails)[:5]}")
 
-        # Create clients: regular (user token) for current dept, admin (API key only) for cross-dept
+        # Create client with user token (admin users can access cross-department data)
         client = AbsorbAPIClient()
         client.set_token(g.absorb_token)
 
-        # Admin client for cross-department access (API key only, no user token)
-        admin_client = AbsorbAPIClient() if is_admin else None
-
         # 5. For admin mode: fetch ONLY the specific students by email (cross-department)
+        # Admin users' tokens have cross-department access
         if is_admin and unmatched_emails:
             global _exam_absorb_timestamp
             print(f"[EXAM] Admin mode: Fetching {len(unmatched_emails)} specific students across all departments...")
+            print(f"[EXAM] Using admin token (has cross-dept access)")
 
-            # Fetch users by searching all departments (finds cross-department students)
+            # Fetch users by searching all departments (admin token allows this)
             unmatched_email_list = list(unmatched_emails)
-            found_users = admin_client.get_users_by_emails_batch(unmatched_email_list)
+            found_users = client.get_users_by_emails_batch(unmatched_email_list)
             print(f"[EXAM] Found {len(found_users)} users, processing enrollments...")
 
             # Process found users in parallel to get enrollment data
@@ -140,9 +139,9 @@ def get_exam_students():
             if len(found_users) > 0:
                 max_workers = min(50, len(found_users))
                 with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                    # Submit enrollment processing for each found user (using admin client)
+                    # Submit enrollment processing for each found user (using admin token)
                     future_to_user = {
-                        executor.submit(admin_client._process_single_user, user): user
+                        executor.submit(client._process_single_user, user): user
                         for user in found_users
                     }
 
@@ -197,8 +196,8 @@ def get_exam_students():
                 # Found via cross-department lookup
                 cached = _exam_absorb_cache[email]
                 dept_id = cached['raw'].get('departmentId') or ''
-                # Use admin client for cross-department name lookup
-                dept_name = get_department_name(admin_client if is_admin else client, dept_id) if dept_id else 'Unknown'
+                # Admin token has cross-department access
+                dept_name = get_department_name(client, dept_id) if dept_id else 'Unknown'
 
                 exam_entry = _build_exam_entry(cached['formatted'], sheet_student, dept_name, True)
             else:
