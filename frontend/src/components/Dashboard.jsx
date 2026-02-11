@@ -318,7 +318,9 @@ function Dashboard({ user, department, onLogout, initialData }) {
       const data = await res.json()
       if (data.success) {
         // Format date for display (e.g., "Jan 15, 2026")
-        const dt = new Date(newDate)
+        // Parse date as local time to avoid timezone shift
+        const [year, month, day] = newDate.split('-')
+        const dt = new Date(year, month - 1, day)
         const formatted = dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 
         // Update local state immediately
