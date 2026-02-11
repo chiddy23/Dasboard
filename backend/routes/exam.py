@@ -301,7 +301,7 @@ def _build_unmatched_entry(sheet_student):
         'agencyOwner': sheet_student['agencyOwner'],
         'passFail': sheet_student['passFail'],
         'finalOutcome': sheet_student['finalOutcome'],
-        'departmentName': sheet_student.get('agencyOwner') or 'N/A',
+        'departmentName': 'Not in Absorb',
         'matched': False
     }
 
