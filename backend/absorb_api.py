@@ -191,51 +191,71 @@ class AbsorbAPIClient:
             print(f"[API] Error processing exam student {email}: {e}")
             return None
 
-    def get_users_by_emails(self, emails: List[str]) -> List[Dict[str, Any]]:
-        """Get specific users by email addresses (admin only - searches across departments).
+    def get_users_by_emails_batch(self, target_emails: List[str]) -> List[Dict[str, Any]]:
+        """Get specific users by email addresses (admin only - fetches across all departments).
+
+        Fetches users in batches without department filter until all target emails are found.
+        This avoids department-scoped search limitations.
 
         Args:
-            emails: List of email addresses to search for
+            target_emails: List of email addresses to find
 
         Returns:
             List of user objects matching the provided emails
         """
         url = f"{self.base_url}/users"
         found_users = []
+        target_emails_lower = {email.lower().strip() for email in target_emails}
+        found_emails = set()
 
-        print(f"[API] Fetching {len(emails)} specific users by email (admin cross-department)")
+        print(f"[API] Fetching {len(target_emails)} users across all departments (batch method)")
 
-        # Process emails in batches to avoid overwhelming the API
-        batch_size = 50
-        for i in range(0, len(emails), batch_size):
-            batch = emails[i:i + batch_size]
-            print(f"[API] Processing batch {i//batch_size + 1}/{(len(emails)-1)//batch_size + 1} ({len(batch)} emails)")
+        offset = 0
+        batch_size = 500
+        max_offset = 10000  # Safety limit to avoid infinite loop
 
-            # Search for each email individually
-            for email in batch:
-                try:
-                    # Try direct email search
-                    params = {"_search": email.lower().strip(), "_limit": 10}
-                    response = self._session.get(url, params=params, headers=self._get_headers(), timeout=30)
+        while offset < max_offset and len(found_emails) < len(target_emails_lower):
+            # Fetch users without department filter (admin access)
+            params = {
+                "_limit": batch_size,
+                "_offset": offset
+            }
 
-                    if response.status_code == 200:
-                        data = response.json()
-                        users = data if isinstance(data, list) else []
+            try:
+                response = self._session.get(url, params=params, headers=self._get_headers(), timeout=60)
 
-                        # Find exact email match (case-insensitive)
-                        for user in users:
-                            user_email = (user.get('emailAddress') or user.get('EmailAddress') or '').lower().strip()
-                            if user_email == email.lower().strip():
-                                found_users.append(user)
-                                break
-                except Exception as e:
-                    print(f"[API] Error fetching user {email}: {e}")
-                    continue
+                if response.status_code != 200:
+                    print(f"[API] Batch fetch failed at offset {offset}: {response.status_code}")
+                    break
 
-            if (i + batch_size) % 100 == 0 or (i + batch_size) >= len(emails):
-                print(f"[API] Processed {min(i + batch_size, len(emails))}/{len(emails)} emails, found {len(found_users)} users")
+                data = response.json()
+                users = data if isinstance(data, list) else []
 
-        print(f"[API] COMPLETE: Found {len(found_users)}/{len(emails)} users")
+                if not users:
+                    print(f"[API] No more users at offset {offset}")
+                    break
+
+                # Check each user against target emails
+                for user in users:
+                    user_email = (user.get('emailAddress') or user.get('EmailAddress') or '').lower().strip()
+                    if user_email in target_emails_lower and user_email not in found_emails:
+                        found_users.append(user)
+                        found_emails.add(user_email)
+
+                print(f"[API] Fetched batch at offset {offset} ({len(users)} users), found {len(found_emails)}/{len(target_emails_lower)} total")
+
+                # If we got fewer users than batch_size, we've reached the end
+                if len(users) < batch_size:
+                    print(f"[API] Reached end of users list")
+                    break
+
+                offset += batch_size
+
+            except Exception as e:
+                print(f"[API] Error fetching batch at offset {offset}: {e}")
+                break
+
+        print(f"[API] COMPLETE: Found {len(found_users)}/{len(target_emails)} users across all departments")
         return found_users
 
     def get_users_by_department(self, department_id: str) -> List[Dict[str, Any]]:
