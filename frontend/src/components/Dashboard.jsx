@@ -319,7 +319,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
       if (data.success) {
         // Format date for display (e.g., "Jan 15, 2026")
         // Parse date as local time to avoid timezone shift
-        const [year, month, day] = newDate.split('-')
+        const [year, month, day] = newDate.split('-').map(Number)
         const dt = new Date(year, month - 1, day)
         const formatted = dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 
