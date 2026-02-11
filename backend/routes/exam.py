@@ -125,27 +125,24 @@ def get_exam_students():
             global _exam_absorb_timestamp
             print(f"[EXAM] Admin mode: Fetching {len(unmatched_emails)} specific students by email...")
 
-            # Fetch only the students we need (not all users)
-            unmatched_email_list = list(unmatched_emails)
-            found_users = client.get_users_by_emails(unmatched_email_list)
-            print(f"[EXAM] Found {len(found_users)} users, processing enrollments...")
+            # Build a map of email -> name from sheet data for lookup hints
+            email_to_name = {}
+            for s in sheet_students:
+                email_to_name[s['email']] = s['name']
 
-            # Build email map from found users
-            all_users_email_map = {}
-            for user in found_users:
-                user_email = (user.get('emailAddress') or user.get('EmailAddress') or '').lower().strip()
-                if user_email:
-                    all_users_email_map[user_email] = user
-
-            print(f"[EXAM] Matched {len(all_users_email_map)} users from search results")
-
-            # Process matched users to get enrollment data (use user objects directly, no search)
-            max_workers = min(50, len(all_users_email_map))
+            # Use parallel lookups with name hints (much faster than sequential searches)
+            max_workers = min(50, len(unmatched_emails))
             found = 0
+
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                # Submit lookups with name hints from Google Sheet
                 future_to_email = {
-                    executor.submit(client._process_single_user, all_users_email_map[email]): email
-                    for email in all_users_email_map.keys()
+                    executor.submit(
+                        client.lookup_and_process_student,
+                        email,
+                        email_to_name.get(email, '')
+                    ): email
+                    for email in unmatched_emails
                 }
 
                 completed = 0
@@ -164,16 +161,11 @@ def get_exam_students():
                         else:
                             _exam_absorb_cache[email] = None
                     except Exception as e:
-                        print(f"[EXAM] Error processing {email}: {e}")
+                        print(f"[EXAM] Error looking up {email}: {e}")
                         _exam_absorb_cache[email] = None
 
-                    if completed % 20 == 0 or completed == len(all_users_email_map):
-                        print(f"[EXAM] Processed {completed}/{len(all_users_email_map)} users ({found} found)")
-
-            # Cache remaining unmatched as None
-            for email in unmatched_emails:
-                if email not in _exam_absorb_cache:
-                    _exam_absorb_cache[email] = None
+                    if completed % 20 == 0 or completed == len(unmatched_emails):
+                        print(f"[EXAM] Processed {completed}/{len(unmatched_emails)} lookups ({found} found)")
 
             _exam_absorb_timestamp = datetime.utcnow()
             print(f"[EXAM] Admin fetch complete: {found}/{len(unmatched_emails)} found across all departments")

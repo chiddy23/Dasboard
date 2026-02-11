@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  # Combined app (backend + static frontend)
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - FLASK_ENV=production
+      - FLASK_SECRET_KEY=${FLASK_SECRET_KEY}
+      - ABSORB_BASE_URL=${ABSORB_BASE_URL}
+      - ABSORB_TENANT_URL=${ABSORB_TENANT_URL}
+      - ABSORB_API_KEY=${ABSORB_API_KEY}
+      - ABSORB_PRIVATE_KEY=${ABSORB_PRIVATE_KEY}
+      - ABSORB_CLIENT_ID=${ABSORB_CLIENT_ID}
+      - ABSORB_CLIENT_SECRET=${ABSORB_CLIENT_SECRET}
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:8080}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Development mode - separate services
+  backend-dev:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    ports:
+      - "5000:5000"
+    environment:
+      - FLASK_ENV=development
+      - FLASK_DEBUG=true
+    env_file:
+      - .env
+    volumes:
+      - ./backend:/app
+    restart: unless-stopped
+    profiles:
+      - dev
+
+  frontend-dev:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    restart: unless-stopped
+    profiles:
+      - dev
