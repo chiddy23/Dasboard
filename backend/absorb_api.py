@@ -191,48 +191,23 @@ class AbsorbAPIClient:
             print(f"[API] Error processing exam student {email}: {e}")
             return None
 
-    def get_all_departments(self) -> List[Dict[str, Any]]:
-        """Get all departments (admin only)."""
-        url = f"{self.base_url}/departments"
-        all_departments = []
-        offset = 0
-        limit = 500
-
-        print(f"[API] Fetching all departments...")
-
-        while True:
-            params = {"_limit": limit, "_offset": offset}
-
-            try:
-                response = self._session.get(url, params=params, headers=self._get_headers(), timeout=30)
-
-                if response.status_code != 200:
-                    print(f"[API] Department fetch failed: {response.status_code}")
-                    break
-
+    def fetch_user_by_email_odata(self, email: str) -> Optional[Dict[str, Any]]:
+        """Fetch a single user by email using OData filter (simple, direct approach)."""
+        url = f"{self.base_url}/users"
+        try:
+            params = {"_filter": f"emailAddress eq '{email}'", "_limit": 1}
+            response = self._session.get(url, params=params, headers=self._get_headers(), timeout=30)
+            if response.status_code == 200:
                 data = response.json()
-                depts = data if isinstance(data, list) else []
-
-                if not depts:
-                    break
-
-                all_departments.extend(depts)
-
-                if len(depts) < limit:
-                    break
-
-                offset += limit
-            except Exception as e:
-                print(f"[API] Error fetching departments: {e}")
-                break
-
-        print(f"[API] Found {len(all_departments)} departments")
-        return all_departments
+                users = data if isinstance(data, list) else []
+                if users:
+                    return users[0]
+        except Exception as e:
+            print(f"[API] Error fetching {email}: {e}")
+        return None
 
     def get_users_by_emails_batch(self, target_emails: List[str]) -> List[Dict[str, Any]]:
-        """Get specific users by email addresses (admin only - searches across all departments).
-
-        Since Absorb API is department-scoped, we fetch all departments and search each one.
+        """Get specific users by email addresses (parallel individual lookups).
 
         Args:
             target_emails: List of email addresses to find
@@ -241,77 +216,24 @@ class AbsorbAPIClient:
             List of user objects matching the provided emails
         """
         found_users = []
-        target_emails_lower = {email.lower().strip() for email in target_emails}
-        found_emails = set()
 
-        print(f"[API] Finding {len(target_emails)} users across all departments...")
+        print(f"[API] Fetching {len(target_emails)} users individually (parallel OData filter)...")
 
-        # Get all departments
-        departments = self.get_all_departments()
+        # Use ThreadPoolExecutor for parallel lookups
+        max_workers = min(50, len(target_emails))
 
-        if not departments:
-            print(f"[API] No departments found - cannot search for users")
-            return []
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_email = {
+                executor.submit(self.fetch_user_by_email_odata, email): email
+                for email in target_emails
+            }
 
-        # Search each department for target users
-        for i, dept in enumerate(departments):
-            if len(found_emails) >= len(target_emails_lower):
-                print(f"[API] All target users found, stopping search")
-                break
+            for future in as_completed(future_to_email):
+                user = future.result()
+                if user:
+                    found_users.append(user)
 
-            dept_id = dept.get('id') or dept.get('Id')
-            dept_name = dept.get('name') or dept.get('Name') or 'Unknown'
-
-            if not dept_id:
-                continue
-
-            # Fetch users in this department (paginated)
-            url = f"{self.base_url}/users"
-            offset = 0
-            batch_size = 500
-            dept_checked = 0
-
-            while offset < 5000:  # Limit per department to avoid runaway
-                params = {
-                    "_filter": f"departmentId eq guid'{dept_id}'",
-                    "_limit": batch_size,
-                    "_offset": offset
-                }
-
-                try:
-                    response = self._session.get(url, params=params, headers=self._get_headers(), timeout=30)
-
-                    if response.status_code != 200:
-                        break
-
-                    data = response.json()
-                    users = data if isinstance(data, list) else []
-
-                    if not users:
-                        break
-
-                    # Check each user against target emails
-                    for user in users:
-                        user_email = (user.get('emailAddress') or user.get('EmailAddress') or '').lower().strip()
-                        if user_email in target_emails_lower and user_email not in found_emails:
-                            found_users.append(user)
-                            found_emails.add(user_email)
-
-                    dept_checked += len(users)
-
-                    if len(users) < batch_size:
-                        break
-
-                    offset += batch_size
-
-                except Exception as e:
-                    print(f"[API] Error searching department {dept_name}: {e}")
-                    break
-
-            if dept_checked > 0:
-                print(f"[API] Searched dept {i+1}/{len(departments)} ({dept_name}): {dept_checked} users, found {len(found_emails)}/{len(target_emails_lower)} total")
-
-        print(f"[API] COMPLETE: Found {len(found_users)}/{len(target_emails)} users across {len(departments)} departments")
+        print(f"[API] COMPLETE: Found {len(found_users)}/{len(target_emails)} users")
         return found_users
 
     def get_users_by_department(self, department_id: str) -> List[Dict[str, Any]]:
