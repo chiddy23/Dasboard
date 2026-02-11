@@ -137,12 +137,12 @@ def get_exam_students():
 
             print(f"[EXAM] Found {len(all_users_email_map)} matching users from all departments")
 
-            # Process matched users to get enrollment data
+            # Process matched users to get enrollment data (use user objects directly, no search)
             max_workers = min(50, len(all_users_email_map))
             found = 0
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 future_to_email = {
-                    executor.submit(client.lookup_and_process_student, email, ''): email
+                    executor.submit(client._process_single_user, all_users_email_map[email]): email
                     for email in all_users_email_map.keys()
                 }
 
