@@ -207,11 +207,19 @@ class AbsorbAPIClient:
 
             if response.status_code == 200:
                 data = response.json()
-                users = data if isinstance(data, list) else []
+
+                # Parse response - could be list or dict with 'users' key
+                if isinstance(data, list):
+                    users = data
+                elif isinstance(data, dict):
+                    users = data.get('users', data.get('Users', []))
+                else:
+                    users = []
 
                 # Log what we got back (first attempt only)
                 if not hasattr(self, '_logged_odata_response'):
                     print(f"[API DEBUG] Response type: {type(data)}")
+                    print(f"[API DEBUG] Dict keys: {list(data.keys()) if isinstance(data, dict) else 'N/A'}")
                     print(f"[API DEBUG] Users found: {len(users)}")
                     if not users:
                         print(f"[API DEBUG] Empty result - OData email search may not work cross-dept")
