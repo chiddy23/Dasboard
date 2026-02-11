@@ -120,33 +120,33 @@ def get_exam_students():
         client = AbsorbAPIClient()
         client.set_token(g.absorb_token)
 
-        # Remove emails already processed in the Absorb cache (if valid)
-        if is_exam_absorb_cache_valid():
-            cached_emails = unmatched_emails & set(_exam_absorb_cache.keys())
-            emails_to_lookup = unmatched_emails - cached_emails
-            print(f"[EXAM] {len(matched_emails)} dept-matched, {len(cached_emails)} cached, {len(emails_to_lookup)} to look up")
-        else:
-            emails_to_lookup = unmatched_emails
-            print(f"[EXAM] {len(matched_emails)} dept-matched, {len(emails_to_lookup)} to look up (cache expired)")
-
-        # 5. Parallel email lookup for unmatched students (search by name + match by email)
-        if emails_to_lookup:
+        # 5. For admin mode: fetch ALL users system-wide and match
+        if is_admin and unmatched_emails:
             global _exam_absorb_timestamp
-            print(f"[EXAM] Looking up {len(emails_to_lookup)} students by name/email...")
+            print(f"[EXAM] Admin mode: Fetching ALL users system-wide to match {len(unmatched_emails)} students...")
 
-            # Build email -> name map from sheet data for name-based search
-            email_to_name = {s['email']: s['name'] for s in sheet_students}
+            all_users = client.get_all_users()
+            print(f"[EXAM] Fetched {len(all_users)} users system-wide, processing enrollments...")
 
-            max_workers = min(50, len(emails_to_lookup))
+            # Build email map from all users
+            all_users_email_map = {}
+            for user in all_users:
+                user_email = (user.get('emailAddress') or user.get('EmailAddress') or '').lower().strip()
+                if user_email and user_email in unmatched_emails:
+                    all_users_email_map[user_email] = user
+
+            print(f"[EXAM] Found {len(all_users_email_map)} matching users from all departments")
+
+            # Process matched users to get enrollment data
+            max_workers = min(50, len(all_users_email_map))
+            found = 0
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 future_to_email = {
-                    executor.submit(client.lookup_and_process_student, email, email_to_name.get(email, '')): email
-                    for email in emails_to_lookup
+                    executor.submit(client.lookup_and_process_student, email, ''): email
+                    for email in all_users_email_map.keys()
                 }
 
                 completed = 0
-                found = 0
-                not_found_sample = []
                 for future in as_completed(future_to_email):
                     completed += 1
                     email = future_to_email[future]
@@ -161,19 +161,20 @@ def get_exam_students():
                             found += 1
                         else:
                             _exam_absorb_cache[email] = None
-                            if len(not_found_sample) < 3:
-                                not_found_sample.append(email)
                     except Exception as e:
                         print(f"[EXAM] Error processing {email}: {e}")
                         _exam_absorb_cache[email] = None
 
-                    if completed % 20 == 0 or completed == len(emails_to_lookup):
-                        print(f"[EXAM] Processed {completed}/{len(emails_to_lookup)} lookups ({found} found)")
+                    if completed % 20 == 0 or completed == len(all_users_email_map):
+                        print(f"[EXAM] Processed {completed}/{len(all_users_email_map)} users ({found} found)")
+
+            # Cache remaining unmatched as None
+            for email in unmatched_emails:
+                if email not in _exam_absorb_cache:
+                    _exam_absorb_cache[email] = None
 
             _exam_absorb_timestamp = datetime.utcnow()
-            print(f"[EXAM] Lookup complete: {found}/{len(emails_to_lookup)} found")
-            if not_found_sample:
-                print(f"[EXAM] Sample of not found emails: {not_found_sample}")
+            print(f"[EXAM] Admin fetch complete: {found}/{len(unmatched_emails)} found across all departments")
 
         # 6. Build combined exam student list
         exam_students = []

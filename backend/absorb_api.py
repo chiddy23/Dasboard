@@ -191,6 +191,57 @@ class AbsorbAPIClient:
             print(f"[API] Error processing exam student {email}: {e}")
             return None
 
+    def get_all_users(self) -> List[Dict[str, Any]]:
+        """Get ALL users system-wide (admin only - no department filter)."""
+        url = f"{self.base_url}/users"
+        all_users = []
+        offset = 0
+        limit = 500
+
+        print(f"[API] Fetching ALL users (admin mode - no department filter)")
+
+        while True:
+            params = {
+                "_limit": limit,
+                "_offset": offset
+            }
+
+            response = self._session.get(url, params=params, headers=self._get_headers(), timeout=120)
+
+            if response.status_code == 401:
+                print(f"[API] Token expired - need to re-authenticate")
+                raise AbsorbAPIError("Session expired. Please log in again.", 401)
+
+            if response.status_code != 200:
+                print(f"[API] All users fetch failed at offset {offset}: {response.status_code}")
+                break
+
+            data = response.json()
+
+            if isinstance(data, dict) and 'users' in data:
+                users = data['users']
+            elif isinstance(data, list):
+                users = data
+            else:
+                print(f"[API] Unexpected response format")
+                break
+
+            if not users:
+                print(f"[API] No more users found at offset {offset}")
+                break
+
+            all_users.extend(users)
+            print(f"[API] Fetched {len(users)} users (total: {len(all_users)})")
+
+            if len(users) < limit:
+                print(f"[API] Reached end of all users")
+                break
+
+            offset += limit
+
+        print(f"[API] COMPLETE: Found {len(all_users)} users system-wide")
+        return all_users
+
     def get_users_by_department(self, department_id: str) -> List[Dict[str, Any]]:
         """Get users in a specific department using OData filter (matches Apps Script pattern)."""
         url = f"{self.base_url}/users"
