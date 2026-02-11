@@ -191,53 +191,72 @@ class AbsorbAPIClient:
             print(f"[API] Error processing exam student {email}: {e}")
             return None
 
-    def get_all_users(self) -> List[Dict[str, Any]]:
-        """Get ALL users system-wide (admin only - no department filter)."""
+    def get_all_users(self, max_users: int = 10000) -> List[Dict[str, Any]]:
+        """Get ALL users system-wide (admin only - no department filter).
+
+        Args:
+            max_users: Maximum number of users to fetch (safety limit, default 10000)
+        """
         url = f"{self.base_url}/users"
         all_users = []
         offset = 0
-        limit = 500
+        limit = 500  # API limit per request
+        consecutive_empty = 0
 
-        print(f"[API] Fetching ALL users (admin mode - no department filter)")
+        print(f"[API] Fetching ALL users (admin mode - no department filter, max: {max_users})")
 
-        while True:
+        while len(all_users) < max_users:
             params = {
                 "_limit": limit,
                 "_offset": offset
             }
 
-            response = self._session.get(url, params=params, headers=self._get_headers(), timeout=120)
+            try:
+                response = self._session.get(url, params=params, headers=self._get_headers(), timeout=120)
 
-            if response.status_code == 401:
-                print(f"[API] Token expired - need to re-authenticate")
-                raise AbsorbAPIError("Session expired. Please log in again.", 401)
+                if response.status_code == 401:
+                    print(f"[API] Token expired - need to re-authenticate")
+                    raise AbsorbAPIError("Session expired. Please log in again.", 401)
 
-            if response.status_code != 200:
-                print(f"[API] All users fetch failed at offset {offset}: {response.status_code}")
+                if response.status_code != 200:
+                    print(f"[API] All users fetch failed at offset {offset}: {response.status_code}")
+                    break
+
+                data = response.json()
+
+                if isinstance(data, dict) and 'users' in data:
+                    users = data['users']
+                elif isinstance(data, list):
+                    users = data
+                else:
+                    print(f"[API] Unexpected response format at offset {offset}")
+                    break
+
+                if not users or len(users) == 0:
+                    consecutive_empty += 1
+                    print(f"[API] Empty result at offset {offset} (consecutive: {consecutive_empty})")
+                    # Try a few more offsets in case of gaps
+                    if consecutive_empty >= 3:
+                        print(f"[API] No more users after 3 consecutive empty results")
+                        break
+                    offset += limit
+                    continue
+
+                # Reset consecutive empty counter
+                consecutive_empty = 0
+                all_users.extend(users)
+                print(f"[API] Fetched {len(users)} users at offset {offset} (total: {len(all_users)})")
+
+                # If we got fewer than requested, we're likely at the end
+                if len(users) < limit:
+                    print(f"[API] Got {len(users)} < {limit}, likely at end")
+                    break
+
+                offset += limit
+
+            except Exception as e:
+                print(f"[API] Error fetching users at offset {offset}: {e}")
                 break
-
-            data = response.json()
-
-            if isinstance(data, dict) and 'users' in data:
-                users = data['users']
-            elif isinstance(data, list):
-                users = data
-            else:
-                print(f"[API] Unexpected response format")
-                break
-
-            if not users:
-                print(f"[API] No more users found at offset {offset}")
-                break
-
-            all_users.extend(users)
-            print(f"[API] Fetched {len(users)} users (total: {len(all_users)})")
-
-            if len(users) < limit:
-                print(f"[API] Reached end of all users")
-                break
-
-            offset += limit
 
         print(f"[API] COMPLETE: Found {len(all_users)} users system-wide")
         return all_users
