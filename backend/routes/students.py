@@ -112,11 +112,18 @@ def get_student_details(student_id):
                 student = user
                 break
 
+        # If not found in department, try direct fetch by ID (works for admin users across departments)
         if not student:
-            return jsonify({
-                'success': False,
-                'error': 'Student not found in your department'
-            }), 404
+            print(f"[STUDENT DETAIL] Student {student_id} not in department {g.department_id}, trying direct fetch...")
+            try:
+                student = client.get_user_by_id(student_id)
+                print(f"[STUDENT DETAIL] Successfully fetched cross-department student: {student.get('emailAddress', 'unknown')}")
+            except AbsorbAPIError as e:
+                print(f"[STUDENT DETAIL] Direct fetch failed: {e}")
+                return jsonify({
+                    'success': False,
+                    'error': 'Student not found'
+                }), 404
 
         # Get all enrollments for this student
         enrollments = client.get_user_enrollments(student_id)
@@ -230,10 +237,25 @@ def get_student_enrollments(student_id):
             for user in users
         )
 
+        # If not found in department, try direct fetch by ID (works for admin users across departments)
+        if not student_found:
+            print(f"[STUDENT ENROLLMENTS] Student {student_id} not in department {g.department_id}, trying direct fetch...")
+            try:
+                # Try to fetch the student directly to verify access
+                student = client.get_user_by_id(student_id)
+                print(f"[STUDENT ENROLLMENTS] Successfully verified cross-department student: {student.get('emailAddress', 'unknown')}")
+                student_found = True
+            except AbsorbAPIError as e:
+                print(f"[STUDENT ENROLLMENTS] Direct fetch failed: {e}")
+                return jsonify({
+                    'success': False,
+                    'error': 'Student not found'
+                }), 404
+
         if not student_found:
             return jsonify({
                 'success': False,
-                'error': 'Student not found in your department'
+                'error': 'Student not found'
             }), 404
 
         # Get enrollments

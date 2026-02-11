@@ -191,6 +191,35 @@ class AbsorbAPIClient:
             print(f"[API] Error processing exam student {email}: {e}")
             return None
 
+    def get_user_by_id(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch a single user by their ID (works cross-department for admin users).
+
+        Args:
+            user_id: The user's GUID
+
+        Returns:
+            User object if found, None otherwise
+
+        Raises:
+            AbsorbAPIError: If the API request fails
+        """
+        url = f"{self.base_url}/users/{user_id}"
+        try:
+            response = self._session.get(url, headers=self._get_headers(), timeout=30)
+
+            if response.status_code == 200:
+                return response.json()
+            elif response.status_code == 404:
+                raise AbsorbAPIError(f"User not found: {user_id}", status_code=404)
+            else:
+                raise AbsorbAPIError(
+                    f"Failed to fetch user {user_id}: {response.status_code}",
+                    status_code=response.status_code,
+                    response=response.json() if response.content else None
+                )
+        except requests.RequestException as e:
+            raise AbsorbAPIError(f"Network error fetching user {user_id}: {str(e)}")
+
     def fetch_user_by_email_odata(self, email: str) -> Optional[Dict[str, Any]]:
         """Fetch a single user by email using OData filter (simple, direct approach)."""
         url = f"{self.base_url}/users"
