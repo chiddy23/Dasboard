@@ -124,7 +124,14 @@ function ExamTable({ students, onViewStudent }) {
 
   return (
     <div className="bg-white rounded-xl shadow-md overflow-hidden">
-      <div className="overflow-x-auto">
+      {/* Scroll hint */}
+      <div className="bg-blue-50 border-b border-blue-100 px-4 py-2 text-xs text-blue-700 flex items-center gap-2">
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+        <span>Scroll horizontally to see all columns • Click "View" to edit exam dates</span>
+      </div>
+      <div className="table-scroll-wrapper">
         <table className="data-table min-w-full">
           <thead>
             <tr>
