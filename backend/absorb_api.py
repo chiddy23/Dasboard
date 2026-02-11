@@ -139,9 +139,13 @@ class AbsorbAPIClient:
                     if response.status_code == 200:
                         data = response.json()
                         users = data if isinstance(data, list) else []
+                        print(f"[API] Name search '{last_name}' returned {len(users)} users for {email_lower}")
                         match = _match_email(users)
                         if match:
+                            print(f"[API] Found match by name for {email_lower}")
                             return match
+                    else:
+                        print(f"[API] Name search failed with status {response.status_code} for {email_lower}")
                 except Exception as e:
                     print(f"[API] Name search error for {name_hint}: {e}")
 
@@ -152,9 +156,13 @@ class AbsorbAPIClient:
             if response.status_code == 200:
                 data = response.json()
                 users = data if isinstance(data, list) else []
+                print(f"[API] Email search returned {len(users)} users for {email_lower}")
                 match = _match_email(users)
                 if match:
+                    print(f"[API] Found match by email for {email_lower}")
                     return match
+            else:
+                print(f"[API] Email search failed with status {response.status_code} for {email_lower}")
         except Exception as e:
             print(f"[API] Email search error for {email}: {e}")
 

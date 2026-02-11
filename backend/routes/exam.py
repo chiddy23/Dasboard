@@ -112,6 +112,11 @@ def get_exam_students():
         matched_emails = sheet_emails & set(formatted_email_map.keys())
         unmatched_emails = sheet_emails - matched_emails
 
+        print(f"[EXAM] Current department ID: {g.department_id}")
+        print(f"[EXAM] Total sheet emails: {len(sheet_emails)}, Matched in dept: {len(matched_emails)}, Unmatched: {len(unmatched_emails)}")
+        if len(unmatched_emails) > 0 and len(unmatched_emails) <= 5:
+            print(f"[EXAM] Unmatched emails sample: {list(unmatched_emails)[:5]}")
+
         client = AbsorbAPIClient()
         client.set_token(g.absorb_token)
 
@@ -141,6 +146,7 @@ def get_exam_students():
 
                 completed = 0
                 found = 0
+                not_found_sample = []
                 for future in as_completed(future_to_email):
                     completed += 1
                     email = future_to_email[future]
@@ -155,6 +161,8 @@ def get_exam_students():
                             found += 1
                         else:
                             _exam_absorb_cache[email] = None
+                            if len(not_found_sample) < 3:
+                                not_found_sample.append(email)
                     except Exception as e:
                         print(f"[EXAM] Error processing {email}: {e}")
                         _exam_absorb_cache[email] = None
@@ -164,6 +172,8 @@ def get_exam_students():
 
             _exam_absorb_timestamp = datetime.utcnow()
             print(f"[EXAM] Lookup complete: {found}/{len(emails_to_lookup)} found")
+            if not_found_sample:
+                print(f"[EXAM] Sample of not found emails: {not_found_sample}")
 
         # 6. Build combined exam student list
         exam_students = []
@@ -290,7 +300,7 @@ def _build_unmatched_entry(sheet_student):
             'colorClass': 'low',
             'color': '#ef4444'
         },
-        'courseName': sheet_student['course'] or 'N/A',
+        'courseName': 'Not in Absorb',
         'timeSpent': {'minutes': 0, 'formatted': '0m'},
         'examPrepTime': {'minutes': 0, 'formatted': '0m'},
         'examDate': sheet_student['examDateFormatted'],
