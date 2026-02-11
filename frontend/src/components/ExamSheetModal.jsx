@@ -2,7 +2,11 @@ import React, { useEffect, useState } from 'react'
 import ProgressBar from './ProgressBar'
 import StatusBadge from './StatusBadge'
 
-function ExamSheetModal({ student, adminMode, onClose, onUpdateResult }) {
+function ExamSheetModal({ student, adminMode, onClose, onUpdateResult, onUpdateExamDate }) {
+  const [editingDate, setEditingDate] = useState(false)
+  const [newDate, setNewDate] = useState('')
+  const [newTime, setNewTime] = useState('')
+
   // Close on escape key
   useEffect(() => {
     const handleEscape = (e) => {
@@ -82,16 +86,73 @@ function ExamSheetModal({ student, adminMode, onClose, onUpdateResult }) {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                 </svg>
                 Exam Information
+                {onUpdateExamDate && !editingDate && (
+                  <button
+                    onClick={() => {
+                      setEditingDate(true)
+                      setNewDate(student.examDateRaw || '')
+                      setNewTime(student.examTime || '')
+                    }}
+                    className="ml-auto text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+                  >
+                    Edit Date
+                  </button>
+                )}
               </h4>
               <div className="grid grid-cols-2 gap-4">
-                <div className="bg-white rounded-lg p-3">
-                  <p className="text-sm text-gray-500">Exam Date</p>
-                  <p className="font-semibold text-gray-900">{student.examDate || 'TBD'}</p>
-                </div>
-                <div className="bg-white rounded-lg p-3">
-                  <p className="text-sm text-gray-500">Exam Time</p>
-                  <p className="font-semibold text-gray-900">{student.examTime || 'N/A'}</p>
-                </div>
+                {editingDate && onUpdateExamDate ? (
+                  <>
+                    <div className="bg-white rounded-lg p-3">
+                      <p className="text-sm text-gray-500 mb-1">Exam Date</p>
+                      <input
+                        type="date"
+                        value={newDate}
+                        onChange={(e) => setNewDate(e.target.value)}
+                        className="w-full px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                    <div className="bg-white rounded-lg p-3">
+                      <p className="text-sm text-gray-500 mb-1">Exam Time</p>
+                      <input
+                        type="text"
+                        value={newTime}
+                        onChange={(e) => setNewTime(e.target.value)}
+                        placeholder="e.g., 2:00 PM"
+                        className="w-full px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                    <div className="col-span-2 flex gap-2 justify-end">
+                      <button
+                        onClick={() => {
+                          if (newDate) {
+                            onUpdateExamDate(student.email, newDate, newTime)
+                            setEditingDate(false)
+                          }
+                        }}
+                        className="px-3 py-1 bg-green-600 text-white rounded text-sm hover:bg-green-700 transition-colors"
+                      >
+                        Save
+                      </button>
+                      <button
+                        onClick={() => setEditingDate(false)}
+                        className="px-3 py-1 bg-gray-200 text-gray-700 rounded text-sm hover:bg-gray-300 transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="bg-white rounded-lg p-3">
+                      <p className="text-sm text-gray-500">Exam Date</p>
+                      <p className="font-semibold text-gray-900">{student.examDate || 'TBD'}</p>
+                    </div>
+                    <div className="bg-white rounded-lg p-3">
+                      <p className="text-sm text-gray-500">Exam Time</p>
+                      <p className="font-semibold text-gray-900">{student.examTime || 'N/A'}</p>
+                    </div>
+                  </>
+                )}
                 <div className="bg-white rounded-lg p-3">
                   <p className="text-sm text-gray-500">State</p>
                   <p className="font-semibold text-gray-900">{student.examState || 'N/A'}</p>

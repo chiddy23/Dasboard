@@ -29,6 +29,9 @@ EXAM_ABSORB_CACHE_TTL = 300  # 5 minutes
 # In-memory pass/fail overrides (email -> 'PASS'|'FAIL')
 _passfail_overrides = {}
 
+# In-memory exam date overrides (email -> {'date': 'YYYY-MM-DD', 'time': 'HH:MM AM/PM'})
+_exam_date_overrides = {}
+
 
 def get_department_name(client, department_id):
     """Get department name from Absorb, with caching."""
@@ -192,6 +195,18 @@ def get_exam_students():
             # Apply any pass/fail overrides
             if email in _passfail_overrides:
                 exam_entry['passFail'] = _passfail_overrides[email]
+
+            # Apply any exam date overrides
+            if email in _exam_date_overrides:
+                override = _exam_date_overrides[email]
+                exam_entry['examDateRaw'] = override['date']
+                exam_entry['examTime'] = override.get('time', '')
+                # Format the date for display (e.g., "Jan 15, 2026")
+                try:
+                    dt = datetime.strptime(override['date'], '%Y-%m-%d')
+                    exam_entry['examDate'] = dt.strftime('%b %d, %Y')
+                except:
+                    exam_entry['examDate'] = override['date']
 
             # Include full sheet tracking data in admin mode
             if is_admin:
@@ -472,6 +487,47 @@ def update_exam_result():
         print(f"[EXAM] Pass/fail override cleared: {email}")
 
     return jsonify({'success': True, 'email': email, 'result': result})
+
+
+@exam_bp.route('/update-date', methods=['POST'])
+@login_required
+def update_exam_date():
+    """Update exam date for a student (in-memory override)."""
+    data = request.get_json() or {}
+    email = (data.get('email') or '').lower().strip()
+    new_date = (data.get('date') or '').strip()  # Expected format: YYYY-MM-DD
+    new_time = (data.get('time') or '').strip()  # Optional time like "2:00 PM"
+    admin_key = data.get('adminKey', '')
+
+    if not email:
+        return jsonify({'success': False, 'error': 'Email required'}), 400
+
+    if not new_date:
+        return jsonify({'success': False, 'error': 'Date required'}), 400
+
+    # Validate date format
+    try:
+        datetime.strptime(new_date, '%Y-%m-%d')
+    except ValueError:
+        return jsonify({'success': False, 'error': 'Invalid date format (expected YYYY-MM-DD)'}), 400
+
+    is_admin = admin_key == ADMIN_PASSWORD
+
+    # Authorization: admin or student must be in user's department
+    if not is_admin:
+        from routes.dashboard import get_cached_students
+        _, formatted_students = get_cached_students(g.department_id, g.absorb_token)
+        dept_emails = {(s.get('email') or '').lower().strip() for s in formatted_students}
+        if email not in dept_emails:
+            return jsonify({'success': False, 'error': 'Not authorized for this student'}), 403
+
+    _exam_date_overrides[email] = {
+        'date': new_date,
+        'time': new_time
+    }
+    print(f"[EXAM] Exam date override set: {email} -> {new_date} {new_time}")
+
+    return jsonify({'success': True, 'email': email, 'date': new_date, 'time': new_time})
 
 
 @exam_bp.route('/sync', methods=['POST'])

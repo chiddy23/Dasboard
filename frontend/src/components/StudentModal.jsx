@@ -201,10 +201,13 @@ function EnrollmentGroups({ enrollments }) {
   )
 }
 
-function StudentModal({ studentId, examInfo, onClose, onSessionExpired, onUpdateResult }) {
+function StudentModal({ studentId, examInfo, onClose, onSessionExpired, onUpdateResult, onUpdateExamDate }) {
   const [student, setStudent] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [editingDate, setEditingDate] = useState(false)
+  const [newDate, setNewDate] = useState('')
+  const [newTime, setNewTime] = useState('')
 
   useEffect(() => {
     fetchStudentDetails()
@@ -315,16 +318,73 @@ function StudentModal({ studentId, examInfo, onClose, onSessionExpired, onUpdate
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                     </svg>
                     Exam Scheduling
+                    {onUpdateExamDate && !editingDate && (
+                      <button
+                        onClick={() => {
+                          setEditingDate(true)
+                          setNewDate(examInfo.examDateRaw || '')
+                          setNewTime(examInfo.examTime || '')
+                        }}
+                        className="ml-auto text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+                      >
+                        Edit Date
+                      </button>
+                    )}
                   </h4>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                    <div className="bg-white rounded-lg p-2.5">
-                      <p className="text-xs text-gray-500">Exam Date</p>
-                      <p className="font-semibold text-gray-900 text-sm">{examInfo.examDate || 'TBD'}</p>
-                    </div>
-                    <div className="bg-white rounded-lg p-2.5">
-                      <p className="text-xs text-gray-500">Time</p>
-                      <p className="font-semibold text-gray-900 text-sm">{examInfo.examTime || 'N/A'}</p>
-                    </div>
+                    {editingDate && onUpdateExamDate ? (
+                      <>
+                        <div className="bg-white rounded-lg p-2.5">
+                          <p className="text-xs text-gray-500 mb-1">Exam Date</p>
+                          <input
+                            type="date"
+                            value={newDate}
+                            onChange={(e) => setNewDate(e.target.value)}
+                            className="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          />
+                        </div>
+                        <div className="bg-white rounded-lg p-2.5">
+                          <p className="text-xs text-gray-500 mb-1">Time</p>
+                          <input
+                            type="text"
+                            value={newTime}
+                            onChange={(e) => setNewTime(e.target.value)}
+                            placeholder="e.g., 2:00 PM"
+                            className="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          />
+                        </div>
+                        <div className="col-span-2 flex gap-2">
+                          <button
+                            onClick={() => {
+                              if (newDate && examInfo.email) {
+                                onUpdateExamDate(examInfo.email, newDate, newTime)
+                                setEditingDate(false)
+                              }
+                            }}
+                            className="px-2 py-1 bg-green-600 text-white rounded text-xs hover:bg-green-700 transition-colors"
+                          >
+                            Save
+                          </button>
+                          <button
+                            onClick={() => setEditingDate(false)}
+                            className="px-2 py-1 bg-gray-200 text-gray-700 rounded text-xs hover:bg-gray-300 transition-colors"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="bg-white rounded-lg p-2.5">
+                          <p className="text-xs text-gray-500">Exam Date</p>
+                          <p className="font-semibold text-gray-900 text-sm">{examInfo.examDate || 'TBD'}</p>
+                        </div>
+                        <div className="bg-white rounded-lg p-2.5">
+                          <p className="text-xs text-gray-500">Time</p>
+                          <p className="font-semibold text-gray-900 text-sm">{examInfo.examTime || 'N/A'}</p>
+                        </div>
+                      </>
+                    )}
                     <div className="bg-white rounded-lg p-2.5">
                       <p className="text-xs text-gray-500">State</p>
                       <p className="font-semibold text-gray-900 text-sm">{examInfo.examState || 'N/A'}</p>

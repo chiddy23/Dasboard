@@ -307,6 +307,47 @@ function Dashboard({ user, department, onLogout, initialData }) {
     }
   }
 
+  const handleUpdateExamDate = async (email, newDate, newTime) => {
+    try {
+      const res = await fetch(`${API_BASE}/exam/update-date`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ email, date: newDate, time: newTime || '', adminKey })
+      })
+      const data = await res.json()
+      if (data.success) {
+        // Format date for display (e.g., "Jan 15, 2026")
+        const dt = new Date(newDate)
+        const formatted = dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+
+        // Update local state immediately
+        const updated = examStudents.map(s =>
+          s.email === email ? {
+            ...s,
+            examDateRaw: newDate,
+            examDate: formatted,
+            examTime: newTime || s.examTime
+          } : s
+        )
+        setExamStudents(updated)
+        // Recalculate KPIs (upcoming, at-risk depend on exam date)
+        setExamSummary(recalcExamSummary(updated))
+        // Also update selectedStudent if viewing this student
+        setSelectedStudent(prev =>
+          prev && prev.email === email ? {
+            ...prev,
+            examDateRaw: newDate,
+            examDate: formatted,
+            examTime: newTime || prev.examTime
+          } : prev
+        )
+      }
+    } catch (err) {
+      console.error('Failed to update exam date:', err)
+    }
+  }
+
   // Filter students (works for both tabs)
   const filteredStudents = students.filter(student => {
     const searchLower = searchTerm.toLowerCase()
@@ -911,6 +952,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
           studentId={selectedStudent.id}
           examInfo={selectedStudent.examDate ? {
             examDate: selectedStudent.examDate,
+            examDateRaw: selectedStudent.examDateRaw,
             examTime: selectedStudent.examTime,
             examState: selectedStudent.examState,
             examCourse: selectedStudent.examCourse,
@@ -924,6 +966,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
           onClose={() => setSelectedStudent(null)}
           onSessionExpired={onLogout}
           onUpdateResult={activeTab === 'exam' ? handleUpdateResult : null}
+          onUpdateExamDate={activeTab === 'exam' ? handleUpdateExamDate : null}
         />
       )}
 
@@ -934,6 +977,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
           adminMode={adminMode}
           onClose={() => setSelectedStudent(null)}
           onUpdateResult={handleUpdateResult}
+          onUpdateExamDate={handleUpdateExamDate}
         />
       )}
     </div>
