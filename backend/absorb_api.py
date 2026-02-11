@@ -197,9 +197,26 @@ class AbsorbAPIClient:
         try:
             params = {"_filter": f"emailAddress eq '{email}'", "_limit": 1}
             response = self._session.get(url, params=params, headers=self._get_headers(), timeout=30)
+
+            # Log first attempt to debug (then suppress)
+            if not hasattr(self, '_logged_odata_attempt'):
+                print(f"[API DEBUG] OData search attempt for: {email}")
+                print(f"[API DEBUG] Status: {response.status_code}")
+                print(f"[API DEBUG] Has token: {bool(self._token)}")
+                self._logged_odata_attempt = True
+
             if response.status_code == 200:
                 data = response.json()
                 users = data if isinstance(data, list) else []
+
+                # Log what we got back (first attempt only)
+                if not hasattr(self, '_logged_odata_response'):
+                    print(f"[API DEBUG] Response type: {type(data)}")
+                    print(f"[API DEBUG] Users found: {len(users)}")
+                    if not users:
+                        print(f"[API DEBUG] Empty result - OData email search may not work cross-dept")
+                    self._logged_odata_response = True
+
                 if users:
                     return users[0]
             else:
@@ -207,7 +224,6 @@ class AbsorbAPIClient:
                 if not hasattr(self, '_logged_odata_error'):
                     print(f"[API] OData fetch failed for {email}: Status {response.status_code}")
                     print(f"[API] Response: {response.text[:200]}")
-                    print(f"[API] Has token: {bool(self._token)}")
                     self._logged_odata_error = True
         except Exception as e:
             print(f"[API] Error fetching {email}: {e}")
