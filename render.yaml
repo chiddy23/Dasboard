@@ -18,6 +18,6 @@ services:
       - key: ABSORB_PRIVATE_KEY
         sync: false
       - key: ABSORB_BASE_URL
-        value: "https://api.myabsorb.com/api/rest/v2"
+        value: "https://rest.myabsorb.com"
       - key: SECRET_KEY
         generateValue: true
