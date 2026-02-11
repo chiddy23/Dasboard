@@ -125,44 +125,45 @@ def get_exam_students():
             global _exam_absorb_timestamp
             print(f"[EXAM] Admin mode: Fetching {len(unmatched_emails)} specific students across all departments...")
 
-            # Fetch users in batches without department filter (finds cross-department students)
+            # Fetch users by searching all departments (finds cross-department students)
             unmatched_email_list = list(unmatched_emails)
             found_users = client.get_users_by_emails_batch(unmatched_email_list)
             print(f"[EXAM] Found {len(found_users)} users, processing enrollments...")
 
             # Process found users in parallel to get enrollment data
-            max_workers = min(50, len(found_users))
             found = 0
 
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                # Submit enrollment processing for each found user
-                future_to_user = {
-                    executor.submit(client._process_single_user, user): user
-                    for user in found_users
-                }
+            if len(found_users) > 0:
+                max_workers = min(50, len(found_users))
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    # Submit enrollment processing for each found user
+                    future_to_user = {
+                        executor.submit(client._process_single_user, user): user
+                        for user in found_users
+                    }
 
-                completed = 0
-                for future in as_completed(future_to_user):
-                    completed += 1
-                    user = future_to_user[future]
-                    email = (user.get('emailAddress') or user.get('EmailAddress') or '').lower().strip()
-                    try:
-                        result = future.result()
-                        if result:
-                            formatted = format_student_for_response(result)
-                            _exam_absorb_cache[email] = {
-                                'raw': result,
-                                'formatted': formatted
-                            }
-                            found += 1
-                        else:
+                    completed = 0
+                    for future in as_completed(future_to_user):
+                        completed += 1
+                        user = future_to_user[future]
+                        email = (user.get('emailAddress') or user.get('EmailAddress') or '').lower().strip()
+                        try:
+                            result = future.result()
+                            if result:
+                                formatted = format_student_for_response(result)
+                                _exam_absorb_cache[email] = {
+                                    'raw': result,
+                                    'formatted': formatted
+                                }
+                                found += 1
+                            else:
+                                _exam_absorb_cache[email] = None
+                        except Exception as e:
+                            print(f"[EXAM] Error processing {email}: {e}")
                             _exam_absorb_cache[email] = None
-                    except Exception as e:
-                        print(f"[EXAM] Error processing {email}: {e}")
-                        _exam_absorb_cache[email] = None
 
-                    if completed % 20 == 0 or completed == len(found_users):
-                        print(f"[EXAM] Processed {completed}/{len(found_users)} enrollments ({found} complete)")
+                        if completed % 20 == 0 or completed == len(found_users):
+                            print(f"[EXAM] Processed {completed}/{len(found_users)} enrollments ({found} complete)")
 
             # Cache remaining unmatched as None
             for email in unmatched_emails:
