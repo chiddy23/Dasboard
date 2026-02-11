@@ -191,75 +191,52 @@ class AbsorbAPIClient:
             print(f"[API] Error processing exam student {email}: {e}")
             return None
 
-    def get_all_users(self, max_users: int = 10000) -> List[Dict[str, Any]]:
-        """Get ALL users system-wide (admin only - no department filter).
+    def get_users_by_emails(self, emails: List[str]) -> List[Dict[str, Any]]:
+        """Get specific users by email addresses (admin only - searches across departments).
 
         Args:
-            max_users: Maximum number of users to fetch (safety limit, default 10000)
+            emails: List of email addresses to search for
+
+        Returns:
+            List of user objects matching the provided emails
         """
         url = f"{self.base_url}/users"
-        all_users = []
-        offset = 0
-        limit = 500  # API limit per request
-        consecutive_empty = 0
+        found_users = []
 
-        print(f"[API] Fetching ALL users (admin mode - no department filter, max: {max_users})")
+        print(f"[API] Fetching {len(emails)} specific users by email (admin cross-department)")
 
-        while len(all_users) < max_users:
-            params = {
-                "_limit": limit,
-                "_offset": offset
-            }
+        # Process emails in batches to avoid overwhelming the API
+        batch_size = 50
+        for i in range(0, len(emails), batch_size):
+            batch = emails[i:i + batch_size]
+            print(f"[API] Processing batch {i//batch_size + 1}/{(len(emails)-1)//batch_size + 1} ({len(batch)} emails)")
 
-            try:
-                response = self._session.get(url, params=params, headers=self._get_headers(), timeout=120)
+            # Search for each email individually
+            for email in batch:
+                try:
+                    # Try direct email search
+                    params = {"_search": email.lower().strip(), "_limit": 10}
+                    response = self._session.get(url, params=params, headers=self._get_headers(), timeout=30)
 
-                if response.status_code == 401:
-                    print(f"[API] Token expired - need to re-authenticate")
-                    raise AbsorbAPIError("Session expired. Please log in again.", 401)
+                    if response.status_code == 200:
+                        data = response.json()
+                        users = data if isinstance(data, list) else []
 
-                if response.status_code != 200:
-                    print(f"[API] All users fetch failed at offset {offset}: {response.status_code}")
-                    break
-
-                data = response.json()
-
-                if isinstance(data, dict) and 'users' in data:
-                    users = data['users']
-                elif isinstance(data, list):
-                    users = data
-                else:
-                    print(f"[API] Unexpected response format at offset {offset}")
-                    break
-
-                if not users or len(users) == 0:
-                    consecutive_empty += 1
-                    print(f"[API] Empty result at offset {offset} (consecutive: {consecutive_empty})")
-                    # Try a few more offsets in case of gaps
-                    if consecutive_empty >= 3:
-                        print(f"[API] No more users after 3 consecutive empty results")
-                        break
-                    offset += limit
+                        # Find exact email match (case-insensitive)
+                        for user in users:
+                            user_email = (user.get('emailAddress') or user.get('EmailAddress') or '').lower().strip()
+                            if user_email == email.lower().strip():
+                                found_users.append(user)
+                                break
+                except Exception as e:
+                    print(f"[API] Error fetching user {email}: {e}")
                     continue
 
-                # Reset consecutive empty counter
-                consecutive_empty = 0
-                all_users.extend(users)
-                print(f"[API] Fetched {len(users)} users at offset {offset} (total: {len(all_users)})")
+            if (i + batch_size) % 100 == 0 or (i + batch_size) >= len(emails):
+                print(f"[API] Processed {min(i + batch_size, len(emails))}/{len(emails)} emails, found {len(found_users)} users")
 
-                # If we got fewer than requested, we're likely at the end
-                if len(users) < limit:
-                    print(f"[API] Got {len(users)} < {limit}, likely at end")
-                    break
-
-                offset += limit
-
-            except Exception as e:
-                print(f"[API] Error fetching users at offset {offset}: {e}")
-                break
-
-        print(f"[API] COMPLETE: Found {len(all_users)} users system-wide")
-        return all_users
+        print(f"[API] COMPLETE: Found {len(found_users)}/{len(emails)} users")
+        return found_users
 
     def get_users_by_department(self, department_id: str) -> List[Dict[str, Any]]:
         """Get users in a specific department using OData filter (matches Apps Script pattern)."""

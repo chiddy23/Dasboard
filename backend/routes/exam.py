@@ -120,22 +120,24 @@ def get_exam_students():
         client = AbsorbAPIClient()
         client.set_token(g.absorb_token)
 
-        # 5. For admin mode: fetch ALL users system-wide and match
+        # 5. For admin mode: fetch ONLY the specific students by email (cross-department)
         if is_admin and unmatched_emails:
             global _exam_absorb_timestamp
-            print(f"[EXAM] Admin mode: Fetching ALL users system-wide to match {len(unmatched_emails)} students...")
+            print(f"[EXAM] Admin mode: Fetching {len(unmatched_emails)} specific students by email...")
 
-            all_users = client.get_all_users()
-            print(f"[EXAM] Fetched {len(all_users)} users system-wide, processing enrollments...")
+            # Fetch only the students we need (not all users)
+            unmatched_email_list = list(unmatched_emails)
+            found_users = client.get_users_by_emails(unmatched_email_list)
+            print(f"[EXAM] Found {len(found_users)} users, processing enrollments...")
 
-            # Build email map from all users
+            # Build email map from found users
             all_users_email_map = {}
-            for user in all_users:
+            for user in found_users:
                 user_email = (user.get('emailAddress') or user.get('EmailAddress') or '').lower().strip()
-                if user_email and user_email in unmatched_emails:
+                if user_email:
                     all_users_email_map[user_email] = user
 
-            print(f"[EXAM] Found {len(all_users_email_map)} matching users from all departments")
+            print(f"[EXAM] Matched {len(all_users_email_map)} users from search results")
 
             # Process matched users to get enrollment data (use user objects directly, no search)
             max_workers = min(50, len(all_users_email_map))
