@@ -7,7 +7,7 @@ through pre-licensing courses hosted on Absorb LMS.
 
 import os
 import sys
-from flask import Flask, jsonify, send_from_directory
+from flask import Flask, jsonify, send_from_directory, make_response
 from flask_cors import CORS
 from flask_session import Session
 from datetime import timedelta
@@ -72,12 +72,19 @@ def create_app():
         if path.startswith('api/'):
             return jsonify({'error': 'Not found'}), 404
 
-        # Check if file exists in dist
+        # Check if file exists in dist (JS/CSS with hashes can be cached long-term)
         if path and os.path.exists(os.path.join(FRONTEND_DIST, path)):
-            return send_from_directory(FRONTEND_DIST, path)
+            response = make_response(send_from_directory(FRONTEND_DIST, path))
+            if path.endswith(('.js', '.css')) and '-' in path:
+                response.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+            return response
 
-        # Serve index.html for all other routes (SPA routing)
-        return send_from_directory(FRONTEND_DIST, 'index.html')
+        # Serve index.html for all other routes (SPA routing) - never cache
+        response = make_response(send_from_directory(FRONTEND_DIST, 'index.html'))
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        return response
 
     # Error handlers
     @app.errorhandler(404)
