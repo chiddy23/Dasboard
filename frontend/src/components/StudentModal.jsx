@@ -4,6 +4,17 @@ import ProgressBar from './ProgressBar'
 
 const API_BASE = '/api'
 
+// Format decimal hours to readable string like "4h 48m", "42m", "9h 54m"
+function formatHours(decimalHours) {
+  if (!decimalHours || decimalHours <= 0) return '0m'
+  const totalMinutes = Math.round(decimalHours * 60)
+  const h = Math.floor(totalMinutes / 60)
+  const m = totalMinutes % 60
+  if (h === 0) return `${m}m`
+  if (m === 0) return `${h}h`
+  return `${h}h ${m}m`
+}
+
 // Helper to check if course is pre-licensing related
 function isPreLicensingCourse(name) {
   const lower = name.toLowerCase()
@@ -658,7 +669,7 @@ function StudentModal({ studentId, examInfo, onClose, onSessionExpired, onUpdate
                             <p className="text-xs text-gray-500">
                               {student.readiness.criteria.practiceExams.consecutivePassing}/3 consecutive passing
                               {' \u2022 '}{student.readiness.criteria.practiceExams.totalExams} exam{student.readiness.criteria.practiceExams.totalExams !== 1 ? 's' : ''} found
-                              {' \u2022 '}{student.readiness.criteria.practiceExams.hoursSpent}h total time
+                              {' \u2022 '}{formatHours(student.readiness.criteria.practiceExams.hoursSpent)} total time
                             </p>
                           </div>
                         </div>
@@ -692,7 +703,7 @@ function StudentModal({ studentId, examInfo, onClose, onSessionExpired, onUpdate
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-medium text-gray-900">Time in Course</p>
                           <p className="text-xs text-gray-500">
-                            {student.readiness.criteria.timeInCourse.hoursLogged}h / {student.readiness.criteria.timeInCourse.hoursRequired}h required
+                            {formatHours(student.readiness.criteria.timeInCourse.hoursLogged)} / {student.readiness.criteria.timeInCourse.hoursRequired}h required
                             ({student.readiness.criteria.timeInCourse.courseType})
                           </p>
                         </div>
@@ -713,7 +724,7 @@ function StudentModal({ studentId, examInfo, onClose, onSessionExpired, onUpdate
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-medium text-gray-900">State Laws</p>
                           <p className="text-xs text-gray-500">
-                            {student.readiness.criteria.stateLaws.completions} completion{student.readiness.criteria.stateLaws.completions !== 1 ? 's' : ''}, {student.readiness.criteria.stateLaws.hoursSpent}h spent (need 1 completion + 1.5h)
+                            {student.readiness.criteria.stateLaws.completions} completion{student.readiness.criteria.stateLaws.completions !== 1 ? 's' : ''}, {formatHours(student.readiness.criteria.stateLaws.hoursSpent)} spent (need 1 completion + 1h 30m)
                           </p>
                         </div>
                       </div>
