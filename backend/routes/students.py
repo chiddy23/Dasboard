@@ -41,6 +41,14 @@ def is_chapter_or_module(name):
     return ('module' in lower or 'chapter' in lower or 'lesson' in lower or 'unit' in lower)
 
 
+def is_exam_prep_course(name):
+    """Check if course is an exam prep course."""
+    if not name:
+        return False
+    lower = name.lower()
+    return ('practice' in lower or 'prep' in lower or 'study' in lower)
+
+
 def calculate_prelicensing_totals(enrollments):
     """
     Calculate total time spent and average progress across all pre-licensing courses.
@@ -182,10 +190,18 @@ def get_student_details(student_id):
         # Calculate totals across all pre-licensing courses
         total_time, avg_progress, course_name, primary_status = calculate_prelicensing_totals(enrollments)
 
+        # Calculate exam prep time (all non-prelicensing prep/study courses)
+        exam_prep_time = 0
+        for e in enrollments:
+            e_name = e.get('courseName') or ''
+            if is_exam_prep_course(e_name) and not is_prelicensing_course(e_name):
+                exam_prep_time += parse_time_spent_to_minutes(e.get('timeSpent', 0))
+
         # Add enrollment data to student with calculated totals
         student['enrollments'] = enrollments
         student['progress'] = avg_progress
         student['timeSpent'] = total_time  # Already in minutes
+        student['examPrepTime'] = exam_prep_time
         student['courseName'] = course_name
         student['enrollmentStatus'] = primary_status
 
