@@ -21,6 +21,7 @@ from utils import (
     sanitize_string
 )
 from utils.formatters import parse_time_spent_to_minutes
+from utils.readiness import calculate_readiness
 
 
 def is_prelicensing_course(name):
@@ -195,6 +196,9 @@ def get_student_details(student_id):
         formatted_student['totalEnrollments'] = len(enrollments)
         # Count completed (status 2 or 3 - Absorb uses 3 for completed)
         formatted_student['completedEnrollments'] = sum(1 for e in enrollments if e.get('status') in [2, 3])
+
+        # Calculate readiness from raw enrollments
+        formatted_student['readiness'] = calculate_readiness(enrollments)
 
         return jsonify({
             'success': True,

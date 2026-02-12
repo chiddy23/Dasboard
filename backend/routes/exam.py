@@ -13,6 +13,7 @@ from absorb_api import AbsorbAPIClient, AbsorbAPIError
 from middleware import login_required
 from utils import format_student_for_response
 from google_sheets import fetch_exam_sheet, invalidate_sheet_cache, parse_exam_date_for_sort
+from utils.readiness import calculate_readiness
 
 exam_bp = Blueprint('exam', __name__)
 
@@ -31,6 +32,9 @@ _passfail_overrides = {}
 
 # In-memory exam date overrides (email -> {'date': 'YYYY-MM-DD', 'time': 'HH:MM AM/PM'})
 _exam_date_overrides = {}
+
+# In-memory exam result snapshots (email -> list of snapshot dicts)
+_exam_result_snapshots = {}
 
 
 def get_department_name(client, department_id):
@@ -190,16 +194,18 @@ def get_exam_students():
                 # Found in current department
                 dept_id = raw.get('departmentId') or ''
                 dept_name = get_department_name(client, dept_id) if dept_id else g.user.get('departmentName', 'Unknown')
+                raw_enrollments = raw.get('enrollments', [])
 
-                exam_entry = _build_exam_entry(formatted, sheet_student, dept_name, True)
+                exam_entry = _build_exam_entry(formatted, sheet_student, dept_name, True, raw_enrollments)
             elif email in _exam_absorb_cache and _exam_absorb_cache[email] is not None:
                 # Found via cross-department lookup
                 cached = _exam_absorb_cache[email]
                 dept_id = cached['raw'].get('departmentId') or ''
                 # Admin token has cross-department access
                 dept_name = get_department_name(client, dept_id) if dept_id else 'Unknown'
+                raw_enrollments = cached['raw'].get('enrollments', [])
 
-                exam_entry = _build_exam_entry(cached['formatted'], sheet_student, dept_name, True)
+                exam_entry = _build_exam_entry(cached['formatted'], sheet_student, dept_name, True, raw_enrollments)
             else:
                 # Not found in Absorb at all
                 exam_entry = _build_unmatched_entry(sheet_student)
@@ -262,9 +268,9 @@ def get_exam_students():
         }), 500
 
 
-def _build_exam_entry(formatted, sheet_student, dept_name, matched):
+def _build_exam_entry(formatted, sheet_student, dept_name, matched, raw_enrollments=None):
     """Build an exam entry from formatted Absorb data + sheet data."""
-    return {
+    entry = {
         **formatted,
         'examDate': sheet_student['examDateFormatted'],
         'examDateRaw': sheet_student['examDate'],
@@ -277,6 +283,26 @@ def _build_exam_entry(formatted, sheet_student, dept_name, matched):
         'departmentName': dept_name,
         'matched': matched
     }
+
+    # Calculate readiness if we have enrollment data
+    if raw_enrollments:
+        days_until = None
+        exam_date_raw = sheet_student.get('examDate', '')
+        if exam_date_raw:
+            try:
+                dt = parse_exam_date_for_sort(exam_date_raw)
+                if dt != datetime.min:
+                    delta = dt - datetime.utcnow()
+                    days_until = delta.days
+            except Exception:
+                pass
+        entry['readiness'] = calculate_readiness(
+            raw_enrollments,
+            course_type=sheet_student.get('course', ''),
+            days_until_exam=days_until
+        )
+
+    return entry
 
 
 def _build_unmatched_entry(sheet_student):
@@ -540,6 +566,93 @@ def update_exam_date():
     print(f"[EXAM] Exam date override set: {email} -> {new_date} {new_time}")
 
     return jsonify({'success': True, 'email': email, 'date': new_date, 'time': new_time})
+
+
+@exam_bp.route('/record-result', methods=['POST'])
+@login_required
+def record_exam_result():
+    """Record pass/fail with a point-in-time snapshot of student readiness."""
+    data = request.get_json() or {}
+    email = (data.get('email') or '').lower().strip()
+    result = (data.get('result') or '').upper().strip()
+    admin_key = data.get('adminKey', '')
+    notes = data.get('notes', '')
+    exam_date = data.get('examDate', '')
+    exam_state = data.get('examState', '')
+    exam_course = data.get('examCourse', '')
+
+    if not email:
+        return jsonify({'success': False, 'error': 'Email required'}), 400
+    if result not in ('PASS', 'FAIL'):
+        return jsonify({'success': False, 'error': 'Result must be PASS or FAIL'}), 400
+
+    is_admin = admin_key == ADMIN_PASSWORD
+
+    # Authorization
+    if not is_admin:
+        from routes.dashboard import get_cached_students
+        _, formatted_students = get_cached_students(g.department_id, g.absorb_token)
+        dept_emails = {(s.get('email') or '').lower().strip() for s in formatted_students}
+        if email not in dept_emails:
+            return jsonify({'success': False, 'error': 'Not authorized for this student'}), 403
+
+    # Look up the student to get enrollment data for snapshot
+    readiness_snapshot = None
+    try:
+        client = AbsorbAPIClient()
+        client.set_token(g.absorb_token)
+
+        # Try to find student
+        student = client.get_user_by_email(email)
+        if student:
+            user_id = student.get('id') or student.get('Id')
+            if user_id:
+                enrollments = client.get_user_enrollments(user_id)
+                readiness_snapshot = calculate_readiness(enrollments, course_type=exam_course)
+    except Exception as e:
+        print(f"[EXAM] Could not build readiness snapshot for {email}: {e}")
+
+    # Build the snapshot
+    snapshot = {
+        'result': result,
+        'recordedAt': datetime.utcnow().isoformat(),
+        'recordedBy': g.user.get('emailAddress', 'unknown') if hasattr(g, 'user') and g.user else 'unknown',
+        'examDate': exam_date,
+        'examState': exam_state,
+        'examCourse': exam_course,
+        'notes': notes,
+        'readiness': readiness_snapshot
+    }
+
+    # Store snapshot
+    if email not in _exam_result_snapshots:
+        _exam_result_snapshots[email] = []
+    _exam_result_snapshots[email].append(snapshot)
+
+    # Also set the pass/fail override
+    _passfail_overrides[email] = result
+
+    print(f"[EXAM] Result recorded: {email} -> {result} (snapshot #{len(_exam_result_snapshots[email])})")
+
+    return jsonify({
+        'success': True,
+        'email': email,
+        'result': result,
+        'snapshot': snapshot
+    })
+
+
+@exam_bp.route('/result-snapshots/<email>', methods=['GET'])
+@login_required
+def get_result_snapshots(email):
+    """Get all recorded exam result snapshots for a student."""
+    email = email.lower().strip()
+    snapshots = _exam_result_snapshots.get(email, [])
+    return jsonify({
+        'success': True,
+        'email': email,
+        'snapshots': snapshots
+    })
 
 
 @exam_bp.route('/sync', methods=['POST'])

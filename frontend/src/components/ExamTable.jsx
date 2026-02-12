@@ -114,21 +114,16 @@ function ExamTable({ students, onViewStudent }) {
     return examDate < today
   }
 
-  // Compute readiness color for a student
+  // Compute readiness color for a student (uses backend readiness calculator when available)
   const getReadiness = (student) => {
     const pf = (student.passFail || '').toUpperCase()
     if (pf === 'PASS') return 'green'
     if (pf === 'FAIL') return 'red'
-    const progress = student.progress?.value || 0
-    const examTs = parseExamDate(student.examDateRaw || student.examDate)
-    const today = new Date(); today.setHours(0,0,0,0)
-    if (examTs && examTs < today.getTime()) return 'red'
-    const daysUntil = examTs ? Math.ceil((examTs - today.getTime()) / 86400000) : null
-    if (progress >= 80) return 'green'
-    if (progress >= 50) {
-      if (daysUntil !== null && daysUntil <= 3) return 'red'
-      return 'yellow'
+    // Use backend readiness if available
+    if (student.readiness?.status) {
+      return student.readiness.status.toLowerCase()
     }
+    // Fallback for unmatched students without readiness data
     return 'red'
   }
 

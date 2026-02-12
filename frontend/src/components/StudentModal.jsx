@@ -612,6 +612,129 @@ function StudentModal({ studentId, examInfo, onClose, onSessionExpired, onUpdate
                 </div>
               )}
 
+              {/* Readiness Breakdown */}
+              {student.readiness && (
+                <div className={`border-2 rounded-xl p-4 ${
+                  student.readiness.status === 'GREEN' ? 'border-green-300 bg-green-50' :
+                  student.readiness.status === 'YELLOW' ? 'border-yellow-300 bg-yellow-50' :
+                  'border-red-300 bg-red-50'
+                }`}>
+                  <div className="flex items-center justify-between mb-3">
+                    <h4 className="font-bold text-gray-900 flex items-center gap-2 text-sm">
+                      <span className={`w-3 h-3 rounded-full ${
+                        student.readiness.status === 'GREEN' ? 'bg-green-500' :
+                        student.readiness.status === 'YELLOW' ? 'bg-yellow-400' :
+                        'bg-red-500'
+                      }`}></span>
+                      Exam Readiness
+                    </h4>
+                    <span className={`text-xs font-bold px-2 py-1 rounded-full ${
+                      student.readiness.status === 'GREEN' ? 'bg-green-200 text-green-800' :
+                      student.readiness.status === 'YELLOW' ? 'bg-yellow-200 text-yellow-800' :
+                      'bg-red-200 text-red-800'
+                    }`}>
+                      {student.readiness.status} ({student.readiness.criteriaMet}/{student.readiness.criteriaTotal})
+                    </span>
+                  </div>
+                  <div className="space-y-2">
+                    {/* Practice Exams */}
+                    {student.readiness.criteria.practiceExams && (
+                      <div className="flex items-center gap-2 bg-white rounded-lg p-2.5">
+                        <span className={`w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 ${
+                          student.readiness.criteria.practiceExams.met ? 'bg-green-500' : 'bg-red-400'
+                        }`}>
+                          {student.readiness.criteria.practiceExams.met ? (
+                            <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" /></svg>
+                          ) : (
+                            <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M6 18L18 6M6 6l12 12" /></svg>
+                          )}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-gray-900">Practice Exams</p>
+                          <p className="text-xs text-gray-500">
+                            {student.readiness.criteria.practiceExams.consecutivePassing}/3 consecutive passing
+                            {student.readiness.criteria.practiceExams.scores?.length > 0 && (
+                              <span className="ml-1">
+                                (scores: {student.readiness.criteria.practiceExams.scores.map(s => `${s}%`).join(', ')})
+                              </span>
+                            )}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                    {/* Time in Course */}
+                    {student.readiness.criteria.timeInCourse && (
+                      <div className="flex items-center gap-2 bg-white rounded-lg p-2.5">
+                        <span className={`w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 ${
+                          student.readiness.criteria.timeInCourse.met ? 'bg-green-500' : 'bg-red-400'
+                        }`}>
+                          {student.readiness.criteria.timeInCourse.met ? (
+                            <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" /></svg>
+                          ) : (
+                            <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M6 18L18 6M6 6l12 12" /></svg>
+                          )}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-gray-900">Time in Course</p>
+                          <p className="text-xs text-gray-500">
+                            {student.readiness.criteria.timeInCourse.hoursLogged}h / {student.readiness.criteria.timeInCourse.hoursRequired}h required
+                            ({student.readiness.criteria.timeInCourse.courseType})
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                    {/* State Laws */}
+                    {student.readiness.criteria.stateLaws && (
+                      <div className="flex items-center gap-2 bg-white rounded-lg p-2.5">
+                        <span className={`w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 ${
+                          student.readiness.criteria.stateLaws.met ? 'bg-green-500' : 'bg-red-400'
+                        }`}>
+                          {student.readiness.criteria.stateLaws.met ? (
+                            <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" /></svg>
+                          ) : (
+                            <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M6 18L18 6M6 6l12 12" /></svg>
+                          )}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-gray-900">State Laws</p>
+                          <p className="text-xs text-gray-500">
+                            {student.readiness.criteria.stateLaws.completions} completion{student.readiness.criteria.stateLaws.completions !== 1 ? 's' : ''}, {student.readiness.criteria.stateLaws.hoursSpent}h spent (need 1 completion + 1.5h)
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                    {/* Videos */}
+                    {student.readiness.criteria.videos && (
+                      <div className="flex items-center gap-2 bg-white rounded-lg p-2.5">
+                        <span className={`w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 ${
+                          student.readiness.criteria.videos.met ? 'bg-green-500' : 'bg-red-400'
+                        }`}>
+                          {student.readiness.criteria.videos.met ? (
+                            <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" /></svg>
+                          ) : (
+                            <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M6 18L18 6M6 6l12 12" /></svg>
+                          )}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-gray-900">Videos</p>
+                          <p className="text-xs text-gray-500">
+                            {student.readiness.criteria.videos.details?.life && (
+                              <span>Life: {student.readiness.criteria.videos.details.life.minutes}m/30m{student.readiness.criteria.videos.details.life.met ? ' \u2713' : ''} </span>
+                            )}
+                            {student.readiness.criteria.videos.details?.health && (
+                              <span>Health: {student.readiness.criteria.videos.details.health.minutes}m/30m{student.readiness.criteria.videos.details.health.met ? ' \u2713' : ''}</span>
+                            )}
+                            {!student.readiness.criteria.videos.details?.life && !student.readiness.criteria.videos.details?.health && (
+                              <span>{student.readiness.criteria.videos.totalCourses} video course{student.readiness.criteria.videos.totalCourses !== 1 ? 's' : ''}</span>
+                            )}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {/* Stats Grid */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <div className="bg-gray-50 rounded-lg p-4">

@@ -404,27 +404,11 @@ function Dashboard({ user, department, onLogout, initialData }) {
     const pf = (student.passFail || '').toUpperCase()
     if (pf === 'PASS') return 'GREEN'
     if (pf === 'FAIL') return 'RED'
-
-    const progress = student.progress?.value || 0
-    const examDateTs = student.examDateRaw ? new Date(student.examDateRaw + 'T00:00:00').getTime() : 0
-    const today = new Date()
-    today.setHours(0, 0, 0, 0)
-    const todayTs = today.getTime()
-
-    // Overdue with no result
-    if (examDateTs && examDateTs < todayTs) return 'RED'
-
-    // Days until exam
-    const daysUntil = examDateTs ? Math.ceil((examDateTs - todayTs) / 86400000) : null
-
-    if (progress >= 80) return 'GREEN'
-    if (progress >= 50) {
-      // Yellow unless exam is very soon
-      if (daysUntil !== null && daysUntil <= 3) return 'RED'
-      return 'YELLOW'
+    // Use backend readiness calculator when available
+    if (student.readiness?.status) {
+      return student.readiness.status
     }
-    // Progress < 50
-    if (daysUntil !== null && daysUntil <= 7) return 'RED'
+    // Fallback for unmatched students
     return 'RED'
   }
 
