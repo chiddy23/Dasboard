@@ -24,10 +24,11 @@ def _is_practice_exam(name):
 
 
 def _is_state_law(name):
-    """Check if enrollment is a state law course."""
+    """Check if enrollment is a state law course (contains 'law' and/or 'specific')."""
     if not name:
         return False
-    return 'law' in name.lower()
+    lower = name.lower()
+    return 'law' in lower or 'specific' in lower
 
 
 def _is_video_course(name):
