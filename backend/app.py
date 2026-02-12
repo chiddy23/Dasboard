@@ -108,6 +108,10 @@ def create_app():
             'error': 'Method not allowed'
         }), 405
 
+    # Start background sync scheduler (runs independently of admin login)
+    from sync_scheduler import start_sync_scheduler
+    start_sync_scheduler()
+
     return app
 
 

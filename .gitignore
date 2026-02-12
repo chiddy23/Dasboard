@@ -31,6 +31,9 @@ env/
 # Flask session files
 flask_session/
 
+# SQLite snapshot database
+backend/data/
+
 # Node
 node_modules/
 npm-debug.log*

@@ -678,259 +678,29 @@ def sync_exam_data():
         }), 500
 
 
-# --- Study Data Sync to Google Sheet ---
-
-_sync_status = {'running': False, 'progress': 0, 'total': 0, 'message': '', 'error': None}
-
-
-@exam_bp.route('/sync-study-data', methods=['POST'])
+@exam_bp.route('/snapshots/<email>', methods=['GET'])
 @login_required
-def sync_study_data_to_sheet():
-    """
-    Admin-only: Fetch Absorb data for all sheet students, compute metrics,
-    and write results back to Google Sheets.
-    """
-    global _sync_status
-
-    data = request.get_json() or {}
-    admin_key = data.get('adminKey', '')
-
-    if admin_key != ADMIN_PASSWORD:
-        return jsonify({'success': False, 'error': 'Admin access required'}), 403
-
-    if _sync_status['running']:
-        return jsonify({'success': False, 'error': 'Sync already in progress'}), 409
-
-    try:
-        _sync_status = {'running': True, 'progress': 0, 'total': 0,
-                        'message': 'Initializing...', 'error': None}
-
-        # 1. Open the Google Sheet
-        _sync_status['message'] = 'Connecting to Google Sheets...'
-        from google_sheets_writer import (
-            get_worksheet, ensure_sync_columns, find_email_column,
-            build_email_to_row_map, write_student_rows_batch
-        )
-        worksheet = get_worksheet()
-        email_col = find_email_column(worksheet)
-        sync_col_start = ensure_sync_columns(worksheet)
-        email_to_row = build_email_to_row_map(worksheet, email_col)
-
-        emails = list(email_to_row.keys())
-        _sync_status['total'] = len(emails)
-        _sync_status['message'] = f'Looking up {len(emails)} students in Absorb...'
-
-        # 2. Create API client with admin token
-        client = AbsorbAPIClient()
-        client.set_token(g.absorb_token)
-
-        # 3. Batch look up all students
-        found_users = client.get_users_by_emails_batch(emails)
-        user_by_email = {}
-        for user in found_users:
-            ue = (user.get('emailAddress') or user.get('EmailAddress') or '').lower().strip()
-            if ue:
-                user_by_email[ue] = user
-
-        _sync_status['message'] = f'Found {len(user_by_email)}/{len(emails)} students. Fetching enrollments...'
-
-        # 4. Fetch enrollments in parallel and compute metrics
-        rows_to_write = []
-        completed = 0
-
-        def process_student(email):
-            user = user_by_email.get(email)
-            if not user:
-                return email, None
-            user_id = user.get('id') or user.get('Id')
-            if not user_id:
-                return email, None
-            try:
-                enrollments = client.get_user_enrollments(user_id)
-                return email, _compute_sync_data(user, enrollments)
-            except Exception as e:
-                print(f"[SYNC] Error processing {email}: {e}")
-                return email, None
-
-        max_workers = min(30, len(user_by_email)) if user_by_email else 1
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_email = {
-                executor.submit(process_student, email): email
-                for email in emails
-            }
-
-            for future in as_completed(future_to_email):
-                completed += 1
-                _sync_status['progress'] = completed
-
-                email, sync_data = future.result()
-                row_number = email_to_row.get(email)
-                if sync_data and row_number:
-                    rows_to_write.append((row_number, sync_data))
-
-                if completed % 10 == 0 or completed == len(emails):
-                    _sync_status['message'] = f'Processed {completed}/{len(emails)} students...'
-
-        # 5. Write all results to Google Sheet in a batch
-        _sync_status['message'] = f'Writing {len(rows_to_write)} rows to Google Sheets...'
-        if rows_to_write:
-            write_student_rows_batch(worksheet, rows_to_write, sync_col_start)
-
-        _sync_status['message'] = 'Sync complete!'
-        _sync_status['running'] = False
-
-        # Invalidate caches so next load picks up fresh data
-        invalidate_sheet_cache()
-
-        return jsonify({
-            'success': True,
-            'message': f'Synced {len(rows_to_write)} students to Google Sheets',
-            'studentsProcessed': len(emails),
-            'studentsWritten': len(rows_to_write),
-            'studentsNotFound': len(emails) - len(user_by_email),
-        })
-
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        _sync_status['running'] = False
-        _sync_status['error'] = str(e)
-        return jsonify({
-            'success': False,
-            'error': f'Sync failed: {str(e)}'
-        }), 500
-
-
-@exam_bp.route('/sync-study-data/status', methods=['GET'])
-@login_required
-def get_sync_status():
-    """Get the current status of a running sync operation."""
+def get_student_snapshots(email):
+    """Get historical study snapshots for a student."""
+    from snapshot_db import get_snapshots
+    email = email.lower().strip()
+    limit = request.args.get('limit', 50, type=int)
+    snapshots = get_snapshots(email, limit=limit)
     return jsonify({
         'success': True,
-        **_sync_status
+        'email': email,
+        'snapshots': snapshots
     })
 
 
-def _compute_sync_data(user, enrollments):
-    """
-    Compute all sync column values for a single student.
-    Returns a dict keyed by column header names matching SYNC_COLUMNS.
-    """
-    from utils.readiness import (
-        _is_practice_exam, _is_state_law, _is_video_course,
-        _is_life_video, _is_health_video, _is_prelicensing,
-        _get_enrollment_minutes, _get_enrollment_score,
-        _get_enrollment_name, _get_enrollment_status,
-        _get_enrollment_progress
-    )
+@exam_bp.route('/sync-scheduler/status', methods=['GET'])
+@login_required
+def get_scheduler_status():
+    """Get the background sync scheduler status."""
+    from sync_scheduler import get_scheduler_info
+    return jsonify({
+        'success': True,
+        'scheduler': get_scheduler_info()
+    })
 
-    now_str = datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')
 
-    # Categorize enrollments
-    prelicensing_time = 0
-    exam_prep_time = 0
-    prelicensing_progress_values = []
-    exam_prep_progress_values = []
-    life_video_time = 0
-    health_video_time = 0
-    practice_scores = []
-    state_law_time = 0
-    state_law_completions = 0
-
-    for e in enrollments:
-        name = _get_enrollment_name(e)
-        minutes = _get_enrollment_minutes(e)
-        status = _get_enrollment_status(e)
-        progress = _get_enrollment_progress(e)
-
-        if _is_prelicensing(name):
-            prelicensing_time += minutes
-            prelicensing_progress_values.append(progress)
-
-        # Exam prep: contains 'prep' or 'study' but not practice exam
-        if name and ('prep' in name.lower() or 'study' in name.lower()) and not _is_practice_exam(name):
-            exam_prep_time += minutes
-            exam_prep_progress_values.append(progress)
-
-        if _is_practice_exam(name):
-            score = _get_enrollment_score(e)
-            practice_scores.append(score)
-
-        if _is_state_law(name):
-            state_law_time += minutes
-            if status in (2, 3):
-                state_law_completions += 1
-
-        if _is_life_video(name):
-            life_video_time += minutes
-        if _is_health_video(name):
-            health_video_time += minutes
-
-    # LMS Total Time: Pre-License + Exam Prep
-    lms_total = round(prelicensing_time + exam_prep_time, 1)
-
-    # Progress averages
-    pre_license_progress = (
-        round(sum(prelicensing_progress_values) / len(prelicensing_progress_values), 1)
-        if prelicensing_progress_values else 0
-    )
-    exam_prep_progress = (
-        round(sum(exam_prep_progress_values) / len(exam_prep_progress_values), 1)
-        if exam_prep_progress_values else 0
-    )
-
-    # Practice exam scores (comma-separated)
-    scores_str = ', '.join(str(round(s, 1)) for s in practice_scores)
-
-    # Consecutive passing >= 80%
-    consecutive = 0
-    for score in practice_scores:
-        if score >= 80:
-            consecutive += 1
-        else:
-            break
-
-    # Last login
-    last_login = (
-        user.get('lastLoginDate') or user.get('LastLoginDate') or
-        user.get('dateLastAccessed') or user.get('DateLastAccessed') or ''
-    )
-    if last_login and isinstance(last_login, str):
-        try:
-            clean = last_login.replace('Z', '').split('+')[0].split('.')[0]
-            dt = datetime.fromisoformat(clean)
-            last_login = dt.strftime('%Y-%m-%d %H:%M')
-        except (ValueError, AttributeError):
-            pass
-
-    # Department & Phone
-    dept = user.get('departmentName') or user.get('DepartmentName') or ''
-    phone = user.get('phone') or user.get('Phone') or ''
-
-    # Gap metrics
-    gap = calculate_gap_metrics(enrollments)
-
-    # Readiness
-    readiness = calculate_readiness(enrollments)
-
-    return {
-        'LMS Total Time (min)': lms_total,
-        'Life Video Time (min)': round(life_video_time, 1),
-        'Health Video Time (min)': round(health_video_time, 1),
-        'Pre-License Progress (%)': pre_license_progress,
-        'Exam Prep Progress (%)': exam_prep_progress,
-        'Practice Exam Scores': scores_str,
-        'Consecutive Passing': consecutive,
-        'State Laws Time (min)': round(state_law_time, 1),
-        'State Laws Completions': state_law_completions,
-        'Last Login': last_login,
-        'Department': dept,
-        'Phone': phone,
-        'Study Gaps': gap['study_gap_count'],
-        'Total Gap Days': gap['total_gap_days'],
-        'Largest Gap (days)': gap['largest_gap_days'],
-        'Last Gap Date': gap['last_gap_date'],
-        'Readiness': readiness['status'],
-        'Criteria Met': f"{readiness['criteriaMet']}/{readiness['criteriaTotal']}",
-        'Last Sync': now_str,
-    }

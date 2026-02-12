@@ -227,6 +227,8 @@ function StudentModal({ studentId, examInfo, onClose, onSessionExpired, onUpdate
   const [contactForm, setContactForm] = useState({ firstName: '', lastName: '', emailAddress: '', phone: '' })
   const [contactError, setContactError] = useState('')
   const [contactSaving, setContactSaving] = useState(false)
+  const [snapshots, setSnapshots] = useState([])
+  const [snapshotsExpanded, setSnapshotsExpanded] = useState(false)
 
   useEffect(() => {
     fetchStudentDetails()
@@ -256,6 +258,13 @@ function StudentModal({ studentId, examInfo, onClose, onSessionExpired, onUpdate
 
       if (data.success) {
         setStudent(data.student)
+        // Fetch study snapshots in background
+        if (data.student?.email) {
+          fetch(`${API_BASE}/exam/snapshots/${encodeURIComponent(data.student.email)}`, { credentials: 'include' })
+            .then(r => r.ok ? r.json() : null)
+            .then(d => { if (d?.success) setSnapshots(d.snapshots || []) })
+            .catch(() => {})
+        }
       } else {
         throw new Error(data.error || 'Failed to load student')
       }
@@ -803,6 +812,142 @@ function StudentModal({ studentId, examInfo, onClose, onSessionExpired, onUpdate
                       <p className="text-xs text-gray-500">Last Gap Date</p>
                     </div>
                   </div>
+                </div>
+              )}
+
+              {/* Study History (from SQLite snapshots) */}
+              {snapshots.length > 0 && (
+                <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4">
+                  <h4
+                    className="font-bold text-gray-900 flex items-center gap-2 text-sm mb-3 cursor-pointer"
+                    onClick={() => setSnapshotsExpanded(!snapshotsExpanded)}
+                  >
+                    <svg className="w-4 h-4 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
+                        d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                    </svg>
+                    Study History
+                    <span className="text-xs font-normal text-gray-500 ml-1">({snapshots.length} snapshot{snapshots.length !== 1 ? 's' : ''})</span>
+                    <svg className={`w-4 h-4 ml-auto text-gray-400 transition-transform ${snapshotsExpanded ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </h4>
+
+                  {/* Summary: latest vs oldest comparison */}
+                  {(() => {
+                    const latest = snapshots[0]
+                    const oldest = snapshots[snapshots.length - 1]
+                    const timeDelta = latest.total_time_min - oldest.total_time_min
+                    const progressDelta = latest.prelicense_progress - oldest.prelicense_progress
+
+                    const formatMin = (m) => {
+                      if (m >= 60) return `${Math.floor(m / 60)}h ${Math.round(m % 60)}m`
+                      return `${Math.round(m)}m`
+                    }
+
+                    return (
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+                        <div className="bg-white rounded-lg p-2.5 text-center">
+                          <p className="text-lg font-bold text-indigo-700">{formatMin(latest.total_time_min)}</p>
+                          <p className="text-xs text-gray-500">Study Time</p>
+                          {snapshots.length > 1 && timeDelta > 0 && (
+                            <p className="text-xs text-green-600">+{formatMin(timeDelta)}</p>
+                          )}
+                        </div>
+                        <div className="bg-white rounded-lg p-2.5 text-center">
+                          <p className="text-lg font-bold text-indigo-700">{latest.prelicense_progress}%</p>
+                          <p className="text-xs text-gray-500">Pre-License</p>
+                          {snapshots.length > 1 && progressDelta !== 0 && (
+                            <p className={`text-xs ${progressDelta > 0 ? 'text-green-600' : 'text-red-500'}`}>
+                              {progressDelta > 0 ? '+' : ''}{progressDelta.toFixed(1)}%
+                            </p>
+                          )}
+                        </div>
+                        <div className="bg-white rounded-lg p-2.5 text-center">
+                          <p className="text-lg font-bold text-indigo-700">{latest.consecutive_passing}</p>
+                          <p className="text-xs text-gray-500">Consec. Passing</p>
+                        </div>
+                        <div className="bg-white rounded-lg p-2.5 text-center">
+                          <span className={`inline-block w-3 h-3 rounded-full mr-1 ${
+                            latest.readiness === 'GREEN' ? 'bg-green-500' :
+                            latest.readiness === 'YELLOW' ? 'bg-yellow-400' : 'bg-red-500'
+                          }`}></span>
+                          <span className="text-sm font-bold text-gray-700">{latest.criteria_met}</span>
+                          <p className="text-xs text-gray-500">Readiness</p>
+                        </div>
+                      </div>
+                    )
+                  })()}
+
+                  {/* Study time progression bar chart */}
+                  {snapshots.length > 1 && (
+                    <div className="bg-white rounded-lg p-3 mb-3">
+                      <p className="text-xs font-medium text-gray-600 mb-2">Study Time Progression</p>
+                      <div className="flex items-end gap-1" style={{ height: '48px' }}>
+                        {(() => {
+                          const reversed = [...snapshots].reverse()
+                          const maxTime = Math.max(...reversed.map(s => s.total_time_min), 1)
+                          return reversed.map((snap, i) => {
+                            const pct = Math.max((snap.total_time_min / maxTime) * 100, 4)
+                            const color = snap.readiness === 'GREEN' ? 'bg-green-400' :
+                                          snap.readiness === 'YELLOW' ? 'bg-yellow-400' : 'bg-red-400'
+                            return (
+                              <div
+                                key={snap.id || i}
+                                className={`flex-1 rounded-t ${color} transition-all`}
+                                style={{ height: `${pct}%`, minWidth: '4px', maxWidth: '24px' }}
+                                title={`${new Date(snap.snapshot_time).toLocaleDateString()} - ${Math.round(snap.total_time_min)}min (${snap.readiness})`}
+                              />
+                            )
+                          })
+                        })()}
+                      </div>
+                      <div className="flex justify-between text-xs text-gray-400 mt-1">
+                        <span>{new Date(snapshots[snapshots.length - 1].snapshot_time).toLocaleDateString()}</span>
+                        <span>{new Date(snapshots[0].snapshot_time).toLocaleDateString()}</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Expanded: full snapshot table */}
+                  {snapshotsExpanded && (
+                    <div className="bg-white rounded-lg overflow-hidden">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="bg-indigo-100 text-gray-600">
+                            <th className="px-2 py-1.5 text-left">Date</th>
+                            <th className="px-2 py-1.5 text-right">Time</th>
+                            <th className="px-2 py-1.5 text-right">Progress</th>
+                            <th className="px-2 py-1.5 text-right">Passing</th>
+                            <th className="px-2 py-1.5 text-center">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {snapshots.map((snap, i) => (
+                            <tr key={snap.id || i} className="hover:bg-gray-50">
+                              <td className="px-2 py-1.5 text-gray-600">
+                                {new Date(snap.snapshot_time).toLocaleDateString()} {new Date(snap.snapshot_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              </td>
+                              <td className="px-2 py-1.5 text-right font-medium">
+                                {snap.total_time_min >= 60
+                                  ? `${Math.floor(snap.total_time_min / 60)}h ${Math.round(snap.total_time_min % 60)}m`
+                                  : `${Math.round(snap.total_time_min)}m`
+                                }
+                              </td>
+                              <td className="px-2 py-1.5 text-right">{snap.prelicense_progress}%</td>
+                              <td className="px-2 py-1.5 text-right">{snap.consecutive_passing}/3</td>
+                              <td className="px-2 py-1.5 text-center">
+                                <span className={`inline-block w-2.5 h-2.5 rounded-full ${
+                                  snap.readiness === 'GREEN' ? 'bg-green-500' :
+                                  snap.readiness === 'YELLOW' ? 'bg-yellow-400' : 'bg-red-500'
+                                }`} title={`${snap.readiness} (${snap.criteria_met})`}></span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
               )}
 

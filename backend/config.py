@@ -30,10 +30,15 @@ class Config:
     ABSORB_CLIENT_ID = os.getenv('ABSORB_CLIENT_ID')
     ABSORB_CLIENT_SECRET = os.getenv('ABSORB_CLIENT_SECRET')
 
-    # Google Sheets write-back (for exam sync)
-    GOOGLE_SHEETS_CREDENTIALS_JSON = os.getenv('GOOGLE_SHEETS_CREDENTIALS_JSON', '')
-    GOOGLE_SHEETS_CREDENTIALS_FILE = os.getenv('GOOGLE_SHEETS_CREDENTIALS_FILE', '')
     GOOGLE_SHEET_ID = os.getenv('GOOGLE_SHEET_ID', '1Hc7IUA8bZceLFlLdOPuGckDuV0MtqRcb5DPLeMhncbo')
+
+    # SQLite snapshot database
+    SNAPSHOT_DB_PATH = os.getenv('SNAPSHOT_DB_PATH', os.path.join(os.path.dirname(__file__), 'data', 'snapshots.db'))
+
+    # Background sync scheduler (auto-sync on timer, no admin login required)
+    SYNC_ABSORB_USERNAME = os.getenv('SYNC_ABSORB_USERNAME', '')
+    SYNC_ABSORB_PASSWORD = os.getenv('SYNC_ABSORB_PASSWORD', '')
+    SYNC_INTERVAL_HOURS = float(os.getenv('SYNC_INTERVAL_HOURS', '6'))
 
     # Rate Limiting
     RATE_LIMIT_PER_MINUTE = int(os.getenv('RATE_LIMIT_PER_MINUTE', '10'))
