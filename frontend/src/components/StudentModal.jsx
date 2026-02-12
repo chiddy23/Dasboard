@@ -654,7 +654,7 @@ function StudentModal({ studentId, examInfo, onClose, onSessionExpired, onUpdate
                             <p className="text-sm font-medium text-gray-900">Practice Exams</p>
                             <p className="text-xs text-gray-500">
                               {student.readiness.criteria.practiceExams.consecutivePassing}/3 consecutive passing
-                              {' \u2022 '}{student.readiness.criteria.practiceExams.totalExams} attempt{student.readiness.criteria.practiceExams.totalExams !== 1 ? 's' : ''}
+                              {' \u2022 '}{student.readiness.criteria.practiceExams.totalExams} exam{student.readiness.criteria.practiceExams.totalExams !== 1 ? 's' : ''} found
                               {' \u2022 '}{student.readiness.criteria.practiceExams.hoursSpent}h total time
                             </p>
                           </div>

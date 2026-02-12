@@ -56,13 +56,27 @@ def _is_health_video(name):
 
 def _get_enrollment_minutes(enrollment):
     """Extract time spent in minutes from an enrollment."""
-    time_val = enrollment.get('timeSpent') or enrollment.get('TimeSpent') or enrollment.get('ActiveTime') or enrollment.get('activeTime') or 0
+    # Use None-aware checks (not `or`) since 0 is a valid value
+    time_val = enrollment.get('timeSpent')
+    if time_val is None:
+        time_val = enrollment.get('TimeSpent')
+    if time_val is None:
+        time_val = enrollment.get('ActiveTime')
+    if time_val is None:
+        time_val = enrollment.get('activeTime')
+    if time_val is None:
+        time_val = 0
     return parse_time_spent_to_minutes(time_val)
 
 
 def _get_enrollment_progress(enrollment):
     """Extract progress (0-100) from an enrollment."""
-    progress = enrollment.get('progress') or enrollment.get('Progress') or 0
+    # Use None-aware checks since 0 is a valid score
+    progress = enrollment.get('progress')
+    if progress is None:
+        progress = enrollment.get('Progress')
+    if progress is None:
+        progress = 0
     try:
         return float(progress)
     except (ValueError, TypeError):
@@ -71,7 +85,12 @@ def _get_enrollment_progress(enrollment):
 
 def _get_enrollment_status(enrollment):
     """Extract status code from an enrollment."""
-    status = enrollment.get('status') or enrollment.get('Status') or 0
+    # Use None-aware checks since 0 is a valid status
+    status = enrollment.get('status')
+    if status is None:
+        status = enrollment.get('Status')
+    if status is None:
+        status = 0
     try:
         return int(status)
     except (ValueError, TypeError):
