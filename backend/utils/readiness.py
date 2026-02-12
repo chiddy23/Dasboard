@@ -69,6 +69,22 @@ def _get_enrollment_minutes(enrollment):
     return parse_time_spent_to_minutes(time_val)
 
 
+def _get_enrollment_score(enrollment):
+    """Extract score from an enrollment. Prefers Score field over Progress for practice exams."""
+    # Absorb has separate Score (assessment result) and Progress (course completion %)
+    # For practice exams, Score is the exam result; Progress is completion %
+    score = enrollment.get('score')
+    if score is None:
+        score = enrollment.get('Score')
+    if score is not None:
+        try:
+            return float(score)
+        except (ValueError, TypeError):
+            pass
+    # Fall back to progress
+    return _get_enrollment_progress(enrollment)
+
+
 def _get_enrollment_progress(enrollment):
     """Extract progress (0-100) from an enrollment."""
     # Use None-aware checks since 0 is a valid score
@@ -81,6 +97,23 @@ def _get_enrollment_progress(enrollment):
         return float(progress)
     except (ValueError, TypeError):
         return 0.0
+
+
+def _get_enrollment_attempts(enrollment):
+    """Extract number of attempts from an enrollment."""
+    attempts = enrollment.get('attempts')
+    if attempts is None:
+        attempts = enrollment.get('Attempts')
+    if attempts is None:
+        attempts = enrollment.get('numberOfAttempts')
+    if attempts is None:
+        attempts = enrollment.get('NumberOfAttempts')
+    if attempts is None:
+        return None  # Unknown - field may not exist
+    try:
+        return int(attempts)
+    except (ValueError, TypeError):
+        return None
 
 
 def _get_enrollment_status(enrollment):
@@ -168,19 +201,42 @@ def calculate_readiness(enrollments, course_type=None, days_until_exam=None):
     # --- Criterion 1: Practice Exams ---
     # Sort by most recent date first
     practice_exams.sort(key=lambda e: _get_enrollment_date(e), reverse=True)
-    practice_scores = [_get_enrollment_progress(e) for e in practice_exams]
+
+    # Debug: log raw fields of first practice exam to understand Absorb data structure
+    if practice_exams:
+        first_pe = practice_exams[0]
+        debug_keys = {k: type(v).__name__ for k, v in first_pe.items()}
+        print(f"[READINESS DEBUG] Practice exam keys: {debug_keys}")
+        print(f"[READINESS DEBUG] score={first_pe.get('score', 'N/A')}, Score={first_pe.get('Score', 'N/A')}, "
+              f"progress={first_pe.get('progress', 'N/A')}, Progress={first_pe.get('Progress', 'N/A')}, "
+              f"attempts={first_pe.get('attempts', 'N/A')}, Attempts={first_pe.get('Attempts', 'N/A')}, "
+              f"numberOfAttempts={first_pe.get('numberOfAttempts', 'N/A')}, "
+              f"NumberOfAttempts={first_pe.get('NumberOfAttempts', 'N/A')}")
+
+    # Use Score field (assessment result) for practice exams, falling back to Progress
+    practice_scores = [_get_enrollment_score(e) for e in practice_exams]
     practice_total_minutes = sum(_get_enrollment_minutes(e) for e in practice_exams)
     practice_total_hours = practice_total_minutes / 60.0
-    # Build detail list: name, score, time, date for each attempt
+
+    # Build detail list per enrollment
     practice_details = []
+    total_attempts_count = 0
     for e in practice_exams:
+        attempts_on_this = _get_enrollment_attempts(e)
+        if attempts_on_this is not None:
+            total_attempts_count += attempts_on_this
+        else:
+            total_attempts_count += 1  # Count enrollment itself as 1 if no attempts field
         practice_details.append({
             'name': _get_enrollment_name(e),
-            'score': _get_enrollment_progress(e),
+            'score': _get_enrollment_score(e),
+            'progress': _get_enrollment_progress(e),
             'minutes': round(_get_enrollment_minutes(e), 1),
             'date': _get_enrollment_date(e),
-            'status': _get_enrollment_status(e)
+            'status': _get_enrollment_status(e),
+            'attempts': attempts_on_this
         })
+
     consecutive_passing = 0
     for score in practice_scores:
         if score >= 80:
@@ -263,8 +319,9 @@ def calculate_readiness(enrollments, course_type=None, days_until_exam=None):
                 'consecutivePassing': consecutive_passing,
                 'scores': practice_scores[:5],  # Show up to 5 most recent
                 'totalExams': len(practice_exams),
+                'totalAttempts': total_attempts_count,
                 'hoursSpent': round(practice_total_hours, 1),
-                'attempts': practice_details[:10]  # Up to 10 most recent attempts
+                'attempts': practice_details[:10]  # Up to 10 most recent
             },
             'timeInCourse': {
                 'met': time_met,
