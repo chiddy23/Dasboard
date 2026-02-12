@@ -72,8 +72,8 @@ function ExamTable({ students, onViewStudent }) {
         bValue = (b.examState || '').toLowerCase()
         break
       case 'course':
-        aValue = (a.courseName || '').toLowerCase()
-        bValue = (b.courseName || '').toLowerCase()
+        aValue = (a.examCourse || a.courseName || '').toLowerCase()
+        bValue = (b.examCourse || b.courseName || '').toLowerCase()
         break
       default:
         aValue = parseExamDate(a.examDateRaw || a.examDate)
@@ -180,6 +180,15 @@ function ExamTable({ students, onViewStudent }) {
                 </div>
               </th>
               <th
+                className="cursor-pointer hover:bg-gray-100 min-w-[160px]"
+                onClick={() => handleSort('course')}
+              >
+                <div className="flex items-center space-x-1">
+                  <span>Course</span>
+                  <SortIcon field="course" />
+                </div>
+              </th>
+              <th
                 className="cursor-pointer hover:bg-gray-100 min-w-[100px]"
                 onClick={() => handleSort('result')}
               >
@@ -213,15 +222,6 @@ function ExamTable({ students, onViewStudent }) {
                 <div className="flex items-center space-x-1">
                   <span>State</span>
                   <SortIcon field="state" />
-                </div>
-              </th>
-              <th
-                className="cursor-pointer hover:bg-gray-100 min-w-[200px]"
-                onClick={() => handleSort('course')}
-              >
-                <div className="flex items-center space-x-1">
-                  <span>Course</span>
-                  <SortIcon field="course" />
                 </div>
               </th>
               <th className="sticky right-0 bg-gray-50 min-w-[80px] whitespace-nowrap">Action</th>
@@ -267,6 +267,14 @@ function ExamTable({ students, onViewStudent }) {
                     </div>
                   </td>
                   <td>
+                    <div>
+                      <p className="font-medium text-gray-900">{student.examCourse || student.courseName}</p>
+                      {student.examState && (
+                        <p className="text-xs text-gray-500">{student.examState}</p>
+                      )}
+                    </div>
+                  </td>
+                  <td>
                     {hasPassed ? (
                       <span className="inline-flex items-center px-2.5 py-1 rounded-full text-sm font-bold bg-green-100 text-green-800 border border-green-300">
                         PASS
@@ -296,11 +304,6 @@ function ExamTable({ students, onViewStudent }) {
                   </td>
                   <td>
                     <p className="text-gray-900 text-sm">{student.examState || '—'}</p>
-                  </td>
-                  <td>
-                    <p className="text-gray-900" title={student.courseName}>
-                      {student.courseName}
-                    </p>
                   </td>
                   <td className="sticky right-0 bg-white">
                     <button

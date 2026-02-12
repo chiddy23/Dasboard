@@ -198,7 +198,11 @@ def get_student_details(student_id):
         formatted_student['completedEnrollments'] = sum(1 for e in enrollments if e.get('status') in [2, 3])
 
         # Calculate readiness from raw enrollments
-        formatted_student['readiness'] = calculate_readiness(enrollments)
+        # course_type from query param (passed by frontend from exam sheet data)
+        course_type = request.args.get('courseType', '')
+        formatted_student['readiness'] = calculate_readiness(
+            enrollments, course_type=course_type
+        )
 
         return jsonify({
             'success': True,

@@ -226,7 +226,10 @@ function StudentModal({ studentId, examInfo, onClose, onSessionExpired, onUpdate
     setError(null)
 
     try {
-      const response = await fetch(`${API_BASE}/students/${studentId}`, {
+      const params = new URLSearchParams()
+      if (examInfo?.examCourse) params.set('courseType', examInfo.examCourse)
+      const qs = params.toString() ? `?${params.toString()}` : ''
+      const response = await fetch(`${API_BASE}/students/${studentId}${qs}`, {
         credentials: 'include'
       })
 
