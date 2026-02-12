@@ -171,6 +171,15 @@ function ExamTable({ students, onViewStudent }) {
                 </div>
               </th>
               <th
+                className="cursor-pointer hover:bg-gray-100 min-w-[160px]"
+                onClick={() => handleSort('progress')}
+              >
+                <div className="flex items-center space-x-1">
+                  <span>Progress</span>
+                  <SortIcon field="progress" />
+                </div>
+              </th>
+              <th
                 className="cursor-pointer hover:bg-gray-100 min-w-[100px]"
                 onClick={() => handleSort('result')}
               >
@@ -215,15 +224,6 @@ function ExamTable({ students, onViewStudent }) {
                   <SortIcon field="course" />
                 </div>
               </th>
-              <th
-                className="cursor-pointer hover:bg-gray-100 min-w-[160px]"
-                onClick={() => handleSort('progress')}
-              >
-                <div className="flex items-center space-x-1">
-                  <span>Progress</span>
-                  <SortIcon field="progress" />
-                </div>
-              </th>
               <th className="sticky right-0 bg-gray-50 min-w-[80px] whitespace-nowrap">Action</th>
             </tr>
           </thead>
@@ -256,6 +256,15 @@ function ExamTable({ students, onViewStudent }) {
                     ) : (
                       <span className="badge bg-gray-100 text-gray-600">N/A</span>
                     )}
+                  </td>
+                  <td>
+                    <div className="min-w-[160px]">
+                      <ProgressBar progress={student.progress} />
+                      <p className="text-xs text-gray-500 mt-1">Course: {student.timeSpent?.formatted || '0m'}</p>
+                      {student.examPrepTime?.minutes > 0 && (
+                        <p className="text-xs text-purple-500">Prep: {student.examPrepTime.formatted}</p>
+                      )}
+                    </div>
                   </td>
                   <td>
                     {hasPassed ? (
@@ -292,15 +301,6 @@ function ExamTable({ students, onViewStudent }) {
                     <p className="text-gray-900" title={student.courseName}>
                       {student.courseName}
                     </p>
-                  </td>
-                  <td>
-                    <div className="min-w-[160px]">
-                      <ProgressBar progress={student.progress} />
-                      <p className="text-xs text-gray-500 mt-1">Course: {student.timeSpent?.formatted || '0m'}</p>
-                      {student.examPrepTime?.minutes > 0 && (
-                        <p className="text-xs text-purple-500">Prep: {student.examPrepTime.formatted}</p>
-                      )}
-                    </div>
                   </td>
                   <td className="sticky right-0 bg-white">
                     <button
