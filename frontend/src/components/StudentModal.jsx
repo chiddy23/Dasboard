@@ -761,6 +761,51 @@ function StudentModal({ studentId, examInfo, onClose, onSessionExpired, onUpdate
                 </div>
               )}
 
+              {/* Study Consistency / Gap Metrics */}
+              {student.gapMetrics && student.gapMetrics.study_gap_count > 0 && (
+                <div className="bg-orange-50 border border-orange-200 rounded-xl p-4">
+                  <h4 className="font-bold text-gray-900 flex items-center gap-2 text-sm mb-3">
+                    <svg className="w-4 h-4 text-orange-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
+                        d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    Study Consistency
+                  </h4>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <div className="bg-white rounded-lg p-2.5 text-center">
+                      <p className={`text-lg font-bold ${
+                        student.gapMetrics.study_gap_count > 5 ? 'text-red-600' :
+                        student.gapMetrics.study_gap_count > 2 ? 'text-orange-600' :
+                        'text-green-600'
+                      }`}>
+                        {student.gapMetrics.study_gap_count}
+                      </p>
+                      <p className="text-xs text-gray-500">Study Gaps</p>
+                    </div>
+                    <div className="bg-white rounded-lg p-2.5 text-center">
+                      <p className="text-lg font-bold text-gray-700">{student.gapMetrics.total_gap_days}</p>
+                      <p className="text-xs text-gray-500">Total Gap Days</p>
+                    </div>
+                    <div className="bg-white rounded-lg p-2.5 text-center">
+                      <p className={`text-lg font-bold ${
+                        student.gapMetrics.largest_gap_days > 7 ? 'text-red-600' :
+                        student.gapMetrics.largest_gap_days > 3 ? 'text-orange-600' :
+                        'text-green-600'
+                      }`}>
+                        {student.gapMetrics.largest_gap_days}
+                      </p>
+                      <p className="text-xs text-gray-500">Largest Gap (days)</p>
+                    </div>
+                    <div className="bg-white rounded-lg p-2.5 text-center">
+                      <p className="text-sm font-bold text-gray-700">
+                        {student.gapMetrics.last_gap_date || 'N/A'}
+                      </p>
+                      <p className="text-xs text-gray-500">Last Gap Date</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Stats Grid */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <div className="bg-gray-50 rounded-lg p-4">

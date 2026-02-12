@@ -9,6 +9,8 @@ from .validators import (
     sanitize_string
 )
 
+from .gap_metrics import calculate_gap_metrics
+
 from .formatters import (
     parse_absorb_date,
     format_relative_time,
@@ -21,6 +23,7 @@ from .formatters import (
 )
 
 __all__ = [
+    'calculate_gap_metrics',
     'validate_department_id',
     'validate_email',
     'validate_username',

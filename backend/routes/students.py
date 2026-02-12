@@ -22,6 +22,7 @@ from utils import (
 )
 from utils.formatters import parse_time_spent_to_minutes
 from utils.readiness import calculate_readiness
+from utils.gap_metrics import calculate_gap_metrics
 
 
 def is_prelicensing_course(name):
@@ -203,6 +204,7 @@ def get_student_details(student_id):
         formatted_student['readiness'] = calculate_readiness(
             enrollments, course_type=course_type
         )
+        formatted_student['gapMetrics'] = calculate_gap_metrics(enrollments)
 
         return jsonify({
             'success': True,

@@ -34,6 +34,11 @@ function Dashboard({ user, department, onLogout, initialData }) {
   const [showAdminInput, setShowAdminInput] = useState(false)
   const [adminError, setAdminError] = useState('')
 
+  // Sheet sync state
+  const [sheetSyncing, setSheetSyncing] = useState(false)
+  const [sheetSyncProgress, setSheetSyncProgress] = useState(null)
+  const [sheetSyncResult, setSheetSyncResult] = useState(null)
+
   // Filtering and search
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
@@ -259,6 +264,64 @@ function Dashboard({ user, department, onLogout, initialData }) {
     // Re-fetch without admin data
     setExamLoaded(false)
     fetchExamData('')
+  }
+
+  const handleSyncStudyData = async () => {
+    if (!adminMode || sheetSyncing) return
+
+    setSheetSyncing(true)
+    setSheetSyncResult(null)
+    setSheetSyncProgress({ progress: 0, total: 0, message: 'Starting sync...' })
+
+    // Poll for progress
+    const pollInterval = setInterval(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/exam/sync-study-data/status`, {
+          credentials: 'include'
+        })
+        if (res.ok) {
+          const status = await res.json()
+          setSheetSyncProgress({
+            progress: status.progress,
+            total: status.total,
+            message: status.message
+          })
+        }
+      } catch {
+        // Polling failure is non-critical
+      }
+    }, 2000)
+
+    try {
+      const res = await fetch(`${API_BASE}/exam/sync-study-data`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ adminKey })
+      })
+      const data = await res.json()
+
+      clearInterval(pollInterval)
+
+      if (data.success) {
+        setSheetSyncResult({
+          success: true,
+          message: data.message,
+          details: `${data.studentsWritten} synced, ${data.studentsNotFound} not found in Absorb`
+        })
+        // Refresh exam data
+        setExamLoaded(false)
+        fetchExamData(adminKey)
+      } else {
+        setSheetSyncResult({ success: false, message: data.error || 'Sync failed' })
+      }
+    } catch {
+      clearInterval(pollInterval)
+      setSheetSyncResult({ success: false, message: 'Network error during sync' })
+    } finally {
+      setSheetSyncing(false)
+      setSheetSyncProgress(null)
+    }
   }
 
   const recalcExamSummary = (students) => {
@@ -814,6 +877,61 @@ function Dashboard({ user, department, onLogout, initialData }) {
                 {/* Admin Mode Toggle */}
                 {adminMode ? (
                   <div className="flex items-center gap-2">
+                    {/* Sync Study Data Button */}
+                    <div className="relative">
+                      <button
+                        onClick={handleSyncStudyData}
+                        disabled={sheetSyncing}
+                        className="text-sm text-green-600 hover:text-green-800 flex items-center space-x-1 px-2.5 py-1 rounded-lg border border-green-300 hover:border-green-500 hover:bg-green-50 transition-colors disabled:opacity-50"
+                        title="Sync study data to Google Sheet"
+                      >
+                        <svg className={`w-4 h-4 ${sheetSyncing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
+                            d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                        <span>{sheetSyncing ? 'Syncing...' : 'Sync to Sheet'}</span>
+                      </button>
+
+                      {/* Progress indicator */}
+                      {sheetSyncing && sheetSyncProgress && (
+                        <div className="absolute right-0 top-10 bg-white rounded-lg shadow-lg border p-3 z-50 w-72">
+                          <p className="text-xs text-gray-600 mb-2">{sheetSyncProgress.message}</p>
+                          {sheetSyncProgress.total > 0 && (
+                            <div className="w-full bg-gray-200 rounded-full h-2">
+                              <div
+                                className="bg-green-500 h-2 rounded-full transition-all duration-300"
+                                style={{ width: `${Math.round((sheetSyncProgress.progress / sheetSyncProgress.total) * 100)}%` }}
+                              />
+                            </div>
+                          )}
+                          <p className="text-xs text-gray-400 mt-1">
+                            {sheetSyncProgress.progress}/{sheetSyncProgress.total} students
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Sync result toast */}
+                      {sheetSyncResult && (
+                        <div className={`absolute right-0 top-10 rounded-lg shadow-lg border p-3 z-50 w-72 ${
+                          sheetSyncResult.success ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'
+                        }`}>
+                          <div className="flex items-center justify-between">
+                            <p className={`text-xs font-medium ${sheetSyncResult.success ? 'text-green-700' : 'text-red-700'}`}>
+                              {sheetSyncResult.message}
+                            </p>
+                            <button onClick={() => setSheetSyncResult(null)} className="text-gray-400 hover:text-gray-600 ml-2">
+                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                              </svg>
+                            </button>
+                          </div>
+                          {sheetSyncResult.details && (
+                            <p className="text-xs text-gray-500 mt-1">{sheetSyncResult.details}</p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
                     <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-700">
                       <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />

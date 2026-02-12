@@ -30,6 +30,11 @@ class Config:
     ABSORB_CLIENT_ID = os.getenv('ABSORB_CLIENT_ID')
     ABSORB_CLIENT_SECRET = os.getenv('ABSORB_CLIENT_SECRET')
 
+    # Google Sheets write-back (for exam sync)
+    GOOGLE_SHEETS_CREDENTIALS_JSON = os.getenv('GOOGLE_SHEETS_CREDENTIALS_JSON', '')
+    GOOGLE_SHEETS_CREDENTIALS_FILE = os.getenv('GOOGLE_SHEETS_CREDENTIALS_FILE', '')
+    GOOGLE_SHEET_ID = os.getenv('GOOGLE_SHEET_ID', '1Hc7IUA8bZceLFlLdOPuGckDuV0MtqRcb5DPLeMhncbo')
+
     # Rate Limiting
     RATE_LIMIT_PER_MINUTE = int(os.getenv('RATE_LIMIT_PER_MINUTE', '10'))
 
