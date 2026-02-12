@@ -220,6 +220,39 @@ class AbsorbAPIClient:
         except requests.RequestException as e:
             raise AbsorbAPIError(f"Network error fetching user {user_id}: {str(e)}")
 
+    def update_user(self, user_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
+        """Update a user's profile fields in Absorb LMS.
+
+        Args:
+            user_id: The user's GUID
+            updates: Dictionary of fields to update (PascalCase keys: FirstName, LastName, EmailAddress, Phone)
+
+        Returns:
+            Updated user object from Absorb API
+
+        Raises:
+            AbsorbAPIError: If the API request fails
+        """
+        url = f"{self.base_url}/users/{user_id}"
+        try:
+            response = self._session.put(url, json=updates, headers=self._get_headers(), timeout=30)
+
+            if response.status_code == 200:
+                return response.json()
+            elif response.status_code == 404:
+                raise AbsorbAPIError(f"User not found: {user_id}", status_code=404)
+            elif response.status_code == 400:
+                error_msg = response.text or "Invalid update data"
+                raise AbsorbAPIError(f"Bad request: {error_msg}", status_code=400)
+            else:
+                raise AbsorbAPIError(
+                    f"Failed to update user {user_id}: {response.status_code}",
+                    status_code=response.status_code,
+                    response=response.json() if response.content else None
+                )
+        except requests.RequestException as e:
+            raise AbsorbAPIError(f"Network error updating user {user_id}: {str(e)}")
+
     def fetch_user_by_email_odata(self, email: str) -> Optional[Dict[str, Any]]:
         """Fetch a single user by email using OData filter (simple, direct approach)."""
         url = f"{self.base_url}/users"

@@ -201,13 +201,21 @@ function EnrollmentGroups({ enrollments }) {
   )
 }
 
-function StudentModal({ studentId, examInfo, onClose, onSessionExpired, onUpdateResult, onUpdateExamDate }) {
+function isValidEmail(email) {
+  return /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(email)
+}
+
+function StudentModal({ studentId, examInfo, onClose, onSessionExpired, onUpdateResult, onUpdateExamDate, onUpdateStudentContact }) {
   const [student, setStudent] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [editingDate, setEditingDate] = useState(false)
   const [newDate, setNewDate] = useState('')
   const [newTime, setNewTime] = useState('')
+  const [editingContact, setEditingContact] = useState(false)
+  const [contactForm, setContactForm] = useState({ firstName: '', lastName: '', emailAddress: '', phone: '' })
+  const [contactError, setContactError] = useState('')
+  const [contactSaving, setContactSaving] = useState(false)
 
   useEffect(() => {
     fetchStudentDetails()
@@ -241,6 +249,44 @@ function StudentModal({ studentId, examInfo, onClose, onSessionExpired, onUpdate
       setError(err.message)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleSaveContact = async () => {
+    setContactError('')
+    if (!contactForm.firstName.trim() || !contactForm.lastName.trim()) {
+      setContactError('First and last name are required')
+      return
+    }
+    if (!isValidEmail(contactForm.emailAddress)) {
+      setContactError('Please enter a valid email address')
+      return
+    }
+    setContactSaving(true)
+    try {
+      const result = await onUpdateStudentContact(studentId, {
+        firstName: contactForm.firstName.trim(),
+        lastName: contactForm.lastName.trim(),
+        emailAddress: contactForm.emailAddress.trim(),
+        phone: contactForm.phone.trim()
+      })
+      if (result.success) {
+        setStudent(prev => ({
+          ...prev,
+          firstName: result.student.firstName,
+          lastName: result.student.lastName,
+          fullName: `${result.student.firstName} ${result.student.lastName}`.trim(),
+          email: result.student.emailAddress,
+          phone: result.student.phone
+        }))
+        setEditingContact(false)
+      } else {
+        setContactError(result.error || 'Update failed')
+      }
+    } catch (err) {
+      setContactError('Failed to save changes')
+    } finally {
+      setContactSaving(false)
     }
   }
 
@@ -303,11 +349,103 @@ function StudentModal({ studentId, examInfo, onClose, onSessionExpired, onUpdate
             <div className="space-y-6">
               {/* Student Info */}
               <div className="flex items-start justify-between">
-                <div>
-                  <h3 className="text-2xl font-bold text-gray-900">{student.fullName}</h3>
-                  <p className="text-gray-500">{student.email}</p>
+                {editingContact ? (
+                  <div className="flex-1 mr-4">
+                    <div className="grid grid-cols-2 gap-3 mb-3">
+                      <div>
+                        <label className="text-xs text-gray-500 mb-1 block">First Name</label>
+                        <input
+                          type="text"
+                          value={contactForm.firstName}
+                          onChange={(e) => setContactForm(prev => ({ ...prev, firstName: e.target.value }))}
+                          className="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-gray-500 mb-1 block">Last Name</label>
+                        <input
+                          type="text"
+                          value={contactForm.lastName}
+                          onChange={(e) => setContactForm(prev => ({ ...prev, lastName: e.target.value }))}
+                          className="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                    </div>
+                    <div className="mb-3">
+                      <label className="text-xs text-gray-500 mb-1 block">Email</label>
+                      <input
+                        type="email"
+                        value={contactForm.emailAddress}
+                        onChange={(e) => setContactForm(prev => ({ ...prev, emailAddress: e.target.value }))}
+                        className={`w-full px-3 py-1.5 border rounded-lg text-sm focus:outline-none focus:ring-2 ${
+                          contactForm.emailAddress && !isValidEmail(contactForm.emailAddress)
+                            ? 'border-red-300 focus:ring-red-400'
+                            : 'border-gray-300 focus:ring-blue-500'
+                        }`}
+                      />
+                      {contactForm.emailAddress && !isValidEmail(contactForm.emailAddress) && (
+                        <p className="text-xs text-red-500 mt-1">Invalid email format</p>
+                      )}
+                    </div>
+                    <div className="mb-3">
+                      <label className="text-xs text-gray-500 mb-1 block">Phone</label>
+                      <input
+                        type="tel"
+                        value={contactForm.phone}
+                        onChange={(e) => setContactForm(prev => ({ ...prev, phone: e.target.value }))}
+                        className="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder="Optional"
+                      />
+                    </div>
+                    {contactError && (
+                      <p className="text-xs text-red-500 mb-2">{contactError}</p>
+                    )}
+                    <div className="flex gap-2">
+                      <button
+                        onClick={handleSaveContact}
+                        disabled={contactSaving || (contactForm.emailAddress && !isValidEmail(contactForm.emailAddress))}
+                        className="px-3 py-1.5 bg-green-600 text-white rounded-lg text-xs font-medium hover:bg-green-700 transition-colors disabled:opacity-50"
+                      >
+                        {contactSaving ? 'Saving...' : 'Save'}
+                      </button>
+                      <button
+                        onClick={() => { setEditingContact(false); setContactError('') }}
+                        className="px-3 py-1.5 bg-gray-200 text-gray-700 rounded-lg text-xs hover:bg-gray-300 transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <h3 className="text-2xl font-bold text-gray-900">{student.fullName}</h3>
+                    <p className="text-gray-500">{student.email}</p>
+                    {student.phone && <p className="text-gray-400 text-sm">{student.phone}</p>}
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  {!editingContact && onUpdateStudentContact && (
+                    <button
+                      onClick={() => {
+                        setEditingContact(true)
+                        setContactForm({
+                          firstName: student.firstName || '',
+                          lastName: student.lastName || '',
+                          emailAddress: student.email || '',
+                          phone: student.phone || ''
+                        })
+                        setContactError('')
+                      }}
+                      className="text-xs px-3 py-1.5 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors flex items-center gap-1 shadow-sm"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                      </svg>
+                      Edit
+                    </button>
+                  )}
+                  <StatusBadge status={student.status} />
                 </div>
-                <StatusBadge status={student.status} />
               </div>
 
               {/* Exam Info (when viewing from Exam tab) */}

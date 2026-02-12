@@ -309,6 +309,7 @@ def format_student_for_response(student: Dict[str, Any]) -> Dict[str, Any]:
         'lastName': student.get('lastName', ''),
         'fullName': f"{student.get('firstName', '')} {student.get('lastName', '')}".strip(),
         'email': student.get('emailAddress', ''),
+        'phone': student.get('phone') or student.get('Phone') or '',
         'username': student.get('username', ''),
         'lastLogin': {
             'raw': last_login,

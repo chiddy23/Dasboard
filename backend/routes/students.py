@@ -1,6 +1,6 @@
 """Student detail routes for JustInsurance Student Dashboard."""
 
-from flask import Blueprint, jsonify, g
+from flask import Blueprint, jsonify, g, request
 import sys
 import os
 
@@ -16,7 +16,9 @@ from utils import (
     get_enrollment_status_text,
     parse_absorb_date,
     format_datetime,
-    format_relative_time
+    format_relative_time,
+    validate_email,
+    sanitize_string
 )
 from utils.formatters import parse_time_spent_to_minutes
 
@@ -209,6 +211,96 @@ def get_student_details(student_id):
         return jsonify({
             'success': False,
             'error': 'Failed to fetch student details'
+        }), 500
+
+
+@students_bp.route('/<student_id>', methods=['PUT'])
+@login_required
+def update_student_contact(student_id):
+    """Update contact info for a specific student."""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'error': 'Request body required'}), 400
+
+        # Build updates dict with Absorb API field names (PascalCase)
+        updates = {}
+
+        if 'firstName' in data:
+            first_name = sanitize_string(data['firstName'])
+            if not first_name:
+                return jsonify({'success': False, 'error': 'First name cannot be empty'}), 400
+            if len(first_name) > 100:
+                return jsonify({'success': False, 'error': 'First name is too long'}), 400
+            updates['FirstName'] = first_name
+
+        if 'lastName' in data:
+            last_name = sanitize_string(data['lastName'])
+            if not last_name:
+                return jsonify({'success': False, 'error': 'Last name cannot be empty'}), 400
+            if len(last_name) > 100:
+                return jsonify({'success': False, 'error': 'Last name is too long'}), 400
+            updates['LastName'] = last_name
+
+        if 'emailAddress' in data:
+            email = sanitize_string(data['emailAddress'])
+            is_valid, error_msg = validate_email(email)
+            if not is_valid:
+                return jsonify({'success': False, 'error': error_msg}), 400
+            updates['EmailAddress'] = email
+
+        if 'phone' in data:
+            phone = sanitize_string(data['phone'])
+            if len(phone) > 30:
+                return jsonify({'success': False, 'error': 'Phone number is too long'}), 400
+            updates['Phone'] = phone
+
+        if not updates:
+            return jsonify({'success': False, 'error': 'No valid fields to update'}), 400
+
+        # Initialize API client
+        client = AbsorbAPIClient()
+        client.set_token(g.absorb_token)
+
+        # Verify student access (same pattern as get_student_details)
+        users = client.get_users_by_department(g.department_id)
+        student_id_lower = student_id.lower()
+        student_found = any(
+            (user.get('id') or user.get('Id') or '').lower() == student_id_lower
+            for user in users
+        )
+
+        if not student_found:
+            try:
+                client.get_user_by_id(student_id)
+            except AbsorbAPIError:
+                return jsonify({'success': False, 'error': 'Student not found'}), 404
+
+        # Perform the update
+        updated_user = client.update_user(student_id, updates)
+
+        return jsonify({
+            'success': True,
+            'student': {
+                'id': updated_user.get('id') or updated_user.get('Id') or student_id,
+                'firstName': updated_user.get('firstName') or updated_user.get('FirstName') or '',
+                'lastName': updated_user.get('lastName') or updated_user.get('LastName') or '',
+                'emailAddress': updated_user.get('emailAddress') or updated_user.get('EmailAddress') or '',
+                'phone': updated_user.get('phone') or updated_user.get('Phone') or '',
+            }
+        })
+
+    except AbsorbAPIError as e:
+        return jsonify({
+            'success': False,
+            'error': str(e.message)
+        }), e.status_code or 500
+
+    except Exception as e:
+        print(f"[STUDENT UPDATE] Error: {e}")
+        return jsonify({
+            'success': False,
+            'error': 'Failed to update student'
         }), 500
 
 

@@ -350,6 +350,38 @@ function Dashboard({ user, department, onLogout, initialData }) {
     }
   }
 
+  const handleUpdateStudentContact = async (studentId, contactData) => {
+    try {
+      const res = await fetch(`${API_BASE}/students/${studentId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(contactData)
+      })
+      const data = await res.json()
+      if (data.success) {
+        const updated = data.student
+        // Update students list
+        setStudents(prev => prev.map(s =>
+          s.id === studentId ? {
+            ...s,
+            firstName: updated.firstName,
+            lastName: updated.lastName,
+            fullName: `${updated.firstName} ${updated.lastName}`.trim(),
+            email: updated.emailAddress,
+            phone: updated.phone
+          } : s
+        ))
+        return { success: true, student: updated }
+      } else {
+        return { success: false, error: data.error || 'Update failed' }
+      }
+    } catch (err) {
+      console.error('Failed to update student contact:', err)
+      return { success: false, error: 'Network error' }
+    }
+  }
+
   // Filter students (works for both tabs)
   const filteredStudents = students.filter(student => {
     const searchLower = searchTerm.toLowerCase()
@@ -969,6 +1001,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
           onSessionExpired={onLogout}
           onUpdateResult={activeTab === 'exam' ? handleUpdateResult : null}
           onUpdateExamDate={activeTab === 'exam' ? handleUpdateExamDate : null}
+          onUpdateStudentContact={handleUpdateStudentContact}
         />
       )}
 
