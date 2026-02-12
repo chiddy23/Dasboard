@@ -39,6 +39,10 @@ function Dashboard({ user, department, onLogout, initialData }) {
   const [statusFilter, setStatusFilter] = useState('all')
   const [examResultFilter, setExamResultFilter] = useState('all')
   const [examCourseFilter, setExamCourseFilter] = useState('all')
+  const [examDeptFilter, setExamDeptFilter] = useState('all')
+  const [examStateFilter, setExamStateFilter] = useState('all')
+  const [examReadinessFilter, setExamReadinessFilter] = useState('all')
+  const [examDaysFilter, setExamDaysFilter] = useState('all')
 
   // Fetch data on mount only if no initial data provided
   useEffect(() => {
@@ -395,6 +399,60 @@ function Dashboard({ user, department, onLogout, initialData }) {
     return matchesSearch && matchesStatus
   })
 
+  // Helper: compute readiness for an exam student (GREEN/YELLOW/RED)
+  const getReadiness = (student) => {
+    const pf = (student.passFail || '').toUpperCase()
+    if (pf === 'PASS') return 'GREEN'
+    if (pf === 'FAIL') return 'RED'
+
+    const progress = student.progress?.value || 0
+    const examDateTs = student.examDateRaw ? new Date(student.examDateRaw + 'T00:00:00').getTime() : 0
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    const todayTs = today.getTime()
+
+    // Overdue with no result
+    if (examDateTs && examDateTs < todayTs) return 'RED'
+
+    // Days until exam
+    const daysUntil = examDateTs ? Math.ceil((examDateTs - todayTs) / 86400000) : null
+
+    if (progress >= 80) return 'GREEN'
+    if (progress >= 50) {
+      // Yellow unless exam is very soon
+      if (daysUntil !== null && daysUntil <= 3) return 'RED'
+      return 'YELLOW'
+    }
+    // Progress < 50
+    if (daysUntil !== null && daysUntil <= 7) return 'RED'
+    return 'RED'
+  }
+
+  // Helper: compute days until exam and check filter match
+  const matchesDaysFilter = (student, filter) => {
+    if (filter === 'all') return true
+    const examDateTs = student.examDateRaw ? new Date(student.examDateRaw + 'T00:00:00').getTime() : 0
+    if (!examDateTs) return filter === 'no-date'
+
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    const todayTs = today.getTime()
+    const daysUntil = Math.ceil((examDateTs - todayTs) / 86400000)
+
+    switch (filter) {
+      case 'overdue': return daysUntil < 0
+      case 'today': return daysUntil === 0
+      case 'tomorrow': return daysUntil === 1
+      case '2-days': return daysUntil >= 0 && daysUntil <= 2
+      case '3-days': return daysUntil >= 0 && daysUntil <= 3
+      case 'this-week': return daysUntil >= 0 && daysUntil <= 7
+      case 'next-week': return daysUntil > 7 && daysUntil <= 14
+      case 'this-month': return daysUntil >= 0 && daysUntil <= 30
+      case 'no-date': return false
+      default: return true
+    }
+  }
+
   const filteredExamStudents = examStudents.filter(student => {
     // In normal mode, only show students from logged-in department (matched in Absorb)
     if (!adminMode && student.matched === false) return false
@@ -410,8 +468,10 @@ function Dashboard({ user, department, onLogout, initialData }) {
     let matchesResult = true
     if (examResultFilter !== 'all') {
       const pf = (student.passFail || '').toUpperCase()
-      const examDateTs = student.examDateRaw ? new Date(student.examDateRaw).getTime() : 0
-      const isPast = examDateTs && examDateTs < Date.now()
+      const examDateTs = student.examDateRaw ? new Date(student.examDateRaw + 'T00:00:00').getTime() : 0
+      const today = new Date()
+      today.setHours(0, 0, 0, 0)
+      const isPast = examDateTs && examDateTs < today.getTime()
       const hasResult = pf === 'PASS' || pf === 'FAIL'
 
       switch (examResultFilter) {
@@ -430,12 +490,29 @@ function Dashboard({ user, department, onLogout, initialData }) {
     const matchesCourse = examCourseFilter === 'all' ||
       (student.examCourse || '').toLowerCase() === examCourseFilter.toLowerCase()
 
-    return matchesSearch && matchesResult && matchesCourse
+    // Department filter
+    const matchesDept = examDeptFilter === 'all' ||
+      (student.departmentName || '').toLowerCase() === examDeptFilter.toLowerCase()
+
+    // State filter
+    const matchesState = examStateFilter === 'all' ||
+      (student.examState || '').toLowerCase() === examStateFilter.toLowerCase()
+
+    // Readiness filter
+    const matchesReadiness = examReadinessFilter === 'all' ||
+      getReadiness(student) === examReadinessFilter
+
+    // Days until exam filter
+    const matchesDays = matchesDaysFilter(student, examDaysFilter)
+
+    return matchesSearch && matchesResult && matchesCourse && matchesDept && matchesState && matchesReadiness && matchesDays
   })
 
-  // Get unique course types for filter dropdown
+  // Get unique values for filter dropdowns
   const visibleExamStudents = adminMode ? examStudents : examStudents.filter(s => s.matched !== false)
   const examCourseTypes = [...new Set(visibleExamStudents.map(s => (s.examCourse || '').trim()).filter(Boolean))].sort()
+  const examDepartments = [...new Set(visibleExamStudents.map(s => (s.departmentName || '').trim()).filter(Boolean))].sort()
+  const examStates = [...new Set(visibleExamStudents.map(s => (s.examState || '').trim()).filter(Boolean))].sort()
 
   const formatLastSynced = () => {
     if (!lastSynced) return 'Never'
@@ -914,7 +991,8 @@ function Dashboard({ user, department, onLogout, initialData }) {
 
             {/* Search/Filter for Exam Tab */}
             <div className="bg-white rounded-xl shadow-md p-4 mb-6">
-              <div className="flex flex-col sm:flex-row gap-4 items-center justify-between">
+              {/* Row 1: Search + Result filter */}
+              <div className="flex flex-col sm:flex-row gap-3 items-center">
                 <div className="relative flex-1 max-w-md">
                   <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -923,44 +1001,116 @@ function Dashboard({ user, department, onLogout, initialData }) {
                   </span>
                   <input
                     type="text"
-                    placeholder="Search by name, email, department, agency..."
-                    className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-ji-blue-bright"
+                    placeholder="Search by name or email..."
+                    className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-ji-blue-bright text-sm"
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                   />
                 </div>
 
-                <div className="flex items-center gap-3 flex-wrap">
-                  {/* Exam Result Filter */}
-                  <select
-                    className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-ji-blue-bright text-sm"
-                    value={examResultFilter}
-                    onChange={(e) => setExamResultFilter(e.target.value)}
-                  >
-                    <option value="all">All Results</option>
-                    <option value="upcoming">Upcoming</option>
-                    <option value="passed">Passed</option>
-                    <option value="failed">Failed</option>
-                    <option value="pending">Pending</option>
-                    <option value="at-risk">At Risk</option>
-                  </select>
+                {/* Exam Result Filter */}
+                <select
+                  className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-ji-blue-bright text-sm"
+                  value={examResultFilter}
+                  onChange={(e) => setExamResultFilter(e.target.value)}
+                >
+                  <option value="all">All Results</option>
+                  <option value="upcoming">Upcoming</option>
+                  <option value="passed">Passed</option>
+                  <option value="failed">Failed</option>
+                  <option value="pending">Pending</option>
+                  <option value="at-risk">At Risk</option>
+                </select>
+              </div>
 
-                  {/* Course Type Filter */}
-                  <select
-                    className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-ji-blue-bright text-sm"
-                    value={examCourseFilter}
-                    onChange={(e) => setExamCourseFilter(e.target.value)}
+              {/* Row 2: All other filters */}
+              <div className="flex items-center gap-3 flex-wrap mt-3">
+                {/* Department Filter */}
+                <select
+                  className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-ji-blue-bright text-sm"
+                  value={examDeptFilter}
+                  onChange={(e) => setExamDeptFilter(e.target.value)}
+                >
+                  <option value="all">All Departments</option>
+                  {examDepartments.map(d => (
+                    <option key={d} value={d}>{d}</option>
+                  ))}
+                </select>
+
+                {/* Readiness Filter */}
+                <select
+                  className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-ji-blue-bright text-sm"
+                  value={examReadinessFilter}
+                  onChange={(e) => setExamReadinessFilter(e.target.value)}
+                >
+                  <option value="all">All Readiness</option>
+                  <option value="GREEN">Green - On Track</option>
+                  <option value="YELLOW">Yellow - Needs Attention</option>
+                  <option value="RED">Red - At Risk</option>
+                </select>
+
+                {/* Days Until Exam Filter */}
+                <select
+                  className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-ji-blue-bright text-sm"
+                  value={examDaysFilter}
+                  onChange={(e) => setExamDaysFilter(e.target.value)}
+                >
+                  <option value="all">All Dates</option>
+                  <option value="overdue">Overdue</option>
+                  <option value="today">Today</option>
+                  <option value="tomorrow">Tomorrow</option>
+                  <option value="2-days">Within 2 Days</option>
+                  <option value="3-days">Within 3 Days</option>
+                  <option value="this-week">This Week</option>
+                  <option value="next-week">Next 2 Weeks</option>
+                  <option value="this-month">This Month</option>
+                </select>
+
+                {/* State Filter */}
+                <select
+                  className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-ji-blue-bright text-sm"
+                  value={examStateFilter}
+                  onChange={(e) => setExamStateFilter(e.target.value)}
+                >
+                  <option value="all">All States</option>
+                  {examStates.map(s => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
+
+                {/* Course Type Filter */}
+                <select
+                  className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-ji-blue-bright text-sm"
+                  value={examCourseFilter}
+                  onChange={(e) => setExamCourseFilter(e.target.value)}
+                >
+                  <option value="all">All Courses</option>
+                  {examCourseTypes.map(ct => (
+                    <option key={ct} value={ct}>{ct}</option>
+                  ))}
+                </select>
+
+                {/* Clear Filters Button */}
+                {(examDeptFilter !== 'all' || examReadinessFilter !== 'all' || examDaysFilter !== 'all' || examStateFilter !== 'all' || examCourseFilter !== 'all' || examResultFilter !== 'all' || searchTerm) && (
+                  <button
+                    onClick={() => {
+                      setExamDeptFilter('all')
+                      setExamReadinessFilter('all')
+                      setExamDaysFilter('all')
+                      setExamStateFilter('all')
+                      setExamCourseFilter('all')
+                      setExamResultFilter('all')
+                      setSearchTerm('')
+                    }}
+                    className="px-3 py-2 text-sm text-red-600 hover:bg-red-50 rounded-lg transition-colors border border-red-200"
                   >
-                    <option value="all">All Courses</option>
-                    {examCourseTypes.map(ct => (
-                      <option key={ct} value={ct}>{ct}</option>
-                    ))}
-                  </select>
-                </div>
+                    Clear All
+                  </button>
+                )}
               </div>
 
               <div className="mt-3 text-sm text-gray-500">
-                Showing {filteredExamStudents.length} of {examStudents.length} exam students
+                Showing {filteredExamStudents.length} of {visibleExamStudents.length} exam students
               </div>
             </div>
 

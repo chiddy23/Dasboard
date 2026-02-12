@@ -67,6 +67,10 @@ function ExamTable({ students, onViewStudent }) {
         aValue = (a.passFail || '').toUpperCase() === 'PASS' ? 1 : (a.passFail || '').toUpperCase() === 'FAIL' ? 2 : 3
         bValue = (b.passFail || '').toUpperCase() === 'PASS' ? 1 : (b.passFail || '').toUpperCase() === 'FAIL' ? 2 : 3
         break
+      case 'state':
+        aValue = (a.examState || '').toLowerCase()
+        bValue = (b.examState || '').toLowerCase()
+        break
       case 'course':
         aValue = (a.courseName || '').toLowerCase()
         bValue = (b.courseName || '').toLowerCase()
@@ -108,6 +112,24 @@ function ExamTable({ students, onViewStudent }) {
     const today = new Date()
     today.setHours(0, 0, 0, 0)
     return examDate < today
+  }
+
+  // Compute readiness color for a student
+  const getReadiness = (student) => {
+    const pf = (student.passFail || '').toUpperCase()
+    if (pf === 'PASS') return 'green'
+    if (pf === 'FAIL') return 'red'
+    const progress = student.progress?.value || 0
+    const examTs = parseExamDate(student.examDateRaw || student.examDate)
+    const today = new Date(); today.setHours(0,0,0,0)
+    if (examTs && examTs < today.getTime()) return 'red'
+    const daysUntil = examTs ? Math.ceil((examTs - today.getTime()) / 86400000) : null
+    if (progress >= 80) return 'green'
+    if (progress >= 50) {
+      if (daysUntil !== null && daysUntil <= 3) return 'red'
+      return 'yellow'
+    }
+    return 'red'
   }
 
   if (students.length === 0) {
@@ -181,6 +203,15 @@ function ExamTable({ students, onViewStudent }) {
                 </div>
               </th>
               <th
+                className="cursor-pointer hover:bg-gray-100 min-w-[80px]"
+                onClick={() => handleSort('state')}
+              >
+                <div className="flex items-center space-x-1">
+                  <span>State</span>
+                  <SortIcon field="state" />
+                </div>
+              </th>
+              <th
                 className="cursor-pointer hover:bg-gray-100 min-w-[200px]"
                 onClick={() => handleSort('course')}
               >
@@ -206,6 +237,8 @@ function ExamTable({ students, onViewStudent }) {
               const past = isExamPast(student.examDateRaw || student.examDate)
               const hasPassed = student.passFail?.toUpperCase() === 'PASS'
               const hasFailed = student.passFail?.toUpperCase() === 'FAIL'
+              const readiness = getReadiness(student)
+              const readinessColor = readiness === 'green' ? 'bg-green-500' : readiness === 'yellow' ? 'bg-yellow-400' : 'bg-red-500'
 
               return (
                 <tr
@@ -214,9 +247,12 @@ function ExamTable({ students, onViewStudent }) {
                   style={{ animationDelay: `${index * 20}ms` }}
                 >
                   <td>
-                    <div>
-                      <p className="font-medium text-gray-900">{student.fullName}</p>
-                      <p className="text-sm text-gray-500">{student.email}</p>
+                    <div className="flex items-center gap-2">
+                      <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${readinessColor}`} title={`Readiness: ${readiness}`}></span>
+                      <div>
+                        <p className="font-medium text-gray-900">{student.fullName}</p>
+                        <p className="text-sm text-gray-500">{student.email}</p>
+                      </div>
                     </div>
                   </td>
                   <td>
@@ -253,6 +289,9 @@ function ExamTable({ students, onViewStudent }) {
                     <p className="text-gray-900 text-sm" title={student.departmentName}>
                       {student.departmentName || 'Unknown'}
                     </p>
+                  </td>
+                  <td>
+                    <p className="text-gray-900 text-sm">{student.examState || '—'}</p>
                   </td>
                   <td>
                     <p className="text-gray-900" title={student.courseName}>
