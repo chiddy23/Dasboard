@@ -639,27 +639,39 @@ function StudentModal({ studentId, examInfo, onClose, onSessionExpired, onUpdate
                   <div className="space-y-2">
                     {/* Practice Exams */}
                     {student.readiness.criteria.practiceExams && (
-                      <div className="flex items-center gap-2 bg-white rounded-lg p-2.5">
-                        <span className={`w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 ${
-                          student.readiness.criteria.practiceExams.met ? 'bg-green-500' : 'bg-red-400'
-                        }`}>
-                          {student.readiness.criteria.practiceExams.met ? (
-                            <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" /></svg>
-                          ) : (
-                            <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M6 18L18 6M6 6l12 12" /></svg>
-                          )}
-                        </span>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-gray-900">Practice Exams</p>
-                          <p className="text-xs text-gray-500">
-                            {student.readiness.criteria.practiceExams.consecutivePassing}/3 consecutive passing
-                            {student.readiness.criteria.practiceExams.scores?.length > 0 && (
-                              <span className="ml-1">
-                                (scores: {student.readiness.criteria.practiceExams.scores.map(s => `${s}%`).join(', ')})
-                              </span>
+                      <div className="bg-white rounded-lg p-2.5">
+                        <div className="flex items-center gap-2">
+                          <span className={`w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 ${
+                            student.readiness.criteria.practiceExams.met ? 'bg-green-500' : 'bg-red-400'
+                          }`}>
+                            {student.readiness.criteria.practiceExams.met ? (
+                              <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" /></svg>
+                            ) : (
+                              <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M6 18L18 6M6 6l12 12" /></svg>
                             )}
-                          </p>
+                          </span>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-gray-900">Practice Exams</p>
+                            <p className="text-xs text-gray-500">
+                              {student.readiness.criteria.practiceExams.consecutivePassing}/3 consecutive passing
+                              {' \u2022 '}{student.readiness.criteria.practiceExams.totalExams} attempt{student.readiness.criteria.practiceExams.totalExams !== 1 ? 's' : ''}
+                              {' \u2022 '}{student.readiness.criteria.practiceExams.hoursSpent}h total time
+                            </p>
+                          </div>
                         </div>
+                        {/* Individual attempt details */}
+                        {student.readiness.criteria.practiceExams.attempts?.length > 0 && (
+                          <div className="mt-2 ml-7 space-y-1">
+                            {student.readiness.criteria.practiceExams.attempts.map((attempt, i) => (
+                              <div key={i} className="flex items-center gap-2 text-xs">
+                                <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${attempt.score >= 80 ? 'bg-green-500' : 'bg-red-400'}`}></span>
+                                <span className={`font-medium ${attempt.score >= 80 ? 'text-green-700' : 'text-red-600'}`}>{attempt.score}%</span>
+                                <span className="text-gray-400">{attempt.minutes}m</span>
+                                <span className="text-gray-400 truncate" title={attempt.name}>{attempt.name}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     )}
                     {/* Time in Course */}

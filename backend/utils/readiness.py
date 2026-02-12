@@ -149,6 +149,18 @@ def calculate_readiness(enrollments, course_type=None, days_until_exam=None):
     # Sort by most recent date first
     practice_exams.sort(key=lambda e: _get_enrollment_date(e), reverse=True)
     practice_scores = [_get_enrollment_progress(e) for e in practice_exams]
+    practice_total_minutes = sum(_get_enrollment_minutes(e) for e in practice_exams)
+    practice_total_hours = practice_total_minutes / 60.0
+    # Build detail list: name, score, time, date for each attempt
+    practice_details = []
+    for e in practice_exams:
+        practice_details.append({
+            'name': _get_enrollment_name(e),
+            'score': _get_enrollment_progress(e),
+            'minutes': round(_get_enrollment_minutes(e), 1),
+            'date': _get_enrollment_date(e),
+            'status': _get_enrollment_status(e)
+        })
     consecutive_passing = 0
     for score in practice_scores:
         if score >= 80:
@@ -230,7 +242,9 @@ def calculate_readiness(enrollments, course_type=None, days_until_exam=None):
                 'requirement': '3 consecutive scores >= 80%',
                 'consecutivePassing': consecutive_passing,
                 'scores': practice_scores[:5],  # Show up to 5 most recent
-                'totalExams': len(practice_exams)
+                'totalExams': len(practice_exams),
+                'hoursSpent': round(practice_total_hours, 1),
+                'attempts': practice_details[:10]  # Up to 10 most recent attempts
             },
             'timeInCourse': {
                 'met': time_met,
