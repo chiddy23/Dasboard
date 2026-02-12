@@ -171,7 +171,7 @@ function ExamTable({ students, onViewStudent }) {
                 </div>
               </th>
               <th
-                className="cursor-pointer hover:bg-gray-100 min-w-[160px]"
+                className="cursor-pointer hover:bg-gray-100 min-w-[240px]"
                 onClick={() => handleSort('progress')}
               >
                 <div className="flex items-center space-x-1">
@@ -258,7 +258,7 @@ function ExamTable({ students, onViewStudent }) {
                     )}
                   </td>
                   <td>
-                    <div className="min-w-[160px]">
+                    <div className="min-w-[220px]">
                       <ProgressBar progress={student.progress} />
                       <p className="text-xs text-gray-500 mt-1">Course: {student.timeSpent?.formatted || '0m'}</p>
                       {student.examPrepTime?.minutes > 0 && (
