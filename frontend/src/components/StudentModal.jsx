@@ -654,22 +654,20 @@ function StudentModal({ studentId, examInfo, onClose, onSessionExpired, onUpdate
                             <p className="text-sm font-medium text-gray-900">Practice Exams</p>
                             <p className="text-xs text-gray-500">
                               {student.readiness.criteria.practiceExams.consecutivePassing}/3 consecutive passing
-                              {' \u2022 '}{student.readiness.criteria.practiceExams.totalAttempts || student.readiness.criteria.practiceExams.totalExams} attempt{(student.readiness.criteria.practiceExams.totalAttempts || student.readiness.criteria.practiceExams.totalExams) !== 1 ? 's' : ''}
-                              {' \u2022 '}{student.readiness.criteria.practiceExams.totalExams} exam{student.readiness.criteria.practiceExams.totalExams !== 1 ? 's' : ''}
+                              {' \u2022 '}{student.readiness.criteria.practiceExams.totalExams} exam{student.readiness.criteria.practiceExams.totalExams !== 1 ? 's' : ''} found
                               {' \u2022 '}{student.readiness.criteria.practiceExams.hoursSpent}h total time
                             </p>
                           </div>
                         </div>
-                        {/* Individual attempt details */}
-                        {student.readiness.criteria.practiceExams.attempts?.length > 0 && (
+                        {/* Individual exam details */}
+                        {student.readiness.criteria.practiceExams.details?.length > 0 && (
                           <div className="mt-2 ml-7 space-y-1">
-                            {student.readiness.criteria.practiceExams.attempts.map((attempt, i) => (
+                            {student.readiness.criteria.practiceExams.details.map((detail, i) => (
                               <div key={i} className="flex items-center gap-2 text-xs">
-                                <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${attempt.score >= 80 ? 'bg-green-500' : 'bg-red-400'}`}></span>
-                                <span className={`font-medium ${attempt.score >= 80 ? 'text-green-700' : 'text-red-600'}`}>Score: {attempt.score}%</span>
-                                <span className="text-gray-400">{attempt.minutes}m</span>
-                                {attempt.attempts != null && <span className="text-gray-500">({attempt.attempts} attempt{attempt.attempts !== 1 ? 's' : ''})</span>}
-                                <span className="text-gray-400 truncate" title={attempt.name}>{attempt.name}</span>
+                                <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${detail.score >= 80 ? 'bg-green-500' : 'bg-red-400'}`}></span>
+                                <span className={`font-medium ${detail.score >= 80 ? 'text-green-700' : 'text-red-600'}`}>{Math.round(detail.score * 10) / 10}%</span>
+                                <span className="text-gray-400">{detail.minutes}m</span>
+                                <span className="text-gray-400 truncate" title={detail.name}>{detail.name}</span>
                               </div>
                             ))}
                           </div>
