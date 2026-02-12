@@ -72,8 +72,8 @@ function ExamTable({ students, onViewStudent }) {
         bValue = (b.examState || '').toLowerCase()
         break
       case 'course':
-        aValue = (a.examCourse || a.courseName || '').toLowerCase()
-        bValue = (b.examCourse || b.courseName || '').toLowerCase()
+        aValue = (a.courseName || '').toLowerCase()
+        bValue = (b.courseName || '').toLowerCase()
         break
       default:
         aValue = parseExamDate(a.examDateRaw || a.examDate)
@@ -268,7 +268,7 @@ function ExamTable({ students, onViewStudent }) {
                   </td>
                   <td>
                     <div>
-                      <p className="font-medium text-gray-900">{student.examCourse || student.courseName}</p>
+                      <p className="font-medium text-gray-900">{student.courseName}</p>
                       {student.examState && (
                         <p className="text-xs text-gray-500">{student.examState}</p>
                       )}
