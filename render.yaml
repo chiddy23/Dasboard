@@ -3,7 +3,14 @@ services:
     name: justinsurance-dashboard
     env: python
     buildCommand: |
-      cd frontend && npm install && npm run build && cd ..
+      set -e
+      cd frontend
+      npm install
+      npm run build
+      echo "=== Verifying frontend build ==="
+      ls -la dist/
+      ls -la dist/assets/
+      cd ..
       pip install -r backend/requirements.txt
     startCommand: cd backend && python app.py
     envVars:
