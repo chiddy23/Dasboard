@@ -424,6 +424,7 @@ function StudentModal({ studentId, examInfo, onClose, onSessionExpired, onUpdate
                   </div>
                 )}
                 <div className="flex items-center gap-2">
+                  {console.log('[MODAL DEBUG] editingContact:', editingContact, 'onUpdateStudentContact:', typeof onUpdateStudentContact)}
                   {!editingContact && onUpdateStudentContact && (
                     <button
                       onClick={() => {
