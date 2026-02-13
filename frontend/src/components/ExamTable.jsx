@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback } from 'react'
+import React, { useState, useMemo } from 'react'
 import StatusBadge from './StatusBadge'
 import ProgressBar from './ProgressBar'
 
@@ -6,16 +6,14 @@ function ExamTable({ students, onViewStudent, adminMode }) {
   const [sortField, setSortField] = useState('examDate')
   const [sortDirection, setSortDirection] = useState('asc')
 
-  const handleSort = useCallback((field) => {
-    setSortField(prev => {
-      if (prev === field) {
-        setSortDirection(d => d === 'asc' ? 'desc' : 'asc')
-        return prev
-      }
+  const handleSort = (field) => {
+    if (sortField === field) {
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc')
+    } else {
+      setSortField(field)
       setSortDirection('asc')
-      return field
-    })
-  }, [])
+    }
+  }
 
   const parseExamDate = (dateStr) => {
     if (!dateStr) return 0
