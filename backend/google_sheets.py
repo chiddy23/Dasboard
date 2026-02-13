@@ -113,7 +113,13 @@ def fetch_exam_sheet():
             'weeklyTracking': weekly,
         })
 
-    print(f"[SHEET] Parsed {len(students)} exam students")
+    # Deduplicate by email (keep last occurrence, which is the most recent row)
+    seen = {}
+    for s in students:
+        seen[s['email']] = s
+    students = list(seen.values())
+
+    print(f"[SHEET] Parsed {len(students)} unique exam students")
 
     _sheet_cache['data'] = students
     _sheet_cache['timestamp'] = now

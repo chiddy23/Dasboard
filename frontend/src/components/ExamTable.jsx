@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState } from 'react'
 import StatusBadge from './StatusBadge'
 import ProgressBar from './ProgressBar'
 
@@ -38,56 +38,52 @@ function ExamTable({ students, onViewStudent, adminMode }) {
     return 0
   }
 
-  const sortedStudents = useMemo(() => {
-    const arr = [...students]
-    arr.sort((a, b) => {
-      let aValue, bValue
+  const sortedStudents = [...students].sort((a, b) => {
+    let aValue, bValue
 
-      switch (sortField) {
-        case 'name':
-          aValue = (a.fullName || '').toLowerCase()
-          bValue = (b.fullName || '').toLowerCase()
-          break
-        case 'status':
-          aValue = a.status?.priority ?? 99
-          bValue = b.status?.priority ?? 99
-          break
-        case 'examDate':
-          aValue = parseExamDate(a.examDateRaw || a.examDate)
-          bValue = parseExamDate(b.examDateRaw || b.examDate)
-          break
-        case 'department':
-          aValue = (a.departmentName || '').toLowerCase()
-          bValue = (b.departmentName || '').toLowerCase()
-          break
-        case 'progress':
-          aValue = a.progress?.value ?? 0
-          bValue = b.progress?.value ?? 0
-          break
-        case 'result':
-          // PASS=1 (top), FAIL=2, no result=3
-          aValue = (a.passFail || '').toUpperCase() === 'PASS' ? 1 : (a.passFail || '').toUpperCase() === 'FAIL' ? 2 : 3
-          bValue = (b.passFail || '').toUpperCase() === 'PASS' ? 1 : (b.passFail || '').toUpperCase() === 'FAIL' ? 2 : 3
-          break
-        case 'state':
-          aValue = (a.examState || '').toLowerCase()
-          bValue = (b.examState || '').toLowerCase()
-          break
-        case 'course':
-          aValue = (a.courseName || '').toLowerCase()
-          bValue = (b.courseName || '').toLowerCase()
-          break
-        default:
-          aValue = parseExamDate(a.examDateRaw || a.examDate)
-          bValue = parseExamDate(b.examDateRaw || b.examDate)
-      }
+    switch (sortField) {
+      case 'name':
+        aValue = (a.fullName || '').toLowerCase()
+        bValue = (b.fullName || '').toLowerCase()
+        break
+      case 'status':
+        aValue = a.status?.priority ?? 99
+        bValue = b.status?.priority ?? 99
+        break
+      case 'examDate':
+        aValue = parseExamDate(a.examDateRaw || a.examDate)
+        bValue = parseExamDate(b.examDateRaw || b.examDate)
+        break
+      case 'department':
+        aValue = (a.departmentName || '').toLowerCase()
+        bValue = (b.departmentName || '').toLowerCase()
+        break
+      case 'progress':
+        aValue = a.progress?.value ?? 0
+        bValue = b.progress?.value ?? 0
+        break
+      case 'result':
+        // PASS=1 (top), FAIL=2, no result=3
+        aValue = (a.passFail || '').toUpperCase() === 'PASS' ? 1 : (a.passFail || '').toUpperCase() === 'FAIL' ? 2 : 3
+        bValue = (b.passFail || '').toUpperCase() === 'PASS' ? 1 : (b.passFail || '').toUpperCase() === 'FAIL' ? 2 : 3
+        break
+      case 'state':
+        aValue = (a.examState || '').toLowerCase()
+        bValue = (b.examState || '').toLowerCase()
+        break
+      case 'course':
+        aValue = (a.courseName || '').toLowerCase()
+        bValue = (b.courseName || '').toLowerCase()
+        break
+      default:
+        aValue = parseExamDate(a.examDateRaw || a.examDate)
+        bValue = parseExamDate(b.examDateRaw || b.examDate)
+    }
 
-      if (aValue < bValue) return sortDirection === 'asc' ? -1 : 1
-      if (aValue > bValue) return sortDirection === 'asc' ? 1 : -1
-      return 0
-    })
-    return arr
-  }, [students, sortField, sortDirection])
+    if (aValue < bValue) return sortDirection === 'asc' ? -1 : 1
+    if (aValue > bValue) return sortDirection === 'asc' ? 1 : -1
+    return 0
+  })
 
   const SortIcon = ({ field }) => {
     if (sortField !== field) {
