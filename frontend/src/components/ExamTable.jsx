@@ -1,19 +1,21 @@
-import React, { useState } from 'react'
+import React, { useState, useMemo, useCallback } from 'react'
 import StatusBadge from './StatusBadge'
 import ProgressBar from './ProgressBar'
 
-function ExamTable({ students, onViewStudent }) {
+function ExamTable({ students, onViewStudent, adminMode }) {
   const [sortField, setSortField] = useState('examDate')
   const [sortDirection, setSortDirection] = useState('asc')
 
-  const handleSort = (field) => {
-    if (sortField === field) {
-      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc')
-    } else {
-      setSortField(field)
+  const handleSort = useCallback((field) => {
+    setSortField(prev => {
+      if (prev === field) {
+        setSortDirection(d => d === 'asc' ? 'desc' : 'asc')
+        return prev
+      }
       setSortDirection('asc')
-    }
-  }
+      return field
+    })
+  }, [])
 
   const parseExamDate = (dateStr) => {
     if (!dateStr) return 0
@@ -38,52 +40,56 @@ function ExamTable({ students, onViewStudent }) {
     return 0
   }
 
-  const sortedStudents = [...students].sort((a, b) => {
-    let aValue, bValue
+  const sortedStudents = useMemo(() => {
+    const arr = [...students]
+    arr.sort((a, b) => {
+      let aValue, bValue
 
-    switch (sortField) {
-      case 'name':
-        aValue = (a.fullName || '').toLowerCase()
-        bValue = (b.fullName || '').toLowerCase()
-        break
-      case 'status':
-        aValue = a.status?.priority ?? 99
-        bValue = b.status?.priority ?? 99
-        break
-      case 'examDate':
-        aValue = parseExamDate(a.examDateRaw || a.examDate)
-        bValue = parseExamDate(b.examDateRaw || b.examDate)
-        break
-      case 'department':
-        aValue = (a.departmentName || '').toLowerCase()
-        bValue = (b.departmentName || '').toLowerCase()
-        break
-      case 'progress':
-        aValue = a.progress?.value ?? 0
-        bValue = b.progress?.value ?? 0
-        break
-      case 'result':
-        // PASS=1 (top), FAIL=2, no result=3
-        aValue = (a.passFail || '').toUpperCase() === 'PASS' ? 1 : (a.passFail || '').toUpperCase() === 'FAIL' ? 2 : 3
-        bValue = (b.passFail || '').toUpperCase() === 'PASS' ? 1 : (b.passFail || '').toUpperCase() === 'FAIL' ? 2 : 3
-        break
-      case 'state':
-        aValue = (a.examState || '').toLowerCase()
-        bValue = (b.examState || '').toLowerCase()
-        break
-      case 'course':
-        aValue = (a.courseName || '').toLowerCase()
-        bValue = (b.courseName || '').toLowerCase()
-        break
-      default:
-        aValue = parseExamDate(a.examDateRaw || a.examDate)
-        bValue = parseExamDate(b.examDateRaw || b.examDate)
-    }
+      switch (sortField) {
+        case 'name':
+          aValue = (a.fullName || '').toLowerCase()
+          bValue = (b.fullName || '').toLowerCase()
+          break
+        case 'status':
+          aValue = a.status?.priority ?? 99
+          bValue = b.status?.priority ?? 99
+          break
+        case 'examDate':
+          aValue = parseExamDate(a.examDateRaw || a.examDate)
+          bValue = parseExamDate(b.examDateRaw || b.examDate)
+          break
+        case 'department':
+          aValue = (a.departmentName || '').toLowerCase()
+          bValue = (b.departmentName || '').toLowerCase()
+          break
+        case 'progress':
+          aValue = a.progress?.value ?? 0
+          bValue = b.progress?.value ?? 0
+          break
+        case 'result':
+          // PASS=1 (top), FAIL=2, no result=3
+          aValue = (a.passFail || '').toUpperCase() === 'PASS' ? 1 : (a.passFail || '').toUpperCase() === 'FAIL' ? 2 : 3
+          bValue = (b.passFail || '').toUpperCase() === 'PASS' ? 1 : (b.passFail || '').toUpperCase() === 'FAIL' ? 2 : 3
+          break
+        case 'state':
+          aValue = (a.examState || '').toLowerCase()
+          bValue = (b.examState || '').toLowerCase()
+          break
+        case 'course':
+          aValue = (a.courseName || '').toLowerCase()
+          bValue = (b.courseName || '').toLowerCase()
+          break
+        default:
+          aValue = parseExamDate(a.examDateRaw || a.examDate)
+          bValue = parseExamDate(b.examDateRaw || b.examDate)
+      }
 
-    if (aValue < bValue) return sortDirection === 'asc' ? -1 : 1
-    if (aValue > bValue) return sortDirection === 'asc' ? 1 : -1
-    return 0
-  })
+      if (aValue < bValue) return sortDirection === 'asc' ? -1 : 1
+      if (aValue > bValue) return sortDirection === 'asc' ? 1 : -1
+      return 0
+    })
+    return arr
+  }, [students, sortField, sortDirection])
 
   const SortIcon = ({ field }) => {
     if (sortField !== field) {
@@ -146,7 +152,7 @@ function ExamTable({ students, onViewStudent }) {
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
         </svg>
-        <span>Scroll horizontally to see all columns • Click "View" to edit exam dates</span>
+        <span>Scroll horizontally to see all columns {'\u2022'} Click "View" to edit exam dates</span>
       </div>
       <div className="table-scroll-wrapper">
         <table className="data-table min-w-full">
@@ -161,6 +167,17 @@ function ExamTable({ students, onViewStudent }) {
                   <SortIcon field="name" />
                 </div>
               </th>
+              {adminMode && (
+                <th
+                  className="cursor-pointer hover:bg-gray-100 min-w-[130px]"
+                  onClick={() => handleSort('department')}
+                >
+                  <div className="flex items-center space-x-1">
+                    <span>Department</span>
+                    <SortIcon field="department" />
+                  </div>
+                </th>
+              )}
               <th
                 className="cursor-pointer hover:bg-gray-100 min-w-[100px]"
                 onClick={() => handleSort('status')}
@@ -206,15 +223,17 @@ function ExamTable({ students, onViewStudent }) {
                   <SortIcon field="result" />
                 </div>
               </th>
-              <th
-                className="cursor-pointer hover:bg-gray-100 min-w-[130px]"
-                onClick={() => handleSort('department')}
-              >
-                <div className="flex items-center space-x-1">
-                  <span>Department</span>
-                  <SortIcon field="department" />
-                </div>
-              </th>
+              {!adminMode && (
+                <th
+                  className="cursor-pointer hover:bg-gray-100 min-w-[130px]"
+                  onClick={() => handleSort('department')}
+                >
+                  <div className="flex items-center space-x-1">
+                    <span>Department</span>
+                    <SortIcon field="department" />
+                  </div>
+                </th>
+              )}
               <th
                 className="cursor-pointer hover:bg-gray-100 min-w-[70px]"
                 onClick={() => handleSort('state')}
@@ -250,6 +269,13 @@ function ExamTable({ students, onViewStudent }) {
                       </div>
                     </div>
                   </td>
+                  {adminMode && (
+                    <td>
+                      <p className="text-gray-900 text-sm" title={student.departmentName}>
+                        {student.departmentName || 'Unknown'}
+                      </p>
+                    </td>
+                  )}
                   <td>
                     {student.matched !== false ? (
                       <StatusBadge status={student.status} />
@@ -291,16 +317,18 @@ function ExamTable({ students, onViewStudent }) {
                         FAIL
                       </span>
                     ) : (
-                      <span className="text-gray-400 text-sm">—</span>
+                      <span className="text-gray-400 text-sm">{'\u2014'}</span>
                     )}
                   </td>
+                  {!adminMode && (
+                    <td>
+                      <p className="text-gray-900 text-sm" title={student.departmentName}>
+                        {student.departmentName || 'Unknown'}
+                      </p>
+                    </td>
+                  )}
                   <td>
-                    <p className="text-gray-900 text-sm" title={student.departmentName}>
-                      {student.departmentName || 'Unknown'}
-                    </p>
-                  </td>
-                  <td>
-                    <p className="text-gray-900 text-sm">{student.examState || '—'}</p>
+                    <p className="text-gray-900 text-sm">{student.examState || '\u2014'}</p>
                   </td>
                   <td className="sticky right-0 bg-white">
                     <button

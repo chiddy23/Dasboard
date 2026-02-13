@@ -1139,6 +1139,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
               <ExamTable
                 students={filteredExamStudents}
                 onViewStudent={setSelectedStudent}
+                adminMode={adminMode}
               />
             )}
           </>
