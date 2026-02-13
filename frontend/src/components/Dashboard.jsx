@@ -40,7 +40,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
   // Filtering and search
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
-  const [examResultFilter, setExamResultFilter] = useState('all')
+  const [examResultFilter, setExamResultFilter] = useState('no-result')
   const [examCourseFilter, setExamCourseFilter] = useState('all')
   const [examDeptFilter, setExamDeptFilter] = useState('all')
   const [examStateFilter, setExamStateFilter] = useState('all')
@@ -472,6 +472,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
       switch (examResultFilter) {
         case 'passed': matchesResult = pf === 'PASS'; break
         case 'failed': matchesResult = pf === 'FAIL'; break
+        case 'no-result': matchesResult = !hasResult; break
         case 'upcoming': matchesResult = !isPast && !hasResult; break
         case 'pending': matchesResult = isPast && !hasResult; break
         case 'at-risk':
@@ -1029,6 +1030,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
                   value={examResultFilter}
                   onChange={(e) => setExamResultFilter(e.target.value)}
                 >
+                  <option value="no-result">No Result</option>
                   <option value="all">All Results</option>
                   <option value="upcoming">Upcoming</option>
                   <option value="passed">Passed</option>
