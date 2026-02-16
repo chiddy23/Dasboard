@@ -279,7 +279,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
     const now = Date.now()
     let upcoming = 0, atRisk = 0
     students.forEach(s => {
-      const dt = s.examDateRaw ? new Date(s.examDateRaw).getTime() : 0
+      const dt = parseExamDateRaw(s.examDateRaw)
       const hasResult = (s.passFail || '').trim() !== ''
       if (dt > now && !hasResult) {
         upcoming++
@@ -423,10 +423,27 @@ function Dashboard({ user, department, onLogout, initialData }) {
     return 'RED'
   }
 
+  // Parse examDateRaw which can be M/D/YYYY (sheet) or YYYY-MM-DD (override)
+  const parseExamDateRaw = (raw) => {
+    if (!raw) return 0
+    // YYYY-MM-DD format (from date overrides)
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+      return new Date(raw + 'T00:00:00').getTime()
+    }
+    // M/D/YYYY format (from Google Sheet CSV)
+    const parts = raw.split('/')
+    if (parts.length === 3) {
+      return new Date(parts[2], parts[0] - 1, parts[1]).getTime()
+    }
+    // Fallback
+    const d = new Date(raw)
+    return isNaN(d.getTime()) ? 0 : d.getTime()
+  }
+
   // Helper: compute days until exam and check filter match
   const matchesDaysFilter = (student, filter) => {
     if (filter === 'all') return true
-    const examDateTs = student.examDateRaw ? new Date(student.examDateRaw + 'T00:00:00').getTime() : 0
+    const examDateTs = parseExamDateRaw(student.examDateRaw)
     if (!examDateTs) return filter === 'no-date'
 
     const today = new Date()
@@ -463,7 +480,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
     let matchesResult = true
     if (examResultFilter !== 'all') {
       const pf = (student.passFail || '').toUpperCase()
-      const examDateTs = student.examDateRaw ? new Date(student.examDateRaw + 'T00:00:00').getTime() : 0
+      const examDateTs = parseExamDateRaw(student.examDateRaw)
       const today = new Date()
       today.setHours(0, 0, 0, 0)
       const isPast = examDateTs && examDateTs < today.getTime()
