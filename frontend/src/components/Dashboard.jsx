@@ -410,7 +410,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
     return matchesSearch && matchesStatus
   })
 
-  // Helper: compute readiness for an exam student (GREEN/YELLOW/RED)
+  // Helper: compute readiness for an exam student (GREEN/YELLOW/RED/GRAY)
   const getReadiness = (student) => {
     const pf = (student.passFail || '').toUpperCase()
     if (pf === 'PASS') return 'GREEN'
@@ -419,8 +419,8 @@ function Dashboard({ user, department, onLogout, initialData }) {
     if (student.readiness?.status) {
       return student.readiness.status
     }
-    // Fallback for unmatched students
-    return 'RED'
+    // No result and no readiness data = neutral (not red)
+    return 'GRAY'
   }
 
   // Parse examDateRaw which can be M/D/YYYY (sheet) or YYYY-MM-DD (override)
