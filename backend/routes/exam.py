@@ -28,14 +28,28 @@ _exam_absorb_cache = {}
 _exam_absorb_timestamp = None
 EXAM_ABSORB_CACHE_TTL = 300  # 5 minutes
 
-# In-memory pass/fail overrides (email -> 'PASS'|'FAIL')
+# Load persistent overrides from SQLite into memory (survives restarts)
+def _load_overrides():
+    """Load saved overrides from SQLite into in-memory dicts."""
+    global _passfail_overrides, _exam_date_overrides
+    try:
+        from snapshot_db import get_all_overrides
+        overrides = get_all_overrides()
+        for email, row in overrides.items():
+            if row.get('pass_fail'):
+                _passfail_overrides[email] = row['pass_fail']
+            if row.get('exam_date'):
+                _exam_date_overrides[email] = {
+                    'date': row['exam_date'],
+                    'time': row.get('exam_time', '')
+                }
+        print(f"[EXAM] Loaded {len(_passfail_overrides)} pass/fail and {len(_exam_date_overrides)} date overrides from DB")
+    except Exception as e:
+        print(f"[EXAM] Failed to load overrides from DB: {e}")
+
 _passfail_overrides = {}
-
-# In-memory exam date overrides (email -> {'date': 'YYYY-MM-DD', 'time': 'HH:MM AM/PM'})
 _exam_date_overrides = {}
-
-# In-memory exam result snapshots (email -> list of snapshot dicts)
-_exam_result_snapshots = {}
+_load_overrides()
 
 
 def get_department_name(client, department_id):
@@ -521,10 +535,13 @@ def update_exam_result():
 
     if result:
         _passfail_overrides[email] = result
-        print(f"[EXAM] Pass/fail override set: {email} -> {result}")
     else:
         _passfail_overrides.pop(email, None)
-        print(f"[EXAM] Pass/fail override cleared: {email}")
+
+    # Persist to SQLite
+    from snapshot_db import set_override
+    set_override(email, pass_fail=result)
+    print(f"[EXAM] Pass/fail override saved: {email} -> {result or '(cleared)'}")
 
     return jsonify({'success': True, 'email': email, 'result': result})
 
@@ -565,7 +582,11 @@ def update_exam_date():
         'date': new_date,
         'time': new_time
     }
-    print(f"[EXAM] Exam date override set: {email} -> {new_date} {new_time}")
+
+    # Persist to SQLite
+    from snapshot_db import set_override
+    set_override(email, exam_date=new_date, exam_time=new_time)
+    print(f"[EXAM] Exam date override saved: {email} -> {new_date} {new_time}")
 
     return jsonify({'success': True, 'email': email, 'date': new_date, 'time': new_time})
 
@@ -631,10 +652,12 @@ def record_exam_result():
         _exam_result_snapshots[email] = []
     _exam_result_snapshots[email].append(snapshot)
 
-    # Also set the pass/fail override
+    # Also set the pass/fail override and persist to SQLite
     _passfail_overrides[email] = result
+    from snapshot_db import set_override
+    set_override(email, pass_fail=result)
 
-    print(f"[EXAM] Result recorded: {email} -> {result} (snapshot #{len(_exam_result_snapshots[email])})")
+    print(f"[EXAM] Result recorded and saved: {email} -> {result}")
 
     return jsonify({
         'success': True,

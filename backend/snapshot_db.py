@@ -51,6 +51,16 @@ def init_db():
     )''')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_snap_email ON study_snapshots(email)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_snap_time ON study_snapshots(snapshot_time)')
+
+    # Exam overrides table (persists pass/fail and date changes across restarts)
+    conn.execute('''CREATE TABLE IF NOT EXISTS exam_overrides (
+        email TEXT PRIMARY KEY,
+        pass_fail TEXT DEFAULT '',
+        exam_date TEXT DEFAULT '',
+        exam_time TEXT DEFAULT '',
+        updated_at TEXT NOT NULL
+    )''')
+
     conn.commit()
     conn.close()
 
@@ -188,6 +198,50 @@ def cleanup_old_snapshots(days=90):
     conn.close()
     if deleted:
         print(f"[SNAPSHOTS] Cleaned up {deleted} snapshots older than {days} days")
+
+
+def set_override(email, pass_fail=None, exam_date=None, exam_time=None):
+    """Set or update an exam override for a student."""
+    email = email.lower().strip()
+    conn = _get_connection()
+    existing = conn.execute('SELECT * FROM exam_overrides WHERE email = ?', (email,)).fetchone()
+    now = datetime.utcnow().isoformat()
+
+    if existing:
+        updates = []
+        params = []
+        if pass_fail is not None:
+            updates.append('pass_fail = ?')
+            params.append(pass_fail)
+        if exam_date is not None:
+            updates.append('exam_date = ?')
+            params.append(exam_date)
+        if exam_time is not None:
+            updates.append('exam_time = ?')
+            params.append(exam_time)
+        updates.append('updated_at = ?')
+        params.append(now)
+        params.append(email)
+        conn.execute(f'UPDATE exam_overrides SET {", ".join(updates)} WHERE email = ?', params)
+    else:
+        conn.execute(
+            'INSERT INTO exam_overrides (email, pass_fail, exam_date, exam_time, updated_at) VALUES (?, ?, ?, ?, ?)',
+            (email, pass_fail or '', exam_date or '', exam_time or '', now)
+        )
+    conn.commit()
+    conn.close()
+
+
+def get_all_overrides():
+    """Get all exam overrides as dicts keyed by email."""
+    conn = _get_connection()
+    rows = conn.execute('SELECT * FROM exam_overrides').fetchall()
+    conn.close()
+    overrides = {}
+    for r in rows:
+        row = dict(r)
+        overrides[row['email']] = row
+    return overrides
 
 
 # Initialize DB on import
