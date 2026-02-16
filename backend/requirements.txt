@@ -16,3 +16,7 @@ gunicorn==21.2.0
 
 # Date/time utilities
 python-dateutil==2.8.2
+
+# Google Sheets API (write pass/fail results back to sheet)
+gspread>=6.0.0
+google-auth>=2.27.0

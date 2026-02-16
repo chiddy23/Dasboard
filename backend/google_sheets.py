@@ -132,3 +132,74 @@ def invalidate_sheet_cache():
     _sheet_cache['data'] = None
     _sheet_cache['timestamp'] = None
     print("[SHEET] Cache invalidated")
+
+
+def _get_gspread_client():
+    """Get authenticated gspread client using service account credentials."""
+    import json
+    import gspread
+    from google.oauth2.service_account import Credentials
+
+    from config import Config
+    creds_json = Config.GOOGLE_SHEETS_CREDENTIALS_JSON
+    if not creds_json:
+        return None
+
+    creds_data = json.loads(creds_json)
+    scopes = ['https://www.googleapis.com/auth/spreadsheets']
+    credentials = Credentials.from_service_account_info(creds_data, scopes=scopes)
+    return gspread.authorize(credentials)
+
+
+def update_sheet_passfail(email, result):
+    """Write pass/fail result back to the Google Sheet's Pass/Fail column.
+
+    Finds the row by email, then updates the Pass/Fail cell.
+    Non-fatal: logs errors but doesn't raise.
+    """
+    try:
+        gc = _get_gspread_client()
+        if not gc:
+            print("[SHEET WRITE] No Google Sheets credentials configured, skipping write-back")
+            return False
+
+        from config import Config
+        sheet = gc.open_by_key(Config.GOOGLE_SHEET_ID).sheet1
+
+        # Find the email column and pass/fail column
+        headers = sheet.row_values(1)
+        email_col = None
+        pf_col = None
+        for i, h in enumerate(headers, 1):
+            if h.strip().lower() == 'email':
+                email_col = i
+            if h.strip().lower() == 'pass/fail':
+                pf_col = i
+
+        if not email_col or not pf_col:
+            print(f"[SHEET WRITE] Could not find Email (col {email_col}) or Pass/Fail (col {pf_col}) columns")
+            return False
+
+        # Find the row with this email
+        email_cells = sheet.col_values(email_col)
+        row_num = None
+        for i, cell_val in enumerate(email_cells, 1):
+            if cell_val.strip().lower() == email.lower().strip():
+                row_num = i
+                break
+
+        if not row_num:
+            print(f"[SHEET WRITE] Email {email} not found in sheet")
+            return False
+
+        # Update the pass/fail cell
+        sheet.update_cell(row_num, pf_col, result)
+        print(f"[SHEET WRITE] Updated row {row_num}: {email} -> {result}")
+
+        # Invalidate cache so next read picks up the change
+        invalidate_sheet_cache()
+        return True
+
+    except Exception as e:
+        print(f"[SHEET WRITE] Failed to write pass/fail for {email}: {e}")
+        return False

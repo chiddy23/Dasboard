@@ -31,6 +31,7 @@ class Config:
     ABSORB_CLIENT_SECRET = os.getenv('ABSORB_CLIENT_SECRET')
 
     GOOGLE_SHEET_ID = os.getenv('GOOGLE_SHEET_ID', '1Hc7IUA8bZceLFlLdOPuGckDuV0MtqRcb5DPLeMhncbo')
+    GOOGLE_SHEETS_CREDENTIALS_JSON = os.getenv('GOOGLE_SHEETS_CREDENTIALS_JSON', '')
 
     # SQLite snapshot database
     SNAPSHOT_DB_PATH = os.getenv('SNAPSHOT_DB_PATH', os.path.join(os.path.dirname(__file__), 'data', 'snapshots.db'))

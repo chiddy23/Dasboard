@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from absorb_api import AbsorbAPIClient, AbsorbAPIError
 from middleware import login_required
 from utils import format_student_for_response
-from google_sheets import fetch_exam_sheet, invalidate_sheet_cache, parse_exam_date_for_sort
+from google_sheets import fetch_exam_sheet, invalidate_sheet_cache, parse_exam_date_for_sort, update_sheet_passfail
 from utils.readiness import calculate_readiness
 from utils.gap_metrics import calculate_gap_metrics
 
@@ -49,6 +49,7 @@ def _load_overrides():
 
 _passfail_overrides = {}
 _exam_date_overrides = {}
+_exam_result_snapshots = {}
 _load_overrides()
 
 
@@ -543,6 +544,10 @@ def update_exam_result():
     set_override(email, pass_fail=result)
     print(f"[EXAM] Pass/fail override saved: {email} -> {result or '(cleared)'}")
 
+    # Write back to Google Sheet (non-blocking, non-fatal)
+    if result:
+        update_sheet_passfail(email, result)
+
     return jsonify({'success': True, 'email': email, 'result': result})
 
 
@@ -656,6 +661,9 @@ def record_exam_result():
     _passfail_overrides[email] = result
     from snapshot_db import set_override
     set_override(email, pass_fail=result)
+
+    # Write back to Google Sheet (non-blocking, non-fatal)
+    update_sheet_passfail(email, result)
 
     print(f"[EXAM] Result recorded and saved: {email} -> {result}")
 
