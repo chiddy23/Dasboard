@@ -15,26 +15,33 @@ function ExamTable({ students, onViewStudent, adminMode }) {
     }
   }
 
+  // Parse exam date to LOCAL midnight timestamp, handling all formats
   const parseExamDate = (dateStr) => {
     if (!dateStr) return 0
-    const formats = [
-      // "Jan 9, 2026" format (backend formatted)
-      (s) => new Date(s),
-      // "1/9/2026" format (raw)
-      (s) => {
-        const parts = s.split('/')
-        if (parts.length === 3) {
-          return new Date(parts[2], parts[0] - 1, parts[1])
-        }
-        return new Date(0)
-      }
-    ]
-    for (const parse of formats) {
-      try {
-        const d = parse(dateStr)
-        if (!isNaN(d.getTime())) return d.getTime()
-      } catch (e) { /* continue */ }
+    const str = dateStr.trim()
+
+    // Try M/D/YYYY or M/D/YY (from Google Sheet CSV) - parse explicitly to avoid timezone issues
+    const slashParts = str.split('/')
+    if (slashParts.length === 3) {
+      let year = parseInt(slashParts[2], 10)
+      if (year < 100) year += 2000 // 2-digit year fix
+      const d = new Date(year, parseInt(slashParts[0], 10) - 1, parseInt(slashParts[1], 10))
+      if (!isNaN(d.getTime())) return d.getTime()
     }
+
+    // Try YYYY-MM-DD (from date overrides) - parse as LOCAL, not UTC
+    const isoParts = str.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+    if (isoParts) {
+      const d = new Date(parseInt(isoParts[1], 10), parseInt(isoParts[2], 10) - 1, parseInt(isoParts[3], 10))
+      if (!isNaN(d.getTime())) return d.getTime()
+    }
+
+    // Fallback: "Feb 17, 2026" or other text format - force to local midnight
+    const d = new Date(str)
+    if (!isNaN(d.getTime())) {
+      return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+    }
+
     return 0
   }
 
@@ -42,13 +49,16 @@ function ExamTable({ students, onViewStudent, adminMode }) {
   const getDateGroup = (student) => {
     const ts = parseExamDate(student.examDateRaw || student.examDate)
     if (!ts) return 'upcoming' // No date = treat as upcoming/TBD
+
     const examDate = new Date(ts)
-    examDate.setHours(0, 0, 0, 0)
     const today = new Date()
-    today.setHours(0, 0, 0, 0)
-    const diff = examDate.getTime() - today.getTime()
-    if (diff === 0) return 'today'
-    if (diff > 0) return 'upcoming'
+
+    // Compare year/month/day directly to avoid any timezone/millisecond issues
+    const ey = examDate.getFullYear(), em = examDate.getMonth(), ed = examDate.getDate()
+    const ty = today.getFullYear(), tm = today.getMonth(), td = today.getDate()
+
+    if (ey === ty && em === tm && ed === td) return 'today'
+    if (new Date(ey, em, ed) > new Date(ty, tm, td)) return 'upcoming'
     return 'past'
   }
 
