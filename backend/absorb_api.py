@@ -500,24 +500,27 @@ class AbsorbAPIClient:
         all_prelicensing = ([prelicensing_main] if prelicensing_main else []) + prelicensing_chapters
 
         if all_prelicensing:
-            # Calculate average progress across all Pre-Licensing enrollments
-            valid_progress = []
-            for e in all_prelicensing:
-                # Handle progress (might be string or number)
-                prog = e.get('progress') or e.get('Progress') or 0
-                try:
-                    prog = float(prog) if prog else 0
-                    valid_progress.append(prog)
-                except (ValueError, TypeError):
-                    pass
-
-            if valid_progress:
-                avg_progress = sum(valid_progress) / len(valid_progress)
-            else:
-                avg_progress = 0
-
-            # Use only the main pre-licensing course's time (not chapters/modules)
+            # Use main pre-licensing course's progress directly (Absorb tracks true overall %)
+            # Only fall back to averaging chapters if no main course exists
             primary = prelicensing_main or all_prelicensing[0]
+
+            if prelicensing_main:
+                prog = prelicensing_main.get('progress') or prelicensing_main.get('Progress') or 0
+                try:
+                    avg_progress = float(prog) if prog else 0
+                except (ValueError, TypeError):
+                    avg_progress = 0
+            else:
+                # No main course found, average chapter progress as fallback
+                valid_progress = []
+                for e in all_prelicensing:
+                    prog = e.get('progress') or e.get('Progress') or 0
+                    try:
+                        prog = float(prog) if prog else 0
+                        valid_progress.append(prog)
+                    except (ValueError, TypeError):
+                        pass
+                avg_progress = sum(valid_progress) / len(valid_progress) if valid_progress else 0
             time_val = primary.get('timeSpent') or primary.get('TimeSpent') or primary.get('ActiveTime') or primary.get('activeTime') or 0
             main_time = parse_time_to_minutes(time_val)
 

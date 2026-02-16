@@ -106,7 +106,6 @@ function EnrollmentCard({ enrollment, isModule = false }) {
 // Course Group Component
 function CourseGroup({ title, icon, color, enrollments, defaultExpanded = true }) {
   const [expanded, setExpanded] = useState(defaultExpanded)
-  const groupProgress = calculateGroupProgress(enrollments)
 
   if (!enrollments.length) return null
 
@@ -115,6 +114,9 @@ function CourseGroup({ title, icon, color, enrollments, defaultExpanded = true }
     const name = (e.courseName || '').toLowerCase()
     return !name.includes('module') && !name.includes('chapter') && !name.includes('lesson')
   }) || enrollments[0]
+
+  // Use main course progress directly (Absorb tracks true overall %)
+  const groupProgress = Math.round(mainCourse.progress?.value ?? mainCourse.progress ?? 0)
 
   const modules = enrollments.filter(e => e.id !== mainCourse.id)
 
