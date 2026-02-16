@@ -89,8 +89,9 @@ function ExamTable({ students, onViewStudent, adminMode }) {
           bValue = b.progress?.value ?? 0
           break
         case 'result':
-          aValue = (a.passFail || '').toUpperCase() === 'PASS' ? 1 : (a.passFail || '').toUpperCase() === 'FAIL' ? 2 : 3
-          bValue = (b.passFail || '').toUpperCase() === 'PASS' ? 1 : (b.passFail || '').toUpperCase() === 'FAIL' ? 2 : 3
+          // PASS=1 (top), No result=2 (middle), FAIL=3 (bottom)
+          aValue = (a.passFail || '').toUpperCase() === 'PASS' ? 1 : (a.passFail || '').toUpperCase() === 'FAIL' ? 3 : 2
+          bValue = (b.passFail || '').toUpperCase() === 'PASS' ? 1 : (b.passFail || '').toUpperCase() === 'FAIL' ? 3 : 2
           break
         case 'state':
           aValue = (a.examState || '').toLowerCase()
