@@ -38,52 +38,100 @@ function ExamTable({ students, onViewStudent, adminMode }) {
     return 0
   }
 
-  const sortedStudents = [...students].sort((a, b) => {
-    let aValue, bValue
+  // Classify a student's exam date relative to today
+  const getDateGroup = (student) => {
+    const ts = parseExamDate(student.examDateRaw || student.examDate)
+    if (!ts) return 'upcoming' // No date = treat as upcoming/TBD
+    const examDate = new Date(ts)
+    examDate.setHours(0, 0, 0, 0)
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    const diff = examDate.getTime() - today.getTime()
+    if (diff === 0) return 'today'
+    if (diff > 0) return 'upcoming'
+    return 'past'
+  }
 
-    switch (sortField) {
-      case 'name':
-        aValue = (a.fullName || '').toLowerCase()
-        bValue = (b.fullName || '').toLowerCase()
-        break
-      case 'status':
-        aValue = a.status?.priority ?? 99
-        bValue = b.status?.priority ?? 99
-        break
-      case 'examDate':
-        aValue = parseExamDate(a.examDateRaw || a.examDate)
-        bValue = parseExamDate(b.examDateRaw || b.examDate)
-        break
-      case 'department':
-        aValue = (a.departmentName || '').toLowerCase()
-        bValue = (b.departmentName || '').toLowerCase()
-        break
-      case 'progress':
-        aValue = a.progress?.value ?? 0
-        bValue = b.progress?.value ?? 0
-        break
-      case 'result':
-        // PASS=1 (top), FAIL=2, no result=3
-        aValue = (a.passFail || '').toUpperCase() === 'PASS' ? 1 : (a.passFail || '').toUpperCase() === 'FAIL' ? 2 : 3
-        bValue = (b.passFail || '').toUpperCase() === 'PASS' ? 1 : (b.passFail || '').toUpperCase() === 'FAIL' ? 2 : 3
-        break
-      case 'state':
-        aValue = (a.examState || '').toLowerCase()
-        bValue = (b.examState || '').toLowerCase()
-        break
-      case 'course':
-        aValue = (a.courseName || '').toLowerCase()
-        bValue = (b.courseName || '').toLowerCase()
-        break
-      default:
-        aValue = parseExamDate(a.examDateRaw || a.examDate)
-        bValue = parseExamDate(b.examDateRaw || b.examDate)
-    }
+  // Sort students within a group by the chosen field
+  const sortWithinGroup = (list) => {
+    return [...list].sort((a, b) => {
+      let aValue, bValue
 
-    if (aValue < bValue) return sortDirection === 'asc' ? -1 : 1
-    if (aValue > bValue) return sortDirection === 'asc' ? 1 : -1
-    return 0
-  })
+      switch (sortField) {
+        case 'name':
+          aValue = (a.fullName || '').toLowerCase()
+          bValue = (b.fullName || '').toLowerCase()
+          break
+        case 'status':
+          aValue = a.status?.priority ?? 99
+          bValue = b.status?.priority ?? 99
+          break
+        case 'examDate':
+          aValue = parseExamDate(a.examDateRaw || a.examDate)
+          bValue = parseExamDate(b.examDateRaw || b.examDate)
+          break
+        case 'department':
+          aValue = (a.departmentName || '').toLowerCase()
+          bValue = (b.departmentName || '').toLowerCase()
+          break
+        case 'progress':
+          aValue = a.progress?.value ?? 0
+          bValue = b.progress?.value ?? 0
+          break
+        case 'result':
+          aValue = (a.passFail || '').toUpperCase() === 'PASS' ? 1 : (a.passFail || '').toUpperCase() === 'FAIL' ? 2 : 3
+          bValue = (b.passFail || '').toUpperCase() === 'PASS' ? 1 : (b.passFail || '').toUpperCase() === 'FAIL' ? 2 : 3
+          break
+        case 'state':
+          aValue = (a.examState || '').toLowerCase()
+          bValue = (b.examState || '').toLowerCase()
+          break
+        case 'course':
+          aValue = (a.courseName || '').toLowerCase()
+          bValue = (b.courseName || '').toLowerCase()
+          break
+        default:
+          aValue = parseExamDate(a.examDateRaw || a.examDate)
+          bValue = parseExamDate(b.examDateRaw || b.examDate)
+      }
+
+      if (aValue < bValue) return sortDirection === 'asc' ? -1 : 1
+      if (aValue > bValue) return sortDirection === 'asc' ? 1 : -1
+      return 0
+    })
+  }
+
+  // Group students into today / upcoming / past
+  const todayStudents = students.filter(s => getDateGroup(s) === 'today')
+  const upcomingStudents = students.filter(s => getDateGroup(s) === 'upcoming')
+  const pastStudents = students.filter(s => getDateGroup(s) === 'past')
+
+  // Sort within each group
+  const sortedToday = sortWithinGroup(todayStudents)
+  const sortedUpcoming = sortWithinGroup(upcomingStudents)
+  // Past: default to most recent first (desc date) unless user explicitly sorts
+  const sortedPast = sortField === 'examDate'
+    ? [...pastStudents].sort((a, b) => {
+        const aTs = parseExamDate(a.examDateRaw || a.examDate)
+        const bTs = parseExamDate(b.examDateRaw || b.examDate)
+        // Most recent past date first
+        return sortDirection === 'asc' ? bTs - aTs : aTs - bTs
+      })
+    : sortWithinGroup(pastStudents)
+
+  // Build ordered sections: Today > Upcoming > Past
+  const sections = []
+  if (sortedToday.length > 0) {
+    sections.push({ label: `Today's Exams`, color: 'blue', icon: 'calendar-today', students: sortedToday })
+  }
+  if (sortedUpcoming.length > 0) {
+    sections.push({ label: 'Upcoming Exams', color: 'green', icon: 'calendar-upcoming', students: sortedUpcoming })
+  }
+  if (sortedPast.length > 0) {
+    sections.push({ label: 'Past Exams', color: 'gray', icon: 'calendar-past', students: sortedPast })
+  }
+
+  const totalColumns = adminMode ? 9 : 9 // Student, (Dept admin), Status, Date, Progress, Course, Result, (Dept non-admin), State, Action
 
   const SortIcon = ({ field }) => {
     if (sortField !== field) {
@@ -114,16 +162,14 @@ function ExamTable({ students, onViewStudent, adminMode }) {
     return examDate < today
   }
 
-  // Compute readiness color for a student (uses backend readiness calculator when available)
+  // Compute readiness color for a student
   const getReadiness = (student) => {
     const pf = (student.passFail || '').toUpperCase()
     if (pf === 'PASS') return 'green'
     if (pf === 'FAIL') return 'red'
-    // Use backend readiness if available
     if (student.readiness?.status) {
       return student.readiness.status.toLowerCase()
     }
-    // Fallback for unmatched students without readiness data
     return 'red'
   }
 
@@ -138,6 +184,113 @@ function ExamTable({ students, onViewStudent, adminMode }) {
       </div>
     )
   }
+
+  // Render a student row
+  const renderStudentRow = (student, index, sectionIndex) => {
+    const past = isExamPast(student.examDateRaw || student.examDate)
+    const hasPassed = student.passFail?.toUpperCase() === 'PASS'
+    const hasFailed = student.passFail?.toUpperCase() === 'FAIL'
+    const readiness = getReadiness(student)
+    const readinessColor = readiness === 'green' ? 'bg-green-500' : readiness === 'yellow' ? 'bg-yellow-400' : 'bg-red-500'
+    const isToday = getDateGroup(student) === 'today'
+
+    return (
+      <tr
+        key={`${student.email}-${student.examDateRaw || index}`}
+        className={`animate-fadeIn ${isToday ? 'bg-blue-50/40' : ''}`}
+        style={{ animationDelay: `${(sectionIndex + index) * 20}ms` }}
+      >
+        <td>
+          <div className="flex items-center gap-2">
+            <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${readinessColor}`} title={`Readiness: ${readiness}`}></span>
+            <div>
+              <p className="font-medium text-gray-900">{student.fullName}</p>
+              <p className="text-sm text-gray-500">{student.email}</p>
+            </div>
+          </div>
+        </td>
+        {adminMode && (
+          <td>
+            <p className="text-gray-900 text-sm" title={student.departmentName}>
+              {student.departmentName || 'Unknown'}
+            </p>
+          </td>
+        )}
+        <td>
+          {student.matched !== false ? (
+            <StatusBadge status={student.status} />
+          ) : (
+            <span className="badge bg-gray-100 text-gray-600">N/A</span>
+          )}
+        </td>
+        <td>
+          <div>
+            <p className={`font-medium ${past ? 'text-gray-400' : isToday ? 'text-blue-700 font-semibold' : 'text-gray-900'}`}>
+              {student.examDate || 'TBD'}
+              {isToday && <span className="ml-1.5 text-xs font-medium text-blue-500">TODAY</span>}
+            </p>
+            {student.examTime && (
+              <p className="text-xs text-gray-500">{student.examTime}</p>
+            )}
+          </div>
+        </td>
+        <td>
+          <div className="min-w-[180px]">
+            <ProgressBar progress={student.progress} />
+            <p className="text-xs text-gray-500 mt-1">Course: {student.timeSpent?.formatted || '0m'}</p>
+            {student.examPrepTime?.minutes > 0 && (
+              <p className="text-xs text-purple-500">Prep: {student.examPrepTime.formatted}</p>
+            )}
+          </div>
+        </td>
+        <td>
+          <p className="text-gray-900 text-sm" title={student.courseName}>
+            {student.courseName}
+          </p>
+        </td>
+        <td>
+          {hasPassed ? (
+            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-sm font-bold bg-green-100 text-green-800 border border-green-300">
+              PASS
+            </span>
+          ) : hasFailed ? (
+            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-sm font-bold bg-red-100 text-red-800 border border-red-300">
+              FAIL
+            </span>
+          ) : (
+            <span className="text-gray-400 text-sm">{'\u2014'}</span>
+          )}
+        </td>
+        {!adminMode && (
+          <td>
+            <p className="text-gray-900 text-sm" title={student.departmentName}>
+              {student.departmentName || 'Unknown'}
+            </p>
+          </td>
+        )}
+        <td>
+          <p className="text-gray-900 text-sm">{student.examState || '\u2014'}</p>
+        </td>
+        <td className="sticky right-0 bg-white">
+          <button
+            onClick={() => onViewStudent(student)}
+            className="btn btn-secondary text-sm py-1 px-3 whitespace-nowrap"
+          >
+            View
+          </button>
+        </td>
+      </tr>
+    )
+  }
+
+  // Section divider colors
+  const sectionColors = {
+    blue: { bg: 'bg-blue-600', text: 'text-white', border: 'border-blue-700' },
+    green: { bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-200' },
+    gray: { bg: 'bg-gray-100', text: 'text-gray-500', border: 'border-gray-200' }
+  }
+
+  let runningIndex = 0
 
   return (
     <div className="bg-white rounded-xl shadow-md overflow-hidden">
@@ -241,98 +394,47 @@ function ExamTable({ students, onViewStudent, adminMode }) {
             </tr>
           </thead>
           <tbody>
-            {sortedStudents.map((student, index) => {
-              const past = isExamPast(student.examDateRaw || student.examDate)
-              const hasPassed = student.passFail?.toUpperCase() === 'PASS'
-              const hasFailed = student.passFail?.toUpperCase() === 'FAIL'
-              const readiness = getReadiness(student)
-              const readinessColor = readiness === 'green' ? 'bg-green-500' : readiness === 'yellow' ? 'bg-yellow-400' : 'bg-red-500'
+            {sections.map((section, sectionIdx) => {
+              const colors = sectionColors[section.color]
+              const sectionStartIndex = runningIndex
+              runningIndex += section.students.length
 
               return (
-                <tr
-                  key={`${student.email}-${student.examDateRaw || index}`}
-                  className="animate-fadeIn"
-                  style={{ animationDelay: `${index * 20}ms` }}
-                >
-                  <td>
-                    <div className="flex items-center gap-2">
-                      <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${readinessColor}`} title={`Readiness: ${readiness}`}></span>
-                      <div>
-                        <p className="font-medium text-gray-900">{student.fullName}</p>
-                        <p className="text-sm text-gray-500">{student.email}</p>
-                      </div>
-                    </div>
-                  </td>
-                  {adminMode && (
-                    <td>
-                      <p className="text-gray-900 text-sm" title={student.departmentName}>
-                        {student.departmentName || 'Unknown'}
-                      </p>
-                    </td>
-                  )}
-                  <td>
-                    {student.matched !== false ? (
-                      <StatusBadge status={student.status} />
-                    ) : (
-                      <span className="badge bg-gray-100 text-gray-600">N/A</span>
-                    )}
-                  </td>
-                  <td>
-                    <div>
-                      <p className={`font-medium ${past ? 'text-gray-500' : 'text-gray-900'}`}>
-                        {student.examDate || 'TBD'}
-                      </p>
-                      {student.examTime && (
-                        <p className="text-xs text-gray-500">{student.examTime}</p>
-                      )}
-                    </div>
-                  </td>
-                  <td>
-                    <div className="min-w-[180px]">
-                      <ProgressBar progress={student.progress} />
-                      <p className="text-xs text-gray-500 mt-1">Course: {student.timeSpent?.formatted || '0m'}</p>
-                      {student.examPrepTime?.minutes > 0 && (
-                        <p className="text-xs text-purple-500">Prep: {student.examPrepTime.formatted}</p>
-                      )}
-                    </div>
-                  </td>
-                  <td>
-                    <p className="text-gray-900 text-sm" title={student.courseName}>
-                      {student.courseName}
-                    </p>
-                  </td>
-                  <td>
-                    {hasPassed ? (
-                      <span className="inline-flex items-center px-2.5 py-1 rounded-full text-sm font-bold bg-green-100 text-green-800 border border-green-300">
-                        PASS
-                      </span>
-                    ) : hasFailed ? (
-                      <span className="inline-flex items-center px-2.5 py-1 rounded-full text-sm font-bold bg-red-100 text-red-800 border border-red-300">
-                        FAIL
-                      </span>
-                    ) : (
-                      <span className="text-gray-400 text-sm">{'\u2014'}</span>
-                    )}
-                  </td>
-                  {!adminMode && (
-                    <td>
-                      <p className="text-gray-900 text-sm" title={student.departmentName}>
-                        {student.departmentName || 'Unknown'}
-                      </p>
-                    </td>
-                  )}
-                  <td>
-                    <p className="text-gray-900 text-sm">{student.examState || '\u2014'}</p>
-                  </td>
-                  <td className="sticky right-0 bg-white">
-                    <button
-                      onClick={() => onViewStudent(student)}
-                      className="btn btn-secondary text-sm py-1 px-3 whitespace-nowrap"
+                <React.Fragment key={section.label}>
+                  {/* Section divider row */}
+                  <tr>
+                    <td
+                      colSpan={totalColumns}
+                      className={`${colors.bg} ${colors.text} ${colors.border} border-y px-4 py-2`}
                     >
-                      View
-                    </button>
-                  </td>
-                </tr>
+                      <div className="flex items-center gap-2 text-sm font-semibold">
+                        {section.color === 'blue' && (
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                        )}
+                        {section.color === 'green' && (
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                          </svg>
+                        )}
+                        {section.color === 'gray' && (
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                        )}
+                        <span>{section.label}</span>
+                        <span className={`text-xs font-normal ${section.color === 'blue' ? 'text-blue-200' : 'opacity-60'}`}>
+                          ({section.students.length} student{section.students.length !== 1 ? 's' : ''})
+                        </span>
+                      </div>
+                    </td>
+                  </tr>
+                  {/* Student rows for this section */}
+                  {section.students.map((student, idx) =>
+                    renderStudentRow(student, idx, sectionStartIndex)
+                  )}
+                </React.Fragment>
               )
             })}
           </tbody>
