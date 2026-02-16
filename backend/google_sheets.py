@@ -203,3 +203,70 @@ def update_sheet_passfail(email, result):
     except Exception as e:
         print(f"[SHEET WRITE] Failed to write pass/fail for {email}: {e}")
         return False
+
+
+def update_sheet_exam_date(email, exam_date, exam_time=''):
+    """Write exam date/time back to the Google Sheet.
+
+    Finds the row by email, then updates the Exam Date and Exam Time cells.
+    exam_date should be in YYYY-MM-DD format; it gets converted to M/D/YYYY for the sheet.
+    Non-fatal: logs errors but doesn't raise.
+    """
+    try:
+        gc = _get_gspread_client()
+        if not gc:
+            print("[SHEET WRITE] No Google Sheets credentials configured, skipping date write-back")
+            return False
+
+        from config import Config
+        sheet = gc.open_by_key(Config.GOOGLE_SHEET_ID).sheet1
+
+        headers = sheet.row_values(1)
+        email_col = None
+        date_col = None
+        time_col = None
+        for i, h in enumerate(headers, 1):
+            hl = h.strip().lower()
+            if hl == 'email':
+                email_col = i
+            if hl == 'exam date':
+                date_col = i
+            if hl == 'exam time':
+                time_col = i
+
+        if not email_col or not date_col:
+            print(f"[SHEET WRITE] Could not find Email (col {email_col}) or Exam Date (col {date_col}) columns")
+            return False
+
+        # Find the row with this email
+        email_cells = sheet.col_values(email_col)
+        row_num = None
+        for i, cell_val in enumerate(email_cells, 1):
+            if cell_val.strip().lower() == email.lower().strip():
+                row_num = i
+                break
+
+        if not row_num:
+            print(f"[SHEET WRITE] Email {email} not found in sheet for date update")
+            return False
+
+        # Convert YYYY-MM-DD to M/D/YYYY for the sheet
+        sheet_date = exam_date
+        try:
+            dt = datetime.strptime(exam_date, '%Y-%m-%d')
+            sheet_date = f"{dt.month}/{dt.day}/{dt.year}"
+        except ValueError:
+            pass
+
+        sheet.update_cell(row_num, date_col, sheet_date)
+        if time_col and exam_time:
+            sheet.update_cell(row_num, time_col, exam_time)
+
+        print(f"[SHEET WRITE] Updated row {row_num}: {email} -> date={sheet_date} time={exam_time}")
+
+        invalidate_sheet_cache()
+        return True
+
+    except Exception as e:
+        print(f"[SHEET WRITE] Failed to write exam date for {email}: {e}")
+        return False

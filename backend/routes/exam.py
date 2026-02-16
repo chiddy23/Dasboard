@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from absorb_api import AbsorbAPIClient, AbsorbAPIError
 from middleware import login_required
 from utils import format_student_for_response
-from google_sheets import fetch_exam_sheet, invalidate_sheet_cache, parse_exam_date_for_sort, update_sheet_passfail
+from google_sheets import fetch_exam_sheet, invalidate_sheet_cache, parse_exam_date_for_sort, update_sheet_passfail, update_sheet_exam_date
 from utils.readiness import calculate_readiness
 from utils.gap_metrics import calculate_gap_metrics
 
@@ -592,6 +592,9 @@ def update_exam_date():
     from snapshot_db import set_override
     set_override(email, exam_date=new_date, exam_time=new_time)
     print(f"[EXAM] Exam date override saved: {email} -> {new_date} {new_time}")
+
+    # Write back to Google Sheet (non-blocking, non-fatal)
+    update_sheet_exam_date(email, new_date, new_time)
 
     return jsonify({'success': True, 'email': email, 'date': new_date, 'time': new_time})
 
