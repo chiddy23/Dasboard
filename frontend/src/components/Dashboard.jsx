@@ -410,16 +410,13 @@ function Dashboard({ user, department, onLogout, initialData }) {
     return matchesSearch && matchesStatus
   })
 
-  // Helper: compute readiness for an exam student (GREEN/YELLOW/RED/GRAY)
+  // Helper: compute readiness for an exam student (GREEN/RED/GRAY)
+  // Only based on pass/fail result - study readiness shown in student modal
   const getReadiness = (student) => {
     const pf = (student.passFail || '').toUpperCase()
     if (pf === 'PASS') return 'GREEN'
     if (pf === 'FAIL') return 'RED'
-    // Use backend readiness calculator when available
-    if (student.readiness?.status) {
-      return student.readiness.status
-    }
-    // No result and no readiness data = neutral (not red)
+    // No exam result = neutral gray (avoids red dots looking like FAIL)
     return 'GRAY'
   }
 
@@ -511,9 +508,9 @@ function Dashboard({ user, department, onLogout, initialData }) {
     const matchesState = examStateFilter === 'all' ||
       (student.examState || '').toLowerCase() === examStateFilter.toLowerCase()
 
-    // Readiness filter
+    // Readiness filter (uses backend study readiness, not pass/fail dot color)
     const matchesReadiness = examReadinessFilter === 'all' ||
-      getReadiness(student) === examReadinessFilter
+      (student.readiness?.status || 'GRAY') === examReadinessFilter
 
     // Days until exam filter
     const matchesDays = matchesDaysFilter(student, examDaysFilter)

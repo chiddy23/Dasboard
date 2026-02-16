@@ -173,15 +173,13 @@ function ExamTable({ students, onViewStudent, adminMode }) {
     return examDate < today
   }
 
-  // Compute readiness color for a student
+  // Compute dot color for a student (based on pass/fail result only)
+  // Study readiness details are available in the student modal
   const getReadiness = (student) => {
     const pf = (student.passFail || '').toUpperCase()
     if (pf === 'PASS') return 'green'
     if (pf === 'FAIL') return 'red'
-    if (student.readiness?.status) {
-      return student.readiness.status.toLowerCase()
-    }
-    // No result and no readiness data = neutral gray (not red)
+    // No exam result yet = neutral gray dot (avoids confusion with FAIL)
     return 'gray'
   }
 
