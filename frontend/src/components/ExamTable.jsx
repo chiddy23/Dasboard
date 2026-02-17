@@ -201,7 +201,7 @@ function ExamTable({ students, onViewStudent, adminMode }) {
     const hasPassed = student.passFail?.toUpperCase() === 'PASS'
     const hasFailed = student.passFail?.toUpperCase() === 'FAIL'
     const readiness = getReadiness(student)
-    const readinessColor = readiness === 'green' ? 'bg-green-500' : readiness === 'yellow' ? 'bg-yellow-400' : readiness === 'gray' ? 'bg-gray-300' : 'bg-red-500'
+    const readinessColor = readiness === 'green' ? 'bg-green-500' : readiness === 'yellow' ? 'bg-yellow-400' : readiness === 'gray' ? 'bg-gray-400' : 'bg-red-500'
     const isToday = getDateGroup(student) === 'today'
 
     return (
