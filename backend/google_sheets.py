@@ -270,3 +270,72 @@ def update_sheet_exam_date(email, exam_date, exam_time=''):
     except Exception as e:
         print(f"[SHEET WRITE] Failed to write exam date for {email}: {e}")
         return False
+
+
+def update_sheet_contact(email, name='', new_email='', phone=''):
+    """Write contact info (name, email, phone) back to the Google Sheet.
+
+    Finds the row by current email, then updates the specified fields.
+    Non-fatal: logs errors but doesn't raise.
+    """
+    try:
+        gc = _get_gspread_client()
+        if not gc:
+            print("[SHEET WRITE] No Google Sheets credentials configured, skipping contact write-back")
+            return False
+
+        from config import Config
+        sheet = gc.open_by_key(Config.GOOGLE_SHEET_ID).sheet1
+
+        headers = sheet.row_values(1)
+        email_col = None
+        name_col = None
+        phone_col = None
+        for i, h in enumerate(headers, 1):
+            hl = h.strip().lower()
+            if hl == 'email':
+                email_col = i
+            if hl == 'student name':
+                name_col = i
+            if hl == 'phone':
+                phone_col = i
+
+        if not email_col:
+            print("[SHEET WRITE] Could not find Email column")
+            return False
+
+        # Find the row with this email
+        email_cells = sheet.col_values(email_col)
+        row_num = None
+        for i, cell_val in enumerate(email_cells, 1):
+            if cell_val.strip().lower() == email.lower().strip():
+                row_num = i
+                break
+
+        if not row_num:
+            print(f"[SHEET WRITE] Email {email} not found in sheet for contact update")
+            return False
+
+        # Update fields that were provided
+        if name and name_col:
+            sheet.update_cell(row_num, name_col, name)
+        if new_email:
+            sheet.update_cell(row_num, email_col, new_email)
+        if phone and phone_col:
+            sheet.update_cell(row_num, phone_col, phone)
+
+        updated = []
+        if name:
+            updated.append(f"name={name}")
+        if new_email:
+            updated.append(f"email={new_email}")
+        if phone:
+            updated.append(f"phone={phone}")
+        print(f"[SHEET WRITE] Updated row {row_num} contact: {', '.join(updated)}")
+
+        invalidate_sheet_cache()
+        return True
+
+    except Exception as e:
+        print(f"[SHEET WRITE] Failed to write contact for {email}: {e}")
+        return False

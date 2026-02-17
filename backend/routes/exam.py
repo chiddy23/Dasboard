@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from absorb_api import AbsorbAPIClient, AbsorbAPIError
 from middleware import login_required
 from utils import format_student_for_response
-from google_sheets import fetch_exam_sheet, invalidate_sheet_cache, parse_exam_date_for_sort, update_sheet_passfail, update_sheet_exam_date
+from google_sheets import fetch_exam_sheet, invalidate_sheet_cache, parse_exam_date_for_sort, update_sheet_passfail, update_sheet_exam_date, update_sheet_contact
 from utils.readiness import calculate_readiness
 from utils.gap_metrics import calculate_gap_metrics
 
@@ -675,6 +675,35 @@ def record_exam_result():
         'email': email,
         'result': result,
         'snapshot': snapshot
+    })
+
+
+@exam_bp.route('/update-contact', methods=['POST'])
+@login_required
+def update_exam_contact():
+    """Update student contact info (name, email, phone) in the Google Sheet. Admin only."""
+    data = request.get_json() or {}
+    email = (data.get('email') or '').lower().strip()
+    admin_key = data.get('adminKey', '')
+    new_name = (data.get('name') or '').strip()
+    new_email = (data.get('newEmail') or '').strip()
+    new_phone = (data.get('phone') or '').strip()
+
+    if not email:
+        return jsonify({'success': False, 'error': 'Email required'}), 400
+    if admin_key != ADMIN_PASSWORD:
+        return jsonify({'success': False, 'error': 'Admin access required'}), 403
+    if not new_name and not new_email and not new_phone:
+        return jsonify({'success': False, 'error': 'No fields to update'}), 400
+
+    update_sheet_contact(email, name=new_name, new_email=new_email, phone=new_phone)
+
+    return jsonify({
+        'success': True,
+        'email': email,
+        'name': new_name,
+        'newEmail': new_email,
+        'phone': new_phone
     })
 
 

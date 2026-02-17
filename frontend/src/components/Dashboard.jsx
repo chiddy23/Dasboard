@@ -397,6 +397,43 @@ function Dashboard({ user, department, onLogout, initialData }) {
     }
   }
 
+  const handleUpdateSheetContact = async (email, name, newEmail, phone) => {
+    try {
+      const res = await fetch(`${API_BASE}/exam/update-contact`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ email, name, newEmail, phone, adminKey })
+      })
+      const data = await res.json()
+      if (data.success) {
+        // Update local state
+        const updated = examStudents.map(s =>
+          s.email === email ? {
+            ...s,
+            fullName: name || s.fullName,
+            email: newEmail || s.email,
+            phone: phone || s.phone,
+            sheetTracking: { ...s.sheetTracking, phone: phone || s.sheetTracking?.phone }
+          } : s
+        )
+        setExamStudents(updated)
+        // Update selected student
+        setSelectedStudent(prev =>
+          prev && prev.email === email ? {
+            ...prev,
+            fullName: name || prev.fullName,
+            email: newEmail || prev.email,
+            phone: phone || prev.phone,
+            sheetTracking: { ...prev.sheetTracking, phone: phone || prev.sheetTracking?.phone }
+          } : prev
+        )
+      }
+    } catch (err) {
+      console.error('Failed to update sheet contact:', err)
+    }
+  }
+
   // Filter students (works for both tabs)
   const filteredStudents = students.filter(student => {
     const searchLower = searchTerm.toLowerCase()
@@ -1195,6 +1232,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
           onClose={() => setSelectedStudent(null)}
           onUpdateResult={handleUpdateResult}
           onUpdateExamDate={handleUpdateExamDate}
+          onUpdateContact={handleUpdateSheetContact}
         />
       )}
     </div>

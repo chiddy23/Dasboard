@@ -2,10 +2,15 @@ import React, { useEffect, useState } from 'react'
 import ProgressBar from './ProgressBar'
 import StatusBadge from './StatusBadge'
 
-function ExamSheetModal({ student, adminMode, onClose, onUpdateResult, onUpdateExamDate }) {
+function ExamSheetModal({ student, adminMode, onClose, onUpdateResult, onUpdateExamDate, onUpdateContact }) {
   const [editingDate, setEditingDate] = useState(false)
   const [newDate, setNewDate] = useState('')
   const [newTime, setNewTime] = useState('')
+  const [editingContact, setEditingContact] = useState(false)
+  const [contactName, setContactName] = useState('')
+  const [contactEmail, setContactEmail] = useState('')
+  const [contactPhone, setContactPhone] = useState('')
+  const [savingContact, setSavingContact] = useState(false)
 
   // Close on escape key
   useEffect(() => {
@@ -66,17 +71,80 @@ function ExamSheetModal({ student, adminMode, onClose, onUpdateResult, onUpdateE
             {/* Student Info */}
             <div className="flex items-start justify-between">
               <div>
-                <h3 className="text-2xl font-bold text-gray-900">{student.fullName}</h3>
-                <p className="text-gray-500">{student.email}</p>
-                {adminMode && tracking.phone && (
-                  <p className="text-gray-500 text-sm">{tracking.phone}</p>
+                {editingContact ? (
+                  <div className="space-y-2">
+                    <input
+                      type="text"
+                      value={contactName}
+                      onChange={(e) => setContactName(e.target.value)}
+                      placeholder="Full Name"
+                      className="w-full px-3 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                    <input
+                      type="email"
+                      value={contactEmail}
+                      onChange={(e) => setContactEmail(e.target.value)}
+                      placeholder="Email"
+                      className="w-full px-3 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                    <input
+                      type="tel"
+                      value={contactPhone}
+                      onChange={(e) => setContactPhone(e.target.value)}
+                      placeholder="Phone"
+                      className="w-full px-3 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        disabled={savingContact}
+                        onClick={async () => {
+                          setSavingContact(true)
+                          await onUpdateContact(student.email, contactName, contactEmail, contactPhone)
+                          setSavingContact(false)
+                          setEditingContact(false)
+                        }}
+                        className="px-3 py-1 bg-green-600 text-white rounded text-sm hover:bg-green-700 transition-colors disabled:opacity-50"
+                      >
+                        {savingContact ? 'Saving...' : 'Save'}
+                      </button>
+                      <button
+                        onClick={() => setEditingContact(false)}
+                        className="px-3 py-1 bg-gray-200 text-gray-700 rounded text-sm hover:bg-gray-300 transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <h3 className="text-2xl font-bold text-gray-900">{student.fullName}</h3>
+                    <p className="text-gray-500">{student.email}</p>
+                    {(tracking.phone || student.phone) && (
+                      <p className="text-gray-500 text-sm">{tracking.phone || student.phone}</p>
+                    )}
+                  </>
                 )}
               </div>
-              {student.matched !== false ? (
-                <StatusBadge status={student.status} />
-              ) : (
-                !adminMode && <span className="px-3 py-1 rounded-full text-sm font-medium bg-gray-100 text-gray-600">Not in department</span>
-              )}
+              <div className="flex items-center gap-2">
+                {adminMode && onUpdateContact && !editingContact && (
+                  <button
+                    onClick={() => {
+                      setContactName(student.fullName || '')
+                      setContactEmail(student.email || '')
+                      setContactPhone(tracking.phone || student.phone || '')
+                      setEditingContact(true)
+                    }}
+                    className="text-xs px-2 py-1 text-purple-600 hover:bg-purple-50 rounded border border-purple-200 transition-colors"
+                  >
+                    Edit
+                  </button>
+                )}
+                {student.matched !== false ? (
+                  <StatusBadge status={student.status} />
+                ) : (
+                  !adminMode && <span className="px-3 py-1 rounded-full text-sm font-medium bg-gray-100 text-gray-600">Not in department</span>
+                )}
+              </div>
             </div>
 
             {/* Exam Info Card */}
