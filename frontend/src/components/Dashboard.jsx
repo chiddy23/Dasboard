@@ -316,9 +316,15 @@ function Dashboard({ user, department, onLogout, initialData }) {
         setSelectedStudent(prev =>
           prev && prev.email === email ? { ...prev, passFail: result } : prev
         )
+        if (!data.sheetSaved) {
+          alert('Warning: Result saved locally but failed to save to Google Sheet. It may be lost after server restart. Check GOOGLE_SHEETS_CREDENTIALS_JSON env var.')
+        }
+      } else {
+        alert('Failed to save result: ' + (data.error || 'Unknown error'))
       }
     } catch (err) {
       console.error('Failed to update result:', err)
+      alert('Failed to save result. Check console for details.')
     }
   }
 
@@ -359,9 +365,15 @@ function Dashboard({ user, department, onLogout, initialData }) {
             examTime: newTime || prev.examTime
           } : prev
         )
+        if (!data.sheetSaved) {
+          alert('Warning: Date saved locally but failed to save to Google Sheet. It may be lost after server restart.')
+        }
+      } else {
+        alert('Failed to save date: ' + (data.error || 'Unknown error'))
       }
     } catch (err) {
       console.error('Failed to update exam date:', err)
+      alert('Failed to save date. Check console for details.')
     }
   }
 
@@ -428,9 +440,15 @@ function Dashboard({ user, department, onLogout, initialData }) {
             sheetTracking: { ...prev.sheetTracking, phone: phone || prev.sheetTracking?.phone }
           } : prev
         )
+        if (!data.sheetSaved) {
+          alert('Warning: Contact saved locally but failed to save to Google Sheet. Check GOOGLE_SHEETS_CREDENTIALS_JSON env var.')
+        }
+      } else {
+        alert('Failed to save contact: ' + (data.error || 'Unknown error'))
       }
     } catch (err) {
       console.error('Failed to update sheet contact:', err)
+      alert('Failed to save contact. Check console for details.')
     }
   }
 

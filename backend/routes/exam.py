@@ -544,11 +544,21 @@ def update_exam_result():
     set_override(email, pass_fail=result)
     print(f"[EXAM] Pass/fail override saved: {email} -> {result or '(cleared)'}")
 
-    # Write back to Google Sheet (non-blocking, non-fatal)
+    # Write back to Google Sheet (primary persistence on Render)
+    sheet_saved = False
     if result:
-        update_sheet_passfail(email, result)
+        sheet_saved = update_sheet_passfail(email, result)
+    else:
+        # Clear pass/fail from sheet too
+        sheet_saved = update_sheet_passfail(email, '')
 
-    return jsonify({'success': True, 'email': email, 'result': result})
+    if not sheet_saved:
+        print(f"[EXAM] WARNING: Pass/fail for {email} saved locally but NOT to Google Sheet")
+
+    return jsonify({
+        'success': True, 'email': email, 'result': result,
+        'sheetSaved': sheet_saved
+    })
 
 
 @exam_bp.route('/update-date', methods=['POST'])
@@ -593,10 +603,15 @@ def update_exam_date():
     set_override(email, exam_date=new_date, exam_time=new_time)
     print(f"[EXAM] Exam date override saved: {email} -> {new_date} {new_time}")
 
-    # Write back to Google Sheet (non-blocking, non-fatal)
-    update_sheet_exam_date(email, new_date, new_time)
+    # Write back to Google Sheet (primary persistence on Render)
+    sheet_saved = update_sheet_exam_date(email, new_date, new_time)
+    if not sheet_saved:
+        print(f"[EXAM] WARNING: Exam date for {email} saved locally but NOT to Google Sheet")
 
-    return jsonify({'success': True, 'email': email, 'date': new_date, 'time': new_time})
+    return jsonify({
+        'success': True, 'email': email, 'date': new_date, 'time': new_time,
+        'sheetSaved': sheet_saved
+    })
 
 
 @exam_bp.route('/record-result', methods=['POST'])
@@ -696,14 +711,15 @@ def update_exam_contact():
     if not new_name and not new_email and not new_phone:
         return jsonify({'success': False, 'error': 'No fields to update'}), 400
 
-    update_sheet_contact(email, name=new_name, new_email=new_email, phone=new_phone)
+    sheet_saved = update_sheet_contact(email, name=new_name, new_email=new_email, phone=new_phone)
 
     return jsonify({
         'success': True,
         'email': email,
         'name': new_name,
         'newEmail': new_email,
-        'phone': new_phone
+        'phone': new_phone,
+        'sheetSaved': sheet_saved
     })
 
 
