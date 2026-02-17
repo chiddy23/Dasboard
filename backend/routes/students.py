@@ -159,11 +159,6 @@ def get_student_details(student_id):
             progress_val = enrollment.get('progress', 0)
             time_spent_val = (enrollment.get('timeSpent') or enrollment.get('TimeSpent')
                              or enrollment.get('ActiveTime') or enrollment.get('activeTime') or '0')
-            # Debug: log time fields for pre-licensing courses
-            c_name = enrollment.get('courseName') or ''
-            if 'pre-licens' in c_name.lower() or 'prelicens' in c_name.lower():
-                time_keys = {k: v for k, v in enrollment.items() if 'time' in k.lower()}
-                print(f"[ENROLLMENT DEBUG] {c_name}: timeSpent raw={enrollment.get('timeSpent')!r}, resolved={time_spent_val!r}, all time keys={time_keys}")
             status_val = enrollment.get('status', 0)
             course_name = enrollment.get('courseName') or 'Unknown Course'
             enrollment_id = enrollment.get('id')
