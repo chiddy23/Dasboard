@@ -148,9 +148,9 @@ class SyncScheduler:
         # Update cache timestamp
         exam_module._exam_absorb_timestamp = datetime.utcnow()
 
-        # 6. Save study snapshots to SQLite for historical tracking
+        # 6. Save study snapshots to SQLite + Google Sheet for historical tracking
         try:
-            from snapshot_db import compute_snapshot_metrics, save_snapshots_batch, cleanup_old_snapshots
+            from snapshot_db import compute_snapshot_metrics, save_snapshots_batch, cleanup_old_snapshots, save_snapshots_to_sheet
 
             snapshots = []
             for email in emails:
@@ -165,6 +165,8 @@ class SyncScheduler:
             if snapshots:
                 save_snapshots_batch(snapshots)
                 print(f"[SYNC SCHEDULER] Saved {len(snapshots)} study snapshots to SQLite")
+                # Also persist to Google Sheet (survives Render deploys)
+                save_snapshots_to_sheet(snapshots)
 
             cleanup_old_snapshots(days=90)
         except Exception as e:

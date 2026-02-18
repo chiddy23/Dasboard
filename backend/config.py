@@ -36,6 +36,9 @@ class Config:
     # SQLite snapshot database
     SNAPSHOT_DB_PATH = os.getenv('SNAPSHOT_DB_PATH', os.path.join(os.path.dirname(__file__), 'data', 'snapshots.db'))
 
+    # Google Sheet for persistent snapshot storage (survives Render deploys)
+    SNAPSHOT_SHEET_ID = os.getenv('SNAPSHOT_SHEET_ID', '1-6cOOVkP_UyCRH81kugDNN2YGopn_rPJ-o-kt9bTzJ4')
+
     # Background sync scheduler (auto-sync on timer, no admin login required)
     SYNC_ABSORB_USERNAME = os.getenv('SYNC_ABSORB_USERNAME', '')
     SYNC_ABSORB_PASSWORD = os.getenv('SYNC_ABSORB_PASSWORD', '')

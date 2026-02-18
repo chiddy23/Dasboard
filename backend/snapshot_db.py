@@ -244,5 +244,187 @@ def get_all_overrides():
     return overrides
 
 
+# ---------------------------------------------------------------------------
+# Google Sheet persistence (survives Render deploys)
+# ---------------------------------------------------------------------------
+
+SHEET_HEADERS = [
+    'email', 'snapshot_time', 'total_time_min', 'prelicense_progress',
+    'exam_prep_progress', 'practice_scores', 'consecutive_passing',
+    'readiness', 'criteria_met', 'study_gap_count', 'total_gap_days',
+    'largest_gap_days', 'life_video_time', 'health_video_time',
+    'state_law_time', 'state_law_completions'
+]
+
+
+def _get_snapshot_sheet():
+    """Get the snapshot Google Sheet worksheet. Returns None if not configured."""
+    import json
+    import gspread
+    from google.oauth2.service_account import Credentials
+
+    creds_json = Config.GOOGLE_SHEETS_CREDENTIALS_JSON
+    sheet_id = Config.SNAPSHOT_SHEET_ID
+    if not creds_json or not sheet_id:
+        return None
+
+    creds_data = json.loads(creds_json)
+    scopes = ['https://www.googleapis.com/auth/spreadsheets']
+    credentials = Credentials.from_service_account_info(creds_data, scopes=scopes)
+    gc = gspread.authorize(credentials)
+    return gc.open_by_key(sheet_id).sheet1
+
+
+def save_snapshots_to_sheet(snapshots):
+    """Append snapshot rows to the Google Sheet for durable storage.
+
+    Each snapshot dict must have 'email' plus the metric keys.
+    Non-fatal: logs errors but doesn't raise.
+    """
+    if not snapshots:
+        return
+    try:
+        ws = _get_snapshot_sheet()
+        if not ws:
+            print("[SNAPSHOTS] No Google Sheet credentials or SNAPSHOT_SHEET_ID configured, skipping sheet save")
+            return
+
+        # Ensure headers exist (first row)
+        existing = ws.row_values(1)
+        if not existing or existing[0] != SHEET_HEADERS[0]:
+            ws.update('A1', [SHEET_HEADERS])
+            print("[SNAPSHOTS] Wrote headers to snapshot sheet")
+
+        now = datetime.utcnow().isoformat()
+        rows = []
+        for s in snapshots:
+            rows.append([
+                s.get('email', ''),
+                now,
+                s.get('total_time_min', 0),
+                s.get('prelicense_progress', 0),
+                s.get('exam_prep_progress', 0),
+                s.get('practice_scores', ''),
+                s.get('consecutive_passing', 0),
+                s.get('readiness', ''),
+                s.get('criteria_met', ''),
+                s.get('study_gap_count', 0),
+                s.get('total_gap_days', 0),
+                s.get('largest_gap_days', 0),
+                s.get('life_video_time', 0),
+                s.get('health_video_time', 0),
+                s.get('state_law_time', 0),
+                s.get('state_law_completions', 0),
+            ])
+
+        ws.append_rows(rows, value_input_option='RAW')
+        print(f"[SNAPSHOTS] Appended {len(rows)} rows to Google Sheet")
+    except Exception as e:
+        print(f"[SNAPSHOTS] Failed to save to Google Sheet (non-fatal): {e}")
+
+
+def load_snapshots_from_sheet():
+    """Load historical snapshots from Google Sheet into SQLite.
+
+    Called on startup so data survives Render deploys.
+    Only imports rows that aren't already in SQLite (based on email + snapshot_time).
+    """
+    try:
+        ws = _get_snapshot_sheet()
+        if not ws:
+            print("[SNAPSHOTS] No Google Sheet configured, skipping snapshot load")
+            return 0
+
+        all_values = ws.get_all_values()
+        if len(all_values) <= 1:
+            print("[SNAPSHOTS] Snapshot sheet is empty (header only)")
+            return 0
+
+        headers = all_values[0]
+        data_rows = all_values[1:]
+        print(f"[SNAPSHOTS] Found {len(data_rows)} rows in Google Sheet")
+
+        # Get existing snapshot times from SQLite to avoid duplicates
+        conn = _get_connection()
+        existing = set()
+        for row in conn.execute('SELECT email, snapshot_time FROM study_snapshots').fetchall():
+            existing.add((row['email'], row['snapshot_time']))
+
+        # Parse sheet rows and insert missing ones
+        new_count = 0
+        now_iso = datetime.utcnow().isoformat()
+        batch = []
+
+        for row in data_rows:
+            if len(row) < 2:
+                continue
+            # Map by header position
+            row_dict = {}
+            for i, h in enumerate(headers):
+                row_dict[h] = row[i] if i < len(row) else ''
+
+            email = (row_dict.get('email') or '').lower().strip()
+            snap_time = row_dict.get('snapshot_time') or now_iso
+            if not email:
+                continue
+
+            # Skip if already in SQLite
+            if (email, snap_time) in existing:
+                continue
+
+            def safe_float(val, default=0):
+                try:
+                    return float(val) if val else default
+                except (ValueError, TypeError):
+                    return default
+
+            def safe_int(val, default=0):
+                try:
+                    return int(float(val)) if val else default
+                except (ValueError, TypeError):
+                    return default
+
+            batch.append((
+                email, snap_time,
+                safe_float(row_dict.get('total_time_min')),
+                safe_float(row_dict.get('prelicense_progress')),
+                safe_float(row_dict.get('exam_prep_progress')),
+                row_dict.get('practice_scores', ''),
+                safe_int(row_dict.get('consecutive_passing')),
+                row_dict.get('readiness', ''),
+                row_dict.get('criteria_met', ''),
+                safe_int(row_dict.get('study_gap_count')),
+                safe_int(row_dict.get('total_gap_days')),
+                safe_int(row_dict.get('largest_gap_days')),
+                safe_float(row_dict.get('life_video_time')),
+                safe_float(row_dict.get('health_video_time')),
+                safe_float(row_dict.get('state_law_time')),
+                safe_int(row_dict.get('state_law_completions')),
+            ))
+            new_count += 1
+
+        if batch:
+            conn.executemany(
+                '''INSERT INTO study_snapshots
+                   (email, snapshot_time, total_time_min, prelicense_progress, exam_prep_progress,
+                    practice_scores, consecutive_passing, readiness, criteria_met,
+                    study_gap_count, total_gap_days, largest_gap_days,
+                    life_video_time, health_video_time, state_law_time, state_law_completions)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                batch
+            )
+            conn.commit()
+
+        conn.close()
+        print(f"[SNAPSHOTS] Loaded {new_count} new snapshots from Google Sheet into SQLite")
+        return new_count
+    except Exception as e:
+        print(f"[SNAPSHOTS] Failed to load from Google Sheet (non-fatal): {e}")
+        return 0
+
+
 # Initialize DB on import
 init_db()
+
+# Load historical snapshots from Google Sheet (survives Render deploys)
+load_snapshots_from_sheet()

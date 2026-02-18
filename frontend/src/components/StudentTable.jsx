@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import StatusBadge from './StatusBadge'
 import ProgressBar from './ProgressBar'
 
-function StudentTable({ students, onViewStudent }) {
+function StudentTable({ students, onViewStudent, showDepartment = false }) {
   const [sortField, setSortField] = useState('status')
   const [sortDirection, setSortDirection] = useState('asc')
 
@@ -38,6 +38,10 @@ function StudentTable({ students, onViewStudent }) {
       case 'course':
         aValue = a.courseName.toLowerCase()
         bValue = b.courseName.toLowerCase()
+        break
+      case 'department':
+        aValue = (a.departmentName || '').toLowerCase()
+        bValue = (b.departmentName || '').toLowerCase()
         break
       default:
         aValue = a.status.priority
@@ -95,6 +99,17 @@ function StudentTable({ students, onViewStudent }) {
                   <SortIcon field="name" />
                 </div>
               </th>
+              {showDepartment && (
+                <th
+                  className="cursor-pointer hover:bg-gray-100 hidden lg:table-cell"
+                  onClick={() => handleSort('department')}
+                >
+                  <div className="flex items-center space-x-1">
+                    <span>Dept</span>
+                    <SortIcon field="department" />
+                  </div>
+                </th>
+              )}
               <th
                 className="cursor-pointer hover:bg-gray-100"
                 onClick={() => handleSort('status')}
@@ -137,7 +152,7 @@ function StudentTable({ students, onViewStudent }) {
           <tbody>
             {sortedStudents.map((student, index) => (
               <tr
-                key={student.id}
+                key={student.id || `${student.email}-${index}`}
                 className="animate-fadeIn"
                 style={{ animationDelay: `${index * 20}ms` }}
               >
@@ -147,6 +162,13 @@ function StudentTable({ students, onViewStudent }) {
                     <p className="text-sm text-gray-500">{student.email}</p>
                   </div>
                 </td>
+                {showDepartment && (
+                  <td className="hidden lg:table-cell">
+                    <p className="text-gray-700 text-sm truncate max-w-[150px]" title={student.departmentName || ''}>
+                      {student.departmentName || '-'}
+                    </p>
+                  </td>
+                )}
                 <td>
                   <StatusBadge status={student.status} />
                 </td>

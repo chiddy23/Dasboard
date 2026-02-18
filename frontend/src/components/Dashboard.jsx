@@ -37,6 +37,19 @@ function Dashboard({ user, department, onLogout, initialData }) {
   // Scheduler info
   const [schedulerInfo, setSchedulerInfo] = useState(null)
 
+  // Multi-department state
+  const [extraDepartments, setExtraDepartments] = useState(() => {
+    try {
+      const saved = localStorage.getItem('ji_extra_departments')
+      return saved ? JSON.parse(saved) : []
+    } catch { return [] }
+  })
+  const [showDeptManager, setShowDeptManager] = useState(false)
+  const [deptInputValue, setDeptInputValue] = useState('')
+  const [deptError, setDeptError] = useState('')
+  const [departmentMeta, setDepartmentMeta] = useState([])
+  const [studentDeptFilter, setStudentDeptFilter] = useState('all')
+
   // Filtering and search
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
@@ -61,6 +74,23 @@ function Dashboard({ user, department, onLogout, initialData }) {
       }
     }
   }, [])
+
+  // Persist extra departments to localStorage
+  useEffect(() => {
+    localStorage.setItem('ji_extra_departments', JSON.stringify(extraDepartments))
+  }, [extraDepartments])
+
+  // Re-fetch students when extra departments change
+  useEffect(() => {
+    if (extraDepartments.length > 0) {
+      fetchMultiDeptStudents()
+    } else {
+      // Reset department meta and filter when going back to single dept
+      setDepartmentMeta([])
+      setStudentDeptFilter('all')
+      fetchDashboardData()
+    }
+  }, [extraDepartments.length])
 
   // Fetch exam data when exam tab is selected for the first time
   useEffect(() => {
@@ -134,6 +164,68 @@ function Dashboard({ user, department, onLogout, initialData }) {
     }
   }
 
+  const fetchMultiDeptStudents = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const deptIds = extraDepartments.join(',')
+      const res = await fetch(
+        `${API_BASE}/dashboard/students/multi?departments=${encodeURIComponent(deptIds)}`,
+        { credentials: 'include' }
+      )
+      if (!res.ok) {
+        if (res.status === 401) { onLogout(); return }
+        throw new Error('Failed to fetch multi-department data')
+      }
+      const data = await res.json()
+      if (data.success) {
+        setStudents(data.students)
+        setSummary(data.summary)
+        setDepartmentMeta(data.departments || [])
+        setLastSynced(new Date())
+
+        // Warn about failed departments
+        const failed = (data.departments || []).filter(d => d.status === 'error')
+        if (failed.length > 0) {
+          setDeptError(`Could not load ${failed.length} department(s): ${failed.map(d => d.error || d.id).join(', ')}`)
+        }
+      }
+    } catch (err) {
+      setError('Failed to load multi-department data. Please try again.')
+      console.error('[DASHBOARD] Multi-dept error:', err)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleAddDepartment = () => {
+    const id = deptInputValue.trim()
+    const guidPattern = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
+    if (!guidPattern.test(id)) {
+      setDeptError('Invalid Department ID format (must be a GUID like xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)')
+      return
+    }
+    if (id.toLowerCase() === department?.id?.toLowerCase()) {
+      setDeptError('This is already your primary department')
+      return
+    }
+    if (extraDepartments.some(d => d.toLowerCase() === id.toLowerCase())) {
+      setDeptError('Department already added')
+      return
+    }
+    if (extraDepartments.length >= 10) {
+      setDeptError('Maximum 10 additional departments')
+      return
+    }
+    setDeptError('')
+    setDeptInputValue('')
+    setExtraDepartments(prev => [...prev, id])
+  }
+
+  const handleRemoveDepartment = (id) => {
+    setExtraDepartments(prev => prev.filter(d => d !== id))
+  }
+
   const fetchDashboardData = useCallback(async () => {
     setLoading(true)
     setError(null)
@@ -178,9 +270,15 @@ function Dashboard({ user, department, onLogout, initialData }) {
     setError(null)
 
     try {
+      const body = extraDepartments.length > 0
+        ? JSON.stringify({ extraDepartments })
+        : undefined
+
       const response = await fetch(`${API_BASE}/dashboard/sync`, {
         method: 'POST',
-        credentials: 'include'
+        credentials: 'include',
+        headers: body ? { 'Content-Type': 'application/json' } : {},
+        body,
       })
 
       if (!response.ok) {
@@ -196,6 +294,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
       if (data.success) {
         setSummary(data.summary)
         setStudents(data.students)
+        if (data.departments) setDepartmentMeta(data.departments)
         setLastSynced(new Date())
         // Also refresh exam data if it was loaded
         if (examLoaded) {
@@ -214,7 +313,10 @@ function Dashboard({ user, department, onLogout, initialData }) {
 
   const handleExport = async () => {
     try {
-      const response = await fetch(`${API_BASE}/dashboard/export`, {
+      const exportUrl = extraDepartments.length > 0
+        ? `${API_BASE}/dashboard/export?departments=${encodeURIComponent(extraDepartments.join(','))}`
+        : `${API_BASE}/dashboard/export`
+      const response = await fetch(exportUrl, {
         credentials: 'include'
       })
 
@@ -452,17 +554,26 @@ function Dashboard({ user, department, onLogout, initialData }) {
     }
   }
 
+  // Build unique department names for Students tab filter
+  const studentDepartments = [...new Set(
+    students.map(s => (s.departmentName || '').trim()).filter(Boolean)
+  )].sort()
+
   // Filter students (works for both tabs)
   const filteredStudents = students.filter(student => {
     const searchLower = searchTerm.toLowerCase()
     const matchesSearch = !searchTerm ||
       student.fullName.toLowerCase().includes(searchLower) ||
-      student.email.toLowerCase().includes(searchLower)
+      student.email.toLowerCase().includes(searchLower) ||
+      (student.departmentName || '').toLowerCase().includes(searchLower)
 
     const matchesStatus = statusFilter === 'all' ||
       student.status.status.toLowerCase() === statusFilter.toLowerCase()
 
-    return matchesSearch && matchesStatus
+    const matchesDept = studentDeptFilter === 'all' ||
+      (student.departmentName || '').toLowerCase() === studentDeptFilter.toLowerCase()
+
+    return matchesSearch && matchesStatus && matchesDept
   })
 
   // Helper: compute readiness for an exam student (GREEN/RED/GRAY)
@@ -799,6 +910,89 @@ function Dashboard({ user, department, onLogout, initialData }) {
               </button>
             </div>
 
+            {/* Department Manager */}
+            <div className="bg-white rounded-xl shadow-md p-4 mb-6">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <svg className="w-5 h-5 text-gray-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                  </svg>
+                  <span className="text-sm font-medium text-gray-700">
+                    Departments ({1 + extraDepartments.length})
+                  </span>
+                  <span className="px-2 py-0.5 bg-ji-blue-bright/10 text-ji-blue-bright text-xs rounded-full font-medium">
+                    {department?.name || 'Primary'}
+                  </span>
+                  {departmentMeta
+                    .filter(d => d.status === 'ok' && d.id !== department?.id)
+                    .map(d => (
+                      <span key={d.id} className="px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded-full flex items-center gap-1">
+                        {d.name} ({d.studentCount})
+                        <button
+                          onClick={() => handleRemoveDepartment(d.id)}
+                          className="text-red-400 hover:text-red-600 ml-0.5"
+                          title="Remove department"
+                        >
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </span>
+                    ))
+                  }
+                  {/* Show IDs that haven't resolved to names yet */}
+                  {extraDepartments
+                    .filter(id => !departmentMeta.some(d => d.id === id && d.status === 'ok'))
+                    .map(id => (
+                      <span key={id} className="px-2 py-0.5 bg-yellow-50 text-yellow-700 text-xs rounded-full flex items-center gap-1">
+                        {id.substring(0, 8)}...
+                        <button
+                          onClick={() => handleRemoveDepartment(id)}
+                          className="text-red-400 hover:text-red-600 ml-0.5"
+                          title="Remove department"
+                        >
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </span>
+                    ))
+                  }
+                </div>
+                <button
+                  onClick={() => { setShowDeptManager(!showDeptManager); setDeptError('') }}
+                  className="text-sm text-ji-blue-bright hover:text-ji-blue-medium flex items-center gap-1"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d={showDeptManager ? "M5 15l7-7 7 7" : "M12 4v16m8-8H4"} />
+                  </svg>
+                  <span>{showDeptManager ? 'Close' : 'Add Department'}</span>
+                </button>
+              </div>
+
+              {showDeptManager && (
+                <div className="mt-3 flex gap-2 items-start">
+                  <div className="flex-1">
+                    <input
+                      type="text"
+                      placeholder="Paste Department ID (e.g. a1b2c3d4-e5f6-7890-abcd-ef1234567890)"
+                      value={deptInputValue}
+                      onChange={(e) => { setDeptInputValue(e.target.value); setDeptError('') }}
+                      onKeyDown={(e) => e.key === 'Enter' && handleAddDepartment()}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-ji-blue-bright"
+                    />
+                    {deptError && <p className="text-red-500 text-xs mt-1">{deptError}</p>}
+                  </div>
+                  <button
+                    onClick={handleAddDepartment}
+                    className="btn btn-primary text-sm py-2 px-4 whitespace-nowrap"
+                  >
+                    Add
+                  </button>
+                </div>
+              )}
+            </div>
+
             {/* KPI Cards */}
             {summary && <KPICards summary={summary} />}
 
@@ -821,14 +1015,28 @@ function Dashboard({ user, department, onLogout, initialData }) {
                   </span>
                   <input
                     type="text"
-                    placeholder="Search by name or email..."
+                    placeholder="Search by name, email, or department..."
                     className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-ji-blue-bright"
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                   />
                 </div>
 
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-4 flex-wrap">
+                  {/* Department Filter - only when multiple departments */}
+                  {extraDepartments.length > 0 && studentDepartments.length > 1 && (
+                    <select
+                      className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-ji-blue-bright"
+                      value={studentDeptFilter}
+                      onChange={(e) => setStudentDeptFilter(e.target.value)}
+                    >
+                      <option value="all">All Departments</option>
+                      {studentDepartments.map(d => (
+                        <option key={d} value={d}>{d}</option>
+                      ))}
+                    </select>
+                  )}
+
                   {/* Status Filter */}
                   <select
                     className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-ji-blue-bright"
@@ -860,6 +1068,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
               {/* Filter Results Count */}
               <div className="mt-3 text-sm text-gray-500">
                 Showing {filteredStudents.length} of {students.length} students
+                {extraDepartments.length > 0 && ` across ${1 + extraDepartments.length} departments`}
               </div>
             </div>
 
@@ -867,6 +1076,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
             <StudentTable
               students={filteredStudents}
               onViewStudent={setSelectedStudent}
+              showDepartment={extraDepartments.length > 0}
             />
           </>
         )}
