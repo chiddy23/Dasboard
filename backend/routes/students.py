@@ -76,20 +76,23 @@ def calculate_prelicensing_totals(enrollments):
             return time_val, progress, e.get('courseName', 'No Course'), e.get('status', 0)
         return 0, 0, 'No Course', 0
 
-    # Calculate totals
-    total_time = 0
+    # Get the main course's time and progress (not chapters/modules)
+    main_course_time = 0
     main_course_progress = None
 
     for e in prelicensing_enrollments:
-        time_val = parse_time_spent_to_minutes(e.get('timeSpent', 0))
-        total_time += time_val
-
-        # Track the main course's progress (not a module/chapter)
         name = e.get('courseName') or ''
         if is_prelicensing_course(name) and not is_chapter_or_module(name):
+            # Use the main prelicensing course's time directly
+            main_course_time = parse_time_spent_to_minutes(e.get('timeSpent', 0))
             progress = e.get('progress', 0)
             if isinstance(progress, (int, float)):
                 main_course_progress = progress
+
+    # If no main course found, fall back to summing all chapters
+    if main_course_time == 0:
+        for e in prelicensing_enrollments:
+            main_course_time += parse_time_spent_to_minutes(e.get('timeSpent', 0))
 
     # Use main course progress directly; fall back to average only if no main course found
     if main_course_progress is not None:
@@ -102,7 +105,7 @@ def calculate_prelicensing_totals(enrollments):
                 progress_values.append(progress)
         final_progress = sum(progress_values) / len(progress_values) if progress_values else 0
 
-    return total_time, final_progress, main_course_name, primary_status
+    return main_course_time, final_progress, main_course_name, primary_status
 
 students_bp = Blueprint('students', __name__)
 
