@@ -113,10 +113,18 @@ def fetch_exam_sheet():
             'weeklyTracking': weekly,
         })
 
-    # Deduplicate by email (keep last occurrence, which is the most recent row)
+    # Deduplicate by email: keep last occurrence, but preserve pass/fail from any row
     seen = {}
+    passfail_by_email = {}
     for s in students:
-        seen[s['email']] = s
+        e = s['email']
+        if s['passFail']:
+            passfail_by_email[e] = s['passFail']
+        seen[e] = s
+    # Apply pass/fail from any duplicate row that had it
+    for e, s in seen.items():
+        if not s['passFail'] and e in passfail_by_email:
+            s['passFail'] = passfail_by_email[e]
     students = list(seen.values())
 
     print(f"[SHEET] Parsed {len(students)} unique exam students")
@@ -180,21 +188,21 @@ def update_sheet_passfail(email, result):
             print(f"[SHEET WRITE] Could not find Email (col {email_col}) or Pass/Fail (col {pf_col}) columns")
             return False
 
-        # Find the row with this email
+        # Find ALL rows with this email (students can have multiple exam entries)
         email_cells = sheet.col_values(email_col)
-        row_num = None
+        row_nums = []
         for i, cell_val in enumerate(email_cells, 1):
             if cell_val.strip().lower() == email.lower().strip():
-                row_num = i
-                break
+                row_nums.append(i)
 
-        if not row_num:
+        if not row_nums:
             print(f"[SHEET WRITE] Email {email} not found in sheet")
             return False
 
-        # Update the pass/fail cell
-        sheet.update_cell(row_num, pf_col, result)
-        print(f"[SHEET WRITE] Updated row {row_num}: {email} -> {result}")
+        # Update the pass/fail cell in ALL matching rows
+        for row_num in row_nums:
+            sheet.update_cell(row_num, pf_col, result)
+        print(f"[SHEET WRITE] Updated {len(row_nums)} row(s) for {email} -> {result}")
 
         # Invalidate cache so next read picks up the change
         invalidate_sheet_cache()

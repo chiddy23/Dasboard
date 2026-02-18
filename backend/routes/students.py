@@ -172,6 +172,7 @@ def get_student_details(student_id):
                                   enrollment.get('dateEdited') or
                                   enrollment.get('dateStarted'))
 
+            time_spent_minutes = parse_time_spent_to_minutes(time_spent_val)
             progress_info = format_progress(progress_val)
             formatted_enrollments.append({
                 'id': enrollment_id,
@@ -179,7 +180,7 @@ def get_student_details(student_id):
                 'courseName': course_name,
                 'progress': progress_info,
                 'timeSpent': {
-                    'minutes': time_spent_val,
+                    'minutes': time_spent_minutes,
                     'formatted': format_time_spent(time_spent_val)
                 },
                 'status': status_val,
@@ -412,6 +413,7 @@ def get_student_enrollments(student_id):
                                   enrollment.get('dateEdited') or
                                   enrollment.get('dateStarted'))
 
+            time_spent_minutes = parse_time_spent_to_minutes(time_spent_val)
             progress_info = format_progress(progress_val)
             formatted_enrollments.append({
                 'id': enrollment_id,
@@ -419,7 +421,7 @@ def get_student_enrollments(student_id):
                 'courseName': course_name,
                 'progress': progress_info,
                 'timeSpent': {
-                    'minutes': time_spent_val,
+                    'minutes': time_spent_minutes,
                     'formatted': format_time_spent(time_spent_val)
                 },
                 'status': status_val,

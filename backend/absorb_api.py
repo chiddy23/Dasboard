@@ -462,14 +462,6 @@ class AbsorbAPIClient:
         if not enrollments:
             return None, 0, 0, 'No Course'
 
-        # Debug: Log first enrollment's time-related keys
-        first = enrollments[0]
-        time_keys = [k for k in first.keys() if 'time' in k.lower()]
-        if time_keys:
-            print(f"[API DEBUG] Time keys found: {time_keys}")
-            for k in time_keys:
-                print(f"[API DEBUG]   {k} = {first.get(k)}")
-
         # Categorize enrollments
         prelicensing_main = None
         prelicensing_chapters = []
