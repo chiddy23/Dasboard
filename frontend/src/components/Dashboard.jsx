@@ -48,7 +48,8 @@ function Dashboard({ user, department, onLogout, initialData }) {
   const [deptInputValue, setDeptInputValue] = useState('')
   const [deptError, setDeptError] = useState('')
   const [departmentMeta, setDepartmentMeta] = useState([])
-  const [studentDeptFilter, setStudentDeptFilter] = useState('all')
+  const [studentDeptFilter, setStudentDeptFilter] = useState([])
+  const [showDeptDropdown, setShowDeptDropdown] = useState(false)
 
   // Filtering and search
   const [searchTerm, setSearchTerm] = useState('')
@@ -87,9 +88,11 @@ function Dashboard({ user, department, onLogout, initialData }) {
     } else {
       // Reset department meta and filter when going back to single dept
       setDepartmentMeta([])
-      setStudentDeptFilter('all')
+      setStudentDeptFilter([])
       fetchDashboardData()
     }
+    // Invalidate exam data so it re-fetches with new departments
+    setExamLoaded(false)
   }, [extraDepartments.length])
 
   // Fetch exam data when exam tab is selected for the first time
@@ -103,9 +106,11 @@ function Dashboard({ user, department, onLogout, initialData }) {
     setExamLoading(true)
     try {
       const key = overrideAdminKey || adminKey
-      const url = key
-        ? `${API_BASE}/exam/students?adminKey=${encodeURIComponent(key)}`
-        : `${API_BASE}/exam/students`
+      const params = new URLSearchParams()
+      if (key) params.set('adminKey', key)
+      if (extraDepartments.length > 0) params.set('departments', extraDepartments.join(','))
+      const qs = params.toString()
+      const url = qs ? `${API_BASE}/exam/students?${qs}` : `${API_BASE}/exam/students`
       const res = await fetch(url, { credentials: 'include' })
       if (!res.ok) {
         if (res.status === 401) {
@@ -570,8 +575,8 @@ function Dashboard({ user, department, onLogout, initialData }) {
     const matchesStatus = statusFilter === 'all' ||
       student.status.status.toLowerCase() === statusFilter.toLowerCase()
 
-    const matchesDept = studentDeptFilter === 'all' ||
-      (student.departmentName || '').toLowerCase() === studentDeptFilter.toLowerCase()
+    const matchesDept = studentDeptFilter.length === 0 ||
+      studentDeptFilter.includes((student.departmentName || '').trim())
 
     return matchesSearch && matchesStatus && matchesDept
   })
@@ -1023,18 +1028,56 @@ function Dashboard({ user, department, onLogout, initialData }) {
                 </div>
 
                 <div className="flex items-center gap-4 flex-wrap">
-                  {/* Department Filter - only when multiple departments */}
+                  {/* Department Filter - multi-select checklist */}
                   {extraDepartments.length > 0 && studentDepartments.length > 1 && (
-                    <select
-                      className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-ji-blue-bright"
-                      value={studentDeptFilter}
-                      onChange={(e) => setStudentDeptFilter(e.target.value)}
-                    >
-                      <option value="all">All Departments</option>
-                      {studentDepartments.map(d => (
-                        <option key={d} value={d}>{d}</option>
-                      ))}
-                    </select>
+                    <div className="relative">
+                      <button
+                        onClick={() => setShowDeptDropdown(!showDeptDropdown)}
+                        className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-ji-blue-bright bg-white flex items-center gap-2 text-sm"
+                      >
+                        <span>
+                          {studentDeptFilter.length === 0
+                            ? 'All Departments'
+                            : `${studentDeptFilter.length} dept${studentDeptFilter.length > 1 ? 's' : ''}`}
+                        </span>
+                        <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d={showDeptDropdown ? "M5 15l7-7 7 7" : "M19 9l-7 7-7-7"} />
+                        </svg>
+                      </button>
+                      {showDeptDropdown && (
+                        <>
+                          <div className="fixed inset-0 z-10" onClick={() => setShowDeptDropdown(false)} />
+                          <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-20 min-w-[200px] py-1">
+                            <label className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-pointer text-sm border-b border-gray-100">
+                              <input
+                                type="checkbox"
+                                checked={studentDeptFilter.length === 0}
+                                onChange={() => setStudentDeptFilter([])}
+                                className="rounded text-ji-blue-bright"
+                              />
+                              <span className="font-medium">All Departments</span>
+                            </label>
+                            {studentDepartments.map(d => (
+                              <label key={d} className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-pointer text-sm">
+                                <input
+                                  type="checkbox"
+                                  checked={studentDeptFilter.includes(d)}
+                                  onChange={() => {
+                                    setStudentDeptFilter(prev =>
+                                      prev.includes(d)
+                                        ? prev.filter(x => x !== d)
+                                        : [...prev, d]
+                                    )
+                                  }}
+                                  className="rounded text-ji-blue-bright"
+                                />
+                                <span className="truncate">{d}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                    </div>
                   )}
 
                   {/* Status Filter */}

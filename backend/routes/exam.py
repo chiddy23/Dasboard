@@ -127,6 +127,28 @@ def get_exam_students():
             if email:
                 formatted_email_map[email] = s
 
+        # 2b. Also merge students from extra departments (multi-dept mode)
+        extra_param = request.args.get('departments', '')
+        if extra_param:
+            import re
+            from routes.dashboard import GUID_RE
+            extra_ids = [d.strip() for d in extra_param.split(',') if d.strip()]
+            for dept_id in extra_ids[:10]:
+                if GUID_RE.match(dept_id) and dept_id.lower() != (g.department_id or '').lower():
+                    try:
+                        extra_raw, extra_formatted = get_cached_students(dept_id, g.absorb_token)
+                        for s in extra_raw:
+                            email = (s.get('emailAddress') or '').lower().strip()
+                            if email and email not in raw_email_map:
+                                raw_email_map[email] = s
+                        for s in extra_formatted:
+                            email = (s.get('email') or '').lower().strip()
+                            if email and email not in formatted_email_map:
+                                formatted_email_map[email] = s
+                        print(f"[EXAM] Merged {len(extra_formatted)} students from extra dept {dept_id[:8]}...")
+                    except Exception as e:
+                        print(f"[EXAM] Error loading extra dept {dept_id[:8]}: {e}")
+
         # 4. Find emails that need cross-department lookup
         sheet_emails = set(s['email'] for s in sheet_students)
         matched_emails = sheet_emails & set(formatted_email_map.keys())
