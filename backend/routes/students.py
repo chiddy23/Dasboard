@@ -66,7 +66,7 @@ def calculate_prelicensing_totals(enrollments):
     primary_status = 0
 
     for e in enrollments:
-        name = e.get('courseName') or ''
+        name = e.get('name') or e.get('Name') or e.get('courseName') or e.get('CourseName') or ''
         if is_prelicensing_course(name) or is_chapter_or_module(name):
             prelicensing_enrollments.append(e)
             # Track main course name (not a module/chapter)
@@ -80,7 +80,7 @@ def calculate_prelicensing_totals(enrollments):
             e = enrollments[0]
             time_val = parse_time_spent_to_minutes(e.get('timeSpent', 0))
             progress = e.get('progress', 0)
-            return time_val, progress, e.get('courseName', 'No Course'), e.get('status', 0)
+            return time_val, progress, e.get('name') or e.get('courseName') or 'No Course', e.get('status', 0)
         return 0, 0, 'No Course', 0
 
     # Get the main course's time and progress (not chapters/modules)
@@ -88,7 +88,7 @@ def calculate_prelicensing_totals(enrollments):
     main_course_progress = None
 
     for e in prelicensing_enrollments:
-        name = e.get('courseName') or ''
+        name = e.get('name') or e.get('Name') or e.get('courseName') or e.get('CourseName') or ''
         if is_prelicensing_course(name) and not is_chapter_or_module(name):
             # Use the main prelicensing course's time directly
             main_course_time = parse_time_spent_to_minutes(e.get('timeSpent', 0))
@@ -170,7 +170,7 @@ def get_student_details(student_id):
             time_spent_val = (enrollment.get('timeSpent') or enrollment.get('TimeSpent')
                              or enrollment.get('ActiveTime') or enrollment.get('activeTime') or '0')
             status_val = enrollment.get('status', 0)
-            course_name = enrollment.get('courseName') or 'Unknown Course'
+            course_name = enrollment.get('name') or enrollment.get('Name') or enrollment.get('courseName') or enrollment.get('CourseName') or 'Unknown Course'
             enrollment_id = enrollment.get('id')
             course_id = enrollment.get('courseId')
 
@@ -411,7 +411,7 @@ def get_student_enrollments(student_id):
             time_spent_val = (enrollment.get('timeSpent') or enrollment.get('TimeSpent')
                              or enrollment.get('ActiveTime') or enrollment.get('activeTime') or '0')
             status_val = enrollment.get('status', 0)
-            course_name = enrollment.get('courseName') or 'Unknown Course'
+            course_name = enrollment.get('name') or enrollment.get('Name') or enrollment.get('courseName') or enrollment.get('CourseName') or 'Unknown Course'
             enrollment_id = enrollment.get('id')
             course_id = enrollment.get('courseId')
 

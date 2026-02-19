@@ -495,7 +495,7 @@ class AbsorbAPIClient:
         other_in_progress = None
 
         for e in enrollments:
-            course_name = e.get('courseName') or e.get('CourseName') or ''
+            course_name = e.get('name') or e.get('Name') or e.get('courseName') or e.get('CourseName') or ''
             status = e.get('status') or e.get('Status') or 0
 
             if self._is_prelicensing_course(course_name):
@@ -551,7 +551,7 @@ class AbsorbAPIClient:
 
             # Determine display name
             if prelicensing_main:
-                display_name = prelicensing_main.get('courseName') or prelicensing_main.get('CourseName') or 'Pre-License Course'
+                display_name = prelicensing_main.get('name') or prelicensing_main.get('Name') or prelicensing_main.get('courseName') or prelicensing_main.get('CourseName') or 'Pre-License Course'
             else:
                 display_name = 'Pre-License Course'
 
@@ -576,7 +576,7 @@ class AbsorbAPIClient:
         time_spent = primary.get('timeSpent') or primary.get('TimeSpent') or primary.get('ActiveTime') or primary.get('activeTime') or 0
         time_spent = parse_time_to_minutes(time_spent)
 
-        display_name = primary.get('courseName') or primary.get('CourseName') or 'No Course'
+        display_name = primary.get('name') or primary.get('Name') or primary.get('courseName') or primary.get('CourseName') or 'No Course'
         return primary, progress, time_spent, display_name
 
     def _process_single_user(self, user: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -595,7 +595,7 @@ class AbsorbAPIClient:
             # Calculate exam prep time (combined time from all exam prep courses)
             exam_prep_time = 0
             for e in enrollments:
-                e_name = e.get('courseName') or e.get('CourseName') or ''
+                e_name = e.get('name') or e.get('Name') or e.get('courseName') or e.get('CourseName') or ''
                 if self._is_exam_prep_course(e_name):
                     time_val = e.get('timeSpent') or e.get('TimeSpent') or e.get('ActiveTime') or e.get('activeTime') or 0
                     exam_prep_time += parse_time_to_minutes(time_val)
