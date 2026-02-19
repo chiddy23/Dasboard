@@ -291,7 +291,8 @@ function Dashboard({ user, department, onLogout, initialData }) {
           onLogout()
           return
         }
-        throw new Error('Sync failed')
+        const errData = await response.json().catch(() => null)
+        throw new Error(errData?.error || `Sync failed (${response.status})`)
       }
 
       const data = await response.json()
@@ -310,7 +311,8 @@ function Dashboard({ user, department, onLogout, initialData }) {
         }
       }
     } catch (err) {
-      setError('Failed to sync data. Please try again.')
+      console.error('[SYNC] Error:', err)
+      setError(err.message || 'Failed to sync data. Please try again.')
     } finally {
       setSyncing(false)
     }

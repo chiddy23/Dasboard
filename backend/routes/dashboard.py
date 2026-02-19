@@ -408,7 +408,9 @@ def sync_data():
     except AbsorbAPIError as e:
         return jsonify({'success': False, 'error': str(e.message)}), e.status_code or 500
     except Exception as e:
-        return jsonify({'success': False, 'error': 'Failed to sync data'}), 500
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': f'Failed to sync data: {str(e)}'}), 500
 
 
 @dashboard_bp.route('/export', methods=['GET'])
