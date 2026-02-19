@@ -164,7 +164,7 @@ function StudentTable({ students, onViewStudent, showDepartment = false }) {
                 </td>
                 {showDepartment && (
                   <td className="hidden lg:table-cell">
-                    <p className="text-gray-700 text-sm truncate max-w-[150px]" title={student.departmentName || ''}>
+                    <p className="text-gray-700 text-sm truncate max-w-[220px]" title={student.departmentName || ''}>
                       {student.departmentName || '-'}
                     </p>
                   </td>
@@ -179,12 +179,12 @@ function StudentTable({ students, onViewStudent, showDepartment = false }) {
                   </div>
                 </td>
                 <td className="hidden md:table-cell">
-                  <p className="text-gray-900 truncate max-w-xs" title={student.courseName}>
+                  <p className="text-gray-900 truncate max-w-sm" title={student.courseName}>
                     {student.courseName}
                   </p>
                 </td>
                 <td>
-                  <div className="w-32">
+                  <div className="w-36">
                     <ProgressBar progress={student.progress} />
                     <p className="text-xs text-gray-500 mt-1">Course: {student.timeSpent?.formatted || '0m'}</p>
                     {student.examPrepTime?.minutes > 0 && (

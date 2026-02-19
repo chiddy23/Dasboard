@@ -716,7 +716,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
       <div className="min-h-screen bg-gray-100">
         {/* Skeleton Header */}
         <header className="header shadow-lg">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+          <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-4">
                 <div className="h-10 w-32 bg-white/20 rounded animate-pulse"></div>
@@ -734,7 +734,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
         </header>
 
         {/* Skeleton Content */}
-        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <main className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-8">
           {/* Loading indicator */}
           <div className="text-center mb-6">
             <div className="spinner mx-auto mb-2"></div>
@@ -782,7 +782,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
     <div className="min-h-screen bg-gray-100">
       {/* Header */}
       <header className="header shadow-lg">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+        <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-4">
               <img
@@ -837,7 +837,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
       </header>
 
       {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Error Alert */}
         {error && (
           <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg flex items-center justify-between">
