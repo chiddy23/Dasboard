@@ -167,12 +167,17 @@ def get_exam_students():
         # Admin users' tokens have cross-department access
         if is_admin and unmatched_emails:
             global _exam_absorb_timestamp
-            print(f"[EXAM] Admin mode: Fetching {len(unmatched_emails)} specific students across all departments...")
-            print(f"[EXAM] Using admin token (has cross-dept access)")
+
+            # Skip emails already in cache (from a previous admin lookup)
+            if is_exam_absorb_cache_valid():
+                truly_unmatched = [e for e in unmatched_emails if e not in _exam_absorb_cache]
+                print(f"[EXAM] Admin mode: {len(unmatched_emails)} unmatched, {len(unmatched_emails) - len(truly_unmatched)} already cached, {len(truly_unmatched)} to fetch")
+            else:
+                truly_unmatched = list(unmatched_emails)
+                print(f"[EXAM] Admin mode: Fetching {len(truly_unmatched)} specific students across all departments...")
 
             # Fetch users by searching all departments (admin token allows this)
-            unmatched_email_list = list(unmatched_emails)
-            found_users = client.get_users_by_emails_batch(unmatched_email_list)
+            found_users = client.get_users_by_emails_batch(truly_unmatched) if truly_unmatched else []
             print(f"[EXAM] Found {len(found_users)} users, processing enrollments...")
 
             # Process found users in parallel to get enrollment data

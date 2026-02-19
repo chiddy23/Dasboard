@@ -358,10 +358,9 @@ def sync_data():
         dept_name = g.user.get('departmentName', 'Unknown')
         print(f"[SYNC] Starting sync for {len(all_dept_ids)} department(s): {dept_name} ({g.department_id})")
 
-        # Invalidate caches
+        # Invalidate student caches (not exam cache - that's separate data)
         for dept_id in all_dept_ids:
             invalidate_cache(dept_id)
-        invalidate_exam_absorb_cache()
 
         # Fetch all departments (parallel if multiple)
         all_formatted = []
