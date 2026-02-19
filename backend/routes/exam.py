@@ -251,17 +251,16 @@ def get_exam_students():
             raw = raw_email_map.get(email)
 
             if formatted and raw:
-                # Found in current department
+                # Found in loaded departments (login dept + extra depts)
                 dept_id = raw.get('departmentId') or ''
                 dept_name = get_department_name(client, dept_id) if dept_id else g.user.get('departmentName', 'Unknown')
                 raw_enrollments = raw.get('enrollments', [])
 
                 exam_entry = _build_exam_entry(formatted, sheet_student, dept_name, True, raw_enrollments)
-            elif email in _exam_absorb_cache and _exam_absorb_cache[email] is not None:
-                # Found via cross-department lookup
+            elif is_admin and email in _exam_absorb_cache and _exam_absorb_cache[email] is not None:
+                # Found via cross-department lookup (admin only)
                 cached = _exam_absorb_cache[email]
                 dept_id = cached['raw'].get('departmentId') or ''
-                # Admin token has cross-department access
                 dept_name = get_department_name(client, dept_id) if dept_id else 'Unknown'
                 raw_enrollments = cached['raw'].get('enrollments', [])
 
