@@ -103,8 +103,6 @@ function Dashboard({ user, department, onLogout, initialData }) {
     }
   }, [activeTab])
 
-  const [examBgSync, setExamBgSync] = useState(false)
-
   const fetchExamData = async (overrideAdminKey) => {
     setExamLoading(true)
     try {
@@ -114,6 +112,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
       if (extraDepartments.length > 0) params.set('departments', extraDepartments.join(','))
       const qs = params.toString()
       const url = qs ? `${API_BASE}/exam/students?${qs}` : `${API_BASE}/exam/students`
+      console.log('[EXAM] Fetching with URL:', url, 'extraDepts:', extraDepartments)
       const res = await fetch(url, { credentials: 'include' })
       if (!res.ok) {
         if (res.status === 401) {
@@ -128,14 +127,6 @@ function Dashboard({ user, department, onLogout, initialData }) {
         setExamSummary(data.examSummary)
         setExamLoaded(true)
 
-        // If backend is syncing in background, poll until done then auto-refresh
-        if (data.backgroundSync) {
-          setExamBgSync(true)
-          _pollBgSync(key)
-        } else {
-          setExamBgSync(false)
-        }
-
         // Fetch scheduler status in admin mode
         if (key) {
           fetch(`${API_BASE}/exam/sync-scheduler/status`, { credentials: 'include' })
@@ -149,44 +140,6 @@ function Dashboard({ user, department, onLogout, initialData }) {
       console.error('[DASHBOARD] Exam data error:', err)
     } finally {
       setExamLoading(false)
-    }
-  }
-
-  const _pollBgSync = (key) => {
-    const poll = setInterval(async () => {
-      try {
-        const res = await fetch(`${API_BASE}/exam/admin-sync-status`, { credentials: 'include' })
-        if (!res.ok) { clearInterval(poll); setExamBgSync(false); return }
-        const data = await res.json()
-        if (!data.syncing) {
-          clearInterval(poll)
-          setExamBgSync(false)
-          // Auto-refresh with fresh data
-          fetchExamData(key)
-        }
-      } catch { clearInterval(poll); setExamBgSync(false) }
-    }, 10000) // poll every 10 seconds
-  }
-
-  const handleAdminRefresh = async () => {
-    setExamBgSync(true)
-    try {
-      const res = await fetch(`${API_BASE}/exam/admin-refresh`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ adminKey })
-      })
-      const data = await res.json()
-      if (data.syncing) {
-        _pollBgSync(adminKey)
-      } else {
-        setExamBgSync(false)
-        fetchExamData()
-      }
-    } catch {
-      setExamBgSync(false)
-      setError('Failed to start sync')
     }
   }
 
@@ -1186,7 +1139,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
                 </p>
                 <button
                   onClick={() => fetchExamData()}
-                  disabled={examLoading || examBgSync}
+                  disabled={examLoading}
                   className="text-sm text-ji-blue-bright hover:text-ji-blue-medium flex items-center space-x-1"
                 >
                   <svg className={`w-4 h-4 ${examLoading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1194,19 +1147,6 @@ function Dashboard({ user, department, onLogout, initialData }) {
                   </svg>
                   <span>{examLoading ? 'Refreshing...' : 'Refresh'}</span>
                 </button>
-                {adminMode && (
-                  <button
-                    onClick={handleAdminRefresh}
-                    disabled={examBgSync || examLoading}
-                    className="text-sm text-purple-500 hover:text-purple-700 flex items-center space-x-1"
-                    title="Full sync: clears cache and re-fetches all student progress"
-                  >
-                    <svg className={`w-4 h-4 ${examBgSync ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                    </svg>
-                    <span>{examBgSync ? 'Syncing progress...' : 'Sync All'}</span>
-                  </button>
-                )}
               </div>
               <div className="flex items-center gap-3">
                 {/* Admin Mode Toggle */}
@@ -1293,17 +1233,6 @@ function Dashboard({ user, department, onLogout, initialData }) {
                 </button>
               </div>
             </div>
-
-            {/* Background sync banner */}
-            {examBgSync && (
-              <div className="mb-4 p-3 bg-purple-50 border border-purple-200 rounded-lg flex items-center gap-2 animate-fadeIn">
-                <svg className="w-4 h-4 text-purple-500 animate-spin flex-shrink-0" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
-                </svg>
-                <span className="text-sm text-purple-700">Syncing student progress in background... Data will auto-refresh when complete.</span>
-              </div>
-            )}
 
             {/* Exam Charts (collapsible) */}
             {showExamCharts && examSummary && (
