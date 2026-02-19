@@ -129,25 +129,37 @@ def get_exam_students():
 
         # 2b. Also merge students from extra departments (multi-dept mode)
         extra_param = request.args.get('departments', '')
+        print(f"[EXAM] Extra departments param: '{extra_param}'")
+        print(f"[EXAM] Primary dept email map size: {len(formatted_email_map)}")
         if extra_param:
-            import re
             from routes.dashboard import GUID_RE
             extra_ids = [d.strip() for d in extra_param.split(',') if d.strip()]
+            print(f"[EXAM] Processing {len(extra_ids)} extra department IDs")
             for dept_id in extra_ids[:10]:
-                if GUID_RE.match(dept_id) and dept_id.lower() != (g.department_id or '').lower():
+                guid_ok = bool(GUID_RE.match(dept_id))
+                not_primary = dept_id.lower() != (g.department_id or '').lower()
+                print(f"[EXAM] Dept {dept_id[:8]}: GUID valid={guid_ok}, not_primary={not_primary}")
+                if guid_ok and not_primary:
                     try:
                         extra_raw, extra_formatted = get_cached_students(dept_id, g.absorb_token)
+                        merged_raw = 0
+                        merged_fmt = 0
                         for s in extra_raw:
                             email = (s.get('emailAddress') or '').lower().strip()
                             if email and email not in raw_email_map:
                                 raw_email_map[email] = s
+                                merged_raw += 1
                         for s in extra_formatted:
                             email = (s.get('email') or '').lower().strip()
                             if email and email not in formatted_email_map:
                                 formatted_email_map[email] = s
-                        print(f"[EXAM] Merged {len(extra_formatted)} students from extra dept {dept_id[:8]}...")
+                                merged_fmt += 1
+                        print(f"[EXAM] Merged {merged_fmt} new students from extra dept {dept_id[:8]} (total dept had {len(extra_formatted)})")
                     except Exception as e:
+                        import traceback
                         print(f"[EXAM] Error loading extra dept {dept_id[:8]}: {e}")
+                        traceback.print_exc()
+        print(f"[EXAM] Total email map size after merge: {len(formatted_email_map)}")
 
         # 4. Find emails that need cross-department lookup
         sheet_emails = set(s['email'] for s in sheet_students)

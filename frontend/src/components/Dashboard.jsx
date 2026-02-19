@@ -111,6 +111,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
       if (extraDepartments.length > 0) params.set('departments', extraDepartments.join(','))
       const qs = params.toString()
       const url = qs ? `${API_BASE}/exam/students?${qs}` : `${API_BASE}/exam/students`
+      console.log('[EXAM] Fetching with URL:', url, 'extraDepts:', extraDepartments)
       const res = await fetch(url, { credentials: 'include' })
       if (!res.ok) {
         if (res.status === 401) {
