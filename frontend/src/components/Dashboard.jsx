@@ -56,7 +56,8 @@ function Dashboard({ user, department, onLogout, initialData }) {
   const [statusFilter, setStatusFilter] = useState('all')
   const [examResultFilter, setExamResultFilter] = useState('no-result')
   const [examCourseFilter, setExamCourseFilter] = useState('all')
-  const [examDeptFilter, setExamDeptFilter] = useState('all')
+  const [examDeptFilter, setExamDeptFilter] = useState([])
+  const [showExamDeptDropdown, setShowExamDeptDropdown] = useState(false)
   const [examStateFilter, setExamStateFilter] = useState('all')
   const [examReadinessFilter, setExamReadinessFilter] = useState('all')
   const [examDaysFilter, setExamDaysFilter] = useState('all')
@@ -675,8 +676,8 @@ function Dashboard({ user, department, onLogout, initialData }) {
       (student.examCourse || '').toLowerCase() === examCourseFilter.toLowerCase()
 
     // Department filter
-    const matchesDept = examDeptFilter === 'all' ||
-      (student.departmentName || '').toLowerCase() === examDeptFilter.toLowerCase()
+    const matchesDept = examDeptFilter.length === 0 ||
+      examDeptFilter.includes((student.departmentName || '').trim())
 
     // State filter
     const matchesState = examStateFilter === 'all' ||
@@ -1367,17 +1368,55 @@ function Dashboard({ user, department, onLogout, initialData }) {
 
               {/* Row 2: All other filters */}
               <div className="flex items-center gap-3 flex-wrap mt-3">
-                {/* Department Filter */}
-                <select
-                  className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-ji-blue-bright text-sm"
-                  value={examDeptFilter}
-                  onChange={(e) => setExamDeptFilter(e.target.value)}
-                >
-                  <option value="all">All Departments</option>
-                  {examDepartments.map(d => (
-                    <option key={d} value={d}>{d}</option>
-                  ))}
-                </select>
+                {/* Department Filter - multi-select checklist */}
+                <div className="relative">
+                  <button
+                    onClick={() => setShowExamDeptDropdown(!showExamDeptDropdown)}
+                    className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-ji-blue-bright bg-white flex items-center gap-2 text-sm"
+                  >
+                    <span>
+                      {examDeptFilter.length === 0
+                        ? 'All Departments'
+                        : `${examDeptFilter.length} dept${examDeptFilter.length > 1 ? 's' : ''}`}
+                    </span>
+                    <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d={showExamDeptDropdown ? "M5 15l7-7 7 7" : "M19 9l-7 7-7-7"} />
+                    </svg>
+                  </button>
+                  {showExamDeptDropdown && (
+                    <>
+                      <div className="fixed inset-0 z-10" onClick={() => setShowExamDeptDropdown(false)} />
+                      <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-20 min-w-[200px] py-1">
+                        <label className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-pointer text-sm border-b border-gray-100">
+                          <input
+                            type="checkbox"
+                            checked={examDeptFilter.length === 0}
+                            onChange={() => setExamDeptFilter([])}
+                            className="rounded text-ji-blue-bright"
+                          />
+                          <span className="font-medium">All Departments</span>
+                        </label>
+                        {examDepartments.map(d => (
+                          <label key={d} className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-pointer text-sm">
+                            <input
+                              type="checkbox"
+                              checked={examDeptFilter.includes(d)}
+                              onChange={() => {
+                                setExamDeptFilter(prev =>
+                                  prev.includes(d)
+                                    ? prev.filter(x => x !== d)
+                                    : [...prev, d]
+                                )
+                              }}
+                              className="rounded text-ji-blue-bright"
+                            />
+                            <span className="truncate">{d}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
 
                 {/* Readiness Filter */}
                 <select
@@ -1433,10 +1472,10 @@ function Dashboard({ user, department, onLogout, initialData }) {
                 </select>
 
                 {/* Clear Filters Button */}
-                {(examDeptFilter !== 'all' || examReadinessFilter !== 'all' || examDaysFilter !== 'all' || examStateFilter !== 'all' || examCourseFilter !== 'all' || examResultFilter !== 'all' || searchTerm) && (
+                {(examDeptFilter.length > 0 || examReadinessFilter !== 'all' || examDaysFilter !== 'all' || examStateFilter !== 'all' || examCourseFilter !== 'all' || examResultFilter !== 'all' || searchTerm) && (
                   <button
                     onClick={() => {
-                      setExamDeptFilter('all')
+                      setExamDeptFilter([])
                       setExamReadinessFilter('all')
                       setExamDaysFilter('all')
                       setExamStateFilter('all')
