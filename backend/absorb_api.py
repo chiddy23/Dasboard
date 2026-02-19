@@ -449,9 +449,16 @@ class AbsorbAPIClient:
             return False
         name_lower = course_name.lower()
         # Match "pre-license", "pre-licensing", "prelicense", "prelicensing", etc.
-        return ('pre-licens' in name_lower or
+        if ('pre-licens' in name_lower or
                 'prelicens' in name_lower or
-                'pre licens' in name_lower)
+                'pre licens' in name_lower):
+            return True
+        # Also match courses containing "license"/"licensing" (broader catch)
+        # but exclude exam prep courses that happen to contain "license"
+        if 'licens' in name_lower:
+            if not ('prep' in name_lower or 'practice' in name_lower or 'study' in name_lower):
+                return True
+        return False
 
     def _is_exam_prep_course(self, course_name: str) -> bool:
         """Check if a course is an Exam Prep course."""
@@ -535,12 +542,12 @@ class AbsorbAPIClient:
             time_val = primary.get('timeSpent') or primary.get('TimeSpent') or primary.get('ActiveTime') or primary.get('activeTime') or 0
             main_time = parse_time_to_minutes(time_val)
 
-            # Log when main course has 0 time to diagnose root cause
-            if main_time == 0:
-                cname = primary.get('courseName') or primary.get('CourseName') or ''
-                time_fields = {k: v for k, v in primary.items() if 'time' in k.lower() or 'active' in k.lower() or 'duration' in k.lower() or 'spent' in k.lower()}
-                print(f"[TIME DEBUG] Main course '{cname}' reports 0 time. Raw time fields: {time_fields}")
-                print(f"[TIME DEBUG] All enrollment keys: {list(primary.keys())}")
+            # If main course reports 0 time, sum chapter times as fallback
+            # (same logic as calculate_prelicensing_totals in student detail modal)
+            if main_time == 0 and len(all_prelicensing) > 1:
+                for e in all_prelicensing:
+                    t = e.get('timeSpent') or e.get('TimeSpent') or e.get('ActiveTime') or e.get('activeTime') or 0
+                    main_time += parse_time_to_minutes(t)
 
             # Determine display name
             if prelicensing_main:
