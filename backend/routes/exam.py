@@ -3,6 +3,7 @@
 from flask import Blueprint, jsonify, g, request
 import sys
 import os
+import threading
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -27,6 +28,10 @@ _dept_name_cache = {}
 _exam_absorb_cache = {}
 _exam_absorb_timestamp = None
 EXAM_ABSORB_CACHE_TTL = 3600  # 1 hour (background scheduler refreshes every 6h)
+
+# Background admin sync state
+_admin_sync_running = False
+_admin_sync_started = None
 
 # Load persistent overrides from SQLite into memory (survives restarts)
 def _load_overrides():
@@ -86,6 +91,105 @@ def invalidate_exam_absorb_cache():
     _exam_absorb_cache = {}
     _exam_absorb_timestamp = None
     print("[EXAM] Absorb cache invalidated")
+
+
+def _background_admin_fetch(token, emails_to_fetch):
+    """Run admin cross-department fetch in background thread."""
+    global _exam_absorb_cache, _exam_absorb_timestamp, _admin_sync_running, _admin_sync_started
+    try:
+        client = AbsorbAPIClient()
+        client.set_token(token)
+
+        found_users = client.get_users_by_emails_batch(emails_to_fetch) if emails_to_fetch else []
+        print(f"[EXAM BG] Found {len(found_users)} users, processing enrollments...")
+
+        found = 0
+        if found_users:
+            max_workers = min(50, len(found_users))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_user = {
+                    executor.submit(client._process_single_user, user): user
+                    for user in found_users
+                }
+                completed = 0
+                for future in as_completed(future_to_user):
+                    completed += 1
+                    user = future_to_user[future]
+                    email = (user.get('emailAddress') or user.get('EmailAddress') or '').lower().strip()
+                    try:
+                        result = future.result()
+                        if result:
+                            formatted = format_student_for_response(result)
+                            _exam_absorb_cache[email] = {
+                                'raw': result,
+                                'formatted': formatted
+                            }
+                            found += 1
+                        else:
+                            _exam_absorb_cache[email] = None
+                    except AbsorbAPIError as e:
+                        if e.status_code == 401:
+                            print(f"[EXAM BG] Token expired, stopping sync")
+                            executor.shutdown(wait=False, cancel_futures=True)
+                            break
+                        _exam_absorb_cache[email] = None
+                    except Exception as e:
+                        print(f"[EXAM BG] Error processing {email}: {e}")
+                        _exam_absorb_cache[email] = None
+
+                    if completed % 20 == 0 or completed == len(found_users):
+                        print(f"[EXAM BG] Processed {completed}/{len(found_users)} ({found} complete)")
+
+        # Mark unfound emails
+        for email in emails_to_fetch:
+            if email not in _exam_absorb_cache:
+                _exam_absorb_cache[email] = None
+
+        _exam_absorb_timestamp = datetime.utcnow()
+        print(f"[EXAM BG] Background sync complete: {found}/{len(emails_to_fetch)} found")
+    except Exception as e:
+        print(f"[EXAM BG] Background sync failed: {e}")
+    finally:
+        _admin_sync_running = False
+
+
+def _inline_admin_fetch(client, truly_unmatched, all_unmatched):
+    """Fetch a small batch of admin emails inline (fast enough for <15 emails)."""
+    found_users = client.get_users_by_emails_batch(truly_unmatched)
+    found = 0
+    if found_users:
+        max_workers = min(15, len(found_users))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_user = {
+                executor.submit(client._process_single_user, user): user
+                for user in found_users
+            }
+            for future in as_completed(future_to_user):
+                user = future_to_user[future]
+                email = (user.get('emailAddress') or user.get('EmailAddress') or '').lower().strip()
+                try:
+                    result = future.result()
+                    if result:
+                        formatted = format_student_for_response(result)
+                        _exam_absorb_cache[email] = {
+                            'raw': result,
+                            'formatted': formatted
+                        }
+                        found += 1
+                    else:
+                        _exam_absorb_cache[email] = None
+                except AbsorbAPIError as e:
+                    if e.status_code == 401:
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        raise
+                    _exam_absorb_cache[email] = None
+                except Exception as e:
+                    _exam_absorb_cache[email] = None
+
+    for email in all_unmatched:
+        if email not in _exam_absorb_cache:
+            _exam_absorb_cache[email] = None
+    print(f"[EXAM] Inline fetch: {found}/{len(truly_unmatched)} found")
 
 
 @exam_bp.route('/students', methods=['GET'])
@@ -178,64 +282,28 @@ def get_exam_students():
         # 5. For admin mode: fetch ONLY the specific students by email (cross-department)
         # Admin users' tokens have cross-department access
         if is_admin and unmatched_emails:
-            global _exam_absorb_timestamp
+            global _exam_absorb_timestamp, _admin_sync_running, _admin_sync_started
 
-            # Always skip emails already in cache (even if cache is "expired")
-            # The background scheduler refreshes every 6h, no need to re-fetch on each page load
+            # Skip emails already in cache
             truly_unmatched = [e for e in unmatched_emails if e not in _exam_absorb_cache]
             print(f"[EXAM] Admin mode: {len(unmatched_emails)} unmatched, {len(unmatched_emails) - len(truly_unmatched)} already cached, {len(truly_unmatched)} to fetch")
 
-            # Fetch users by searching all departments (admin token allows this)
-            found_users = client.get_users_by_emails_batch(truly_unmatched) if truly_unmatched else []
-            print(f"[EXAM] Found {len(found_users)} users, processing enrollments...")
-
-            # Process found users in parallel to get enrollment data
-            found = 0
-
-            if len(found_users) > 0:
-                max_workers = min(50, len(found_users))
-                with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                    # Submit enrollment processing for each found user (using admin token)
-                    future_to_user = {
-                        executor.submit(client._process_single_user, user): user
-                        for user in found_users
-                    }
-
-                    completed = 0
-                    for future in as_completed(future_to_user):
-                        completed += 1
-                        user = future_to_user[future]
-                        email = (user.get('emailAddress') or user.get('EmailAddress') or '').lower().strip()
-                        try:
-                            result = future.result()
-                            if result:
-                                formatted = format_student_for_response(result)
-                                _exam_absorb_cache[email] = {
-                                    'raw': result,
-                                    'formatted': formatted
-                                }
-                                found += 1
-                            else:
-                                _exam_absorb_cache[email] = None
-                        except AbsorbAPIError as e:
-                            if e.status_code == 401:
-                                executor.shutdown(wait=False, cancel_futures=True)
-                                raise
-                            _exam_absorb_cache[email] = None
-                        except Exception as e:
-                            print(f"[EXAM] Error processing {email}: {e}")
-                            _exam_absorb_cache[email] = None
-
-                        if completed % 20 == 0 or completed == len(found_users):
-                            print(f"[EXAM] Processed {completed}/{len(found_users)} enrollments ({found} complete)")
-
-            # Cache remaining unmatched as None
-            for email in unmatched_emails:
-                if email not in _exam_absorb_cache:
-                    _exam_absorb_cache[email] = None
-
-            _exam_absorb_timestamp = datetime.utcnow()
-            print(f"[EXAM] Admin fetch complete: {found}/{len(unmatched_emails)} found across all departments")
+            # If many emails need fetching, do it in background to avoid 502
+            if len(truly_unmatched) > 15 and not _admin_sync_running:
+                token = g.absorb_token
+                _admin_sync_running = True
+                _admin_sync_started = datetime.utcnow()
+                thread = threading.Thread(
+                    target=_background_admin_fetch,
+                    args=(token, truly_unmatched),
+                    daemon=True
+                )
+                thread.start()
+                print(f"[EXAM] Started background sync for {len(truly_unmatched)} students")
+            elif len(truly_unmatched) > 0 and len(truly_unmatched) <= 15:
+                # Small batch: fetch inline (fast enough)
+                _inline_admin_fetch(client, truly_unmatched, unmatched_emails)
+                _exam_absorb_timestamp = datetime.utcnow()
 
         # 6. Build combined exam student list
         exam_students = []
@@ -301,12 +369,14 @@ def get_exam_students():
         # 8. Calculate exam KPIs
         exam_summary = _calculate_exam_summary(exam_students, now)
 
-        return jsonify({
+        response = {
             'success': True,
             'students': exam_students,
             'examSummary': exam_summary,
-            'count': len(exam_students)
-        })
+            'count': len(exam_students),
+            'backgroundSync': _admin_sync_running,
+        }
+        return jsonify(response)
 
     except AbsorbAPIError as e:
         return jsonify({
@@ -821,5 +891,61 @@ def get_scheduler_status():
         'success': True,
         'scheduler': get_scheduler_info()
     })
+
+
+@exam_bp.route('/admin-sync-status', methods=['GET'])
+@login_required
+def admin_sync_status():
+    """Lightweight poll endpoint: is the background admin sync still running?"""
+    return jsonify({
+        'success': True,
+        'syncing': _admin_sync_running,
+        'started': _admin_sync_started.isoformat() if _admin_sync_started else None,
+        'cacheSize': len(_exam_absorb_cache)
+    })
+
+
+@exam_bp.route('/admin-refresh', methods=['POST'])
+@login_required
+def admin_refresh_cache():
+    """Trigger a full cache refresh in the background (clears existing cache first)."""
+    global _admin_sync_running, _admin_sync_started, _exam_absorb_cache, _exam_absorb_timestamp
+
+    data = request.get_json() or {}
+    admin_key = data.get('adminKey', '')
+    if admin_key != ADMIN_PASSWORD:
+        return jsonify({'success': False, 'error': 'Admin required'}), 403
+
+    if _admin_sync_running:
+        return jsonify({'success': True, 'message': 'Sync already in progress', 'syncing': True})
+
+    # Clear cache to force full refresh
+    _exam_absorb_cache = {}
+    _exam_absorb_timestamp = None
+
+    # Get all unmatched emails from the sheet
+    sheet_students = fetch_exam_sheet()
+    if not sheet_students:
+        return jsonify({'success': True, 'message': 'No students in sheet', 'syncing': False})
+
+    from routes.dashboard import get_cached_students
+    _, formatted_students = get_cached_students(g.department_id, g.absorb_token)
+    dept_emails = {(s.get('email') or '').lower().strip() for s in formatted_students}
+    sheet_emails = set(s['email'] for s in sheet_students)
+    unmatched = list(sheet_emails - dept_emails)
+
+    if unmatched:
+        token = g.absorb_token
+        _admin_sync_running = True
+        _admin_sync_started = datetime.utcnow()
+        thread = threading.Thread(
+            target=_background_admin_fetch,
+            args=(token, unmatched),
+            daemon=True
+        )
+        thread.start()
+        return jsonify({'success': True, 'message': f'Syncing {len(unmatched)} students in background', 'syncing': True})
+
+    return jsonify({'success': True, 'message': 'All students matched', 'syncing': False})
 
 
