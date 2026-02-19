@@ -155,6 +155,17 @@ def get_student_details(student_id):
         # Get all enrollments for this student
         enrollments = client.get_user_enrollments(student_id)
 
+        # DEBUG: Log raw time fields for the main pre-licensing course
+        for e in enrollments:
+            cname = e.get('courseName') or e.get('CourseName') or ''
+            if ('pre-licens' in cname.lower() or 'prelicens' in cname.lower()) and \
+               not any(kw in cname.lower() for kw in ('module', 'chapter', 'lesson', 'unit')):
+                time_keys = {k: v for k, v in e.items() if 'time' in k.lower() or 'active' in k.lower() or 'duration' in k.lower() or 'spent' in k.lower()}
+                print(f"[STUDENT DETAIL] Main course: {cname}")
+                print(f"[STUDENT DETAIL] Time-related fields: {time_keys}")
+                print(f"[STUDENT DETAIL] ALL keys: {list(e.keys())}")
+                break
+
         # Format enrollments (Absorb API field names)
         formatted_enrollments = []
         for enrollment in enrollments:

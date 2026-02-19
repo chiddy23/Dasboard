@@ -535,11 +535,12 @@ class AbsorbAPIClient:
             time_val = primary.get('timeSpent') or primary.get('TimeSpent') or primary.get('ActiveTime') or primary.get('activeTime') or 0
             main_time = parse_time_to_minutes(time_val)
 
-            # If main course reports 0 time, sum chapter times as fallback
-            if main_time == 0 and len(all_prelicensing) > 1:
-                for e in all_prelicensing:
-                    t = e.get('timeSpent') or e.get('TimeSpent') or e.get('ActiveTime') or e.get('activeTime') or 0
-                    main_time += parse_time_to_minutes(t)
+            # Log when main course has 0 time to diagnose root cause
+            if main_time == 0:
+                cname = primary.get('courseName') or primary.get('CourseName') or ''
+                time_fields = {k: v for k, v in primary.items() if 'time' in k.lower() or 'active' in k.lower() or 'duration' in k.lower() or 'spent' in k.lower()}
+                print(f"[TIME DEBUG] Main course '{cname}' reports 0 time. Raw time fields: {time_fields}")
+                print(f"[TIME DEBUG] All enrollment keys: {list(primary.keys())}")
 
             # Determine display name
             if prelicensing_main:
