@@ -267,6 +267,9 @@ class AbsorbAPIClient:
                 print(f"[API DEBUG] Has token: {bool(self._token)}")
                 self._logged_odata_attempt = True
 
+            if response.status_code == 401:
+                raise AbsorbAPIError("Session expired. Please log in again.", 401)
+
             if response.status_code == 200:
                 data = response.json()
 
@@ -322,9 +325,17 @@ class AbsorbAPIClient:
             }
 
             for future in as_completed(future_to_email):
-                user = future.result()
-                if user:
-                    found_users.append(user)
+                try:
+                    user = future.result()
+                    if user:
+                        found_users.append(user)
+                except AbsorbAPIError as e:
+                    if e.status_code == 401:
+                        # Token expired - cancel remaining futures and propagate
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        raise
+                except Exception:
+                    pass  # Skip individual lookup failures
 
         print(f"[API] COMPLETE: Found {len(found_users)}/{len(target_emails)} users")
         return found_users
@@ -402,23 +413,31 @@ class AbsorbAPIClient:
 
         try:
             response = self._session.get(url, params=params, headers=self._get_headers(), timeout=30)
+            if response.status_code == 401:
+                raise AbsorbAPIError("Session expired. Please log in again.", 401)
             if response.status_code == 200:
                 data = response.json()
                 if isinstance(data, list):
                     return data
                 elif isinstance(data, dict):
                     return data.get('enrollments') or data.get('Enrollments') or []
+        except AbsorbAPIError:
+            raise  # Propagate auth errors
         except Exception as e:
             # Try alternate casing as fallback
             try:
                 url = f"{self.base_url}/Users/{user_id}/Enrollments"
                 response = self._session.get(url, params=params, headers=self._get_headers(), timeout=30)
+                if response.status_code == 401:
+                    raise AbsorbAPIError("Session expired. Please log in again.", 401)
                 if response.status_code == 200:
                     data = response.json()
                     if isinstance(data, list):
                         return data
                     elif isinstance(data, dict):
                         return data.get('enrollments') or data.get('Enrollments') or []
+            except AbsorbAPIError:
+                raise
             except:
                 pass
 
@@ -584,6 +603,8 @@ class AbsorbAPIClient:
                 'courseName': course_name,
                 'enrollmentStatus': (primary.get('status') or primary.get('Status') or 0) if primary else 0
             }
+        except AbsorbAPIError:
+            raise  # Propagate auth errors (401)
         except Exception as e:
             print(f"[API] Error processing user: {e}")
             return None

@@ -208,6 +208,11 @@ def get_exam_students():
                                 found += 1
                             else:
                                 _exam_absorb_cache[email] = None
+                        except AbsorbAPIError as e:
+                            if e.status_code == 401:
+                                executor.shutdown(wait=False, cancel_futures=True)
+                                raise
+                            _exam_absorb_cache[email] = None
                         except Exception as e:
                             print(f"[EXAM] Error processing {email}: {e}")
                             _exam_absorb_cache[email] = None
