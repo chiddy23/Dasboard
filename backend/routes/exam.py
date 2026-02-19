@@ -26,7 +26,7 @@ _dept_name_cache = {}
 # Cache for processed exam students (email -> {'raw': ..., 'formatted': ...})
 _exam_absorb_cache = {}
 _exam_absorb_timestamp = None
-EXAM_ABSORB_CACHE_TTL = 300  # 5 minutes
+EXAM_ABSORB_CACHE_TTL = 3600  # 1 hour (background scheduler refreshes every 6h)
 
 # Load persistent overrides from SQLite into memory (survives restarts)
 def _load_overrides():
@@ -180,13 +180,10 @@ def get_exam_students():
         if is_admin and unmatched_emails:
             global _exam_absorb_timestamp
 
-            # Skip emails already in cache (from a previous admin lookup)
-            if is_exam_absorb_cache_valid():
-                truly_unmatched = [e for e in unmatched_emails if e not in _exam_absorb_cache]
-                print(f"[EXAM] Admin mode: {len(unmatched_emails)} unmatched, {len(unmatched_emails) - len(truly_unmatched)} already cached, {len(truly_unmatched)} to fetch")
-            else:
-                truly_unmatched = list(unmatched_emails)
-                print(f"[EXAM] Admin mode: Fetching {len(truly_unmatched)} specific students across all departments...")
+            # Always skip emails already in cache (even if cache is "expired")
+            # The background scheduler refreshes every 6h, no need to re-fetch on each page load
+            truly_unmatched = [e for e in unmatched_emails if e not in _exam_absorb_cache]
+            print(f"[EXAM] Admin mode: {len(unmatched_emails)} unmatched, {len(unmatched_emails) - len(truly_unmatched)} already cached, {len(truly_unmatched)} to fetch")
 
             # Fetch users by searching all departments (admin token allows this)
             found_users = client.get_users_by_emails_batch(truly_unmatched) if truly_unmatched else []
