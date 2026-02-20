@@ -167,8 +167,13 @@ def get_student_details(student_id):
         for enrollment in enrollments:
             # Extract values with correct Absorb API field names
             progress_val = enrollment.get('progress', 0)
-            time_spent_val = (enrollment.get('timeSpent') or enrollment.get('TimeSpent')
-                             or enrollment.get('ActiveTime') or enrollment.get('activeTime') or '0')
+            # Try each time field, use first non-zero to avoid truthy "00:00:00" short-circuiting
+            time_spent_val = '0'
+            for _tf in ('timeSpent', 'TimeSpent', 'ActiveTime', 'activeTime'):
+                _tv = enrollment.get(_tf)
+                if _tv and parse_time_spent_to_minutes(_tv) > 0:
+                    time_spent_val = _tv
+                    break
             status_val = enrollment.get('status', 0)
             course_name = enrollment.get('name') or enrollment.get('Name') or enrollment.get('courseName') or enrollment.get('CourseName') or 'Unknown Course'
             enrollment_id = enrollment.get('id')
@@ -408,8 +413,13 @@ def get_student_enrollments(student_id):
         for enrollment in enrollments:
             # Extract values with correct Absorb API field names
             progress_val = enrollment.get('progress', 0)
-            time_spent_val = (enrollment.get('timeSpent') or enrollment.get('TimeSpent')
-                             or enrollment.get('ActiveTime') or enrollment.get('activeTime') or '0')
+            # Try each time field, use first non-zero to avoid truthy "00:00:00" short-circuiting
+            time_spent_val = '0'
+            for _tf in ('timeSpent', 'TimeSpent', 'ActiveTime', 'activeTime'):
+                _tv = enrollment.get(_tf)
+                if _tv and parse_time_spent_to_minutes(_tv) > 0:
+                    time_spent_val = _tv
+                    break
             status_val = enrollment.get('status', 0)
             course_name = enrollment.get('name') or enrollment.get('Name') or enrollment.get('courseName') or enrollment.get('CourseName') or 'Unknown Course'
             enrollment_id = enrollment.get('id')

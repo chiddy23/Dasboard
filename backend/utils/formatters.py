@@ -151,10 +151,15 @@ def get_status_from_last_login(last_login: Optional[str]) -> Dict[str, Any]:
 def parse_time_spent_to_minutes(time_value) -> int:
     """
     Parse time spent value to minutes.
-    Absorb API returns time as HH:MM:SS.microseconds string (e.g., '01:26:11.9878697')
+    Absorb API returns time as .NET TimeSpan: [d.]HH:MM:SS[.fffffff]
+
+    Examples:
+        '01:26:11.9878697'     -> 86 min (1h 26m)
+        '1.13:02:39.9878697'   -> 2222 min (1d 13h 2m)
+        '37:02:39'             -> 2222 min (37h 2m)
 
     Args:
-        time_value: Time value (can be HH:MM:SS string, int minutes, or None)
+        time_value: Time value (can be [d.]HH:MM:SS string, int minutes, or None)
 
     Returns:
         Time in minutes as integer
@@ -166,21 +171,22 @@ def parse_time_spent_to_minutes(time_value) -> int:
     if isinstance(time_value, (int, float)):
         return int(time_value)
 
-    # If it's a string in HH:MM:SS format
+    # If it's a string in .NET TimeSpan format
     if isinstance(time_value, str):
         try:
-            # Handle HH:MM:SS.microseconds format
-            time_part = time_value.split('.')[0]  # Remove microseconds
-            parts = time_part.split(':')
-            if len(parts) == 3:
-                hours = int(parts[0])
+            parts = time_value.split(':')
+            if len(parts) >= 2:
+                days = 0
+                first = parts[0]
+                # Check for days prefix: "1.13" in "1.13:02:39.9878697"
+                if '.' in first:
+                    day_hour = first.split('.')
+                    days = int(day_hour[0])
+                    hours = int(day_hour[1])
+                else:
+                    hours = int(first)
                 mins = int(parts[1])
-                # Ignore seconds for display
-                return hours * 60 + mins
-            elif len(parts) == 2:
-                hours = int(parts[0])
-                mins = int(parts[1])
-                return hours * 60 + mins
+                return days * 1440 + hours * 60 + mins
             else:
                 # Try parsing as a number
                 return int(float(time_value))

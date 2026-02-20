@@ -43,19 +43,32 @@ def get_session():
 
 
 def parse_time_to_minutes(time_value) -> int:
-    """Parse time value to minutes. Handles HH:MM:SS.microseconds string or numeric values."""
+    """Parse time value to minutes. Handles .NET TimeSpan format: [d.]HH:MM:SS[.fffffff]
+
+    Examples:
+        "01:26:11.9878697"     -> 86 min (1h 26m)
+        "1.13:02:39.9878697"   -> 2222 min (1d 13h 2m)
+        "37:02:39"             -> 2222 min (37h 2m)
+    """
     if not time_value:
         return 0
     if isinstance(time_value, (int, float)):
         return int(time_value)
     if isinstance(time_value, str):
         try:
-            time_part = time_value.split('.')[0]
-            parts = time_part.split(':')
-            if len(parts) == 3:
-                return int(parts[0]) * 60 + int(parts[1])
-            elif len(parts) == 2:
-                return int(parts[0]) * 60 + int(parts[1])
+            parts = time_value.split(':')
+            if len(parts) >= 2:
+                days = 0
+                first = parts[0]
+                # Check for days prefix: "1.13" in "1.13:02:39.9878697"
+                if '.' in first:
+                    day_hour = first.split('.')
+                    days = int(day_hour[0])
+                    hours = int(day_hour[1])
+                else:
+                    hours = int(first)
+                mins = int(parts[1])
+                return days * 1440 + hours * 60 + mins
             return int(float(time_value))
         except (ValueError, TypeError):
             return 0
@@ -539,15 +552,27 @@ class AbsorbAPIClient:
                     except (ValueError, TypeError):
                         pass
                 avg_progress = sum(valid_progress) / len(valid_progress) if valid_progress else 0
-            time_val = primary.get('timeSpent') or primary.get('TimeSpent') or primary.get('ActiveTime') or primary.get('activeTime') or 0
-            main_time = parse_time_to_minutes(time_val)
+            # Try each time field, use first non-zero (avoids truthy "00:00:00" short-circuiting)
+            main_time = 0
+            for _tf in ('timeSpent', 'TimeSpent', 'ActiveTime', 'activeTime'):
+                _tv = primary.get(_tf)
+                if _tv:
+                    parsed = parse_time_to_minutes(_tv)
+                    if parsed > 0:
+                        main_time = parsed
+                        break
 
             # If main course reports 0 time, sum chapter times as fallback
             # (same logic as calculate_prelicensing_totals in student detail modal)
             if main_time == 0 and len(all_prelicensing) > 1:
                 for e in all_prelicensing:
-                    t = e.get('timeSpent') or e.get('TimeSpent') or e.get('ActiveTime') or e.get('activeTime') or 0
-                    main_time += parse_time_to_minutes(t)
+                    for _tf in ('timeSpent', 'TimeSpent', 'ActiveTime', 'activeTime'):
+                        _tv = e.get(_tf)
+                        if _tv:
+                            parsed = parse_time_to_minutes(_tv)
+                            if parsed > 0:
+                                main_time += parsed
+                                break
 
             # Determine display name
             if prelicensing_main:
@@ -572,9 +597,15 @@ class AbsorbAPIClient:
         except (ValueError, TypeError):
             progress = 0
 
-        # Handle time spent (might be HH:MM:SS string or number)
-        time_spent = primary.get('timeSpent') or primary.get('TimeSpent') or primary.get('ActiveTime') or primary.get('activeTime') or 0
-        time_spent = parse_time_to_minutes(time_spent)
+        # Handle time spent - try each field, use first non-zero
+        time_spent = 0
+        for _tf in ('timeSpent', 'TimeSpent', 'ActiveTime', 'activeTime'):
+            _tv = primary.get(_tf)
+            if _tv:
+                parsed = parse_time_to_minutes(_tv)
+                if parsed > 0:
+                    time_spent = parsed
+                    break
 
         display_name = primary.get('name') or primary.get('Name') or primary.get('courseName') or primary.get('CourseName') or 'No Course'
         return primary, progress, time_spent, display_name
@@ -597,8 +628,13 @@ class AbsorbAPIClient:
             for e in enrollments:
                 e_name = e.get('name') or e.get('Name') or e.get('courseName') or e.get('CourseName') or ''
                 if self._is_exam_prep_course(e_name):
-                    time_val = e.get('timeSpent') or e.get('TimeSpent') or e.get('ActiveTime') or e.get('activeTime') or 0
-                    exam_prep_time += parse_time_to_minutes(time_val)
+                    for _tf in ('timeSpent', 'TimeSpent', 'ActiveTime', 'activeTime'):
+                        _tv = e.get(_tf)
+                        if _tv:
+                            parsed = parse_time_to_minutes(_tv)
+                            if parsed > 0:
+                                exam_prep_time += parsed
+                                break
 
             # Build student data
             return {
