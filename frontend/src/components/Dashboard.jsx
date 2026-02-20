@@ -1302,8 +1302,10 @@ function Dashboard({ user, department, onLogout, initialData }) {
                     <h3 className="text-sm font-semibold text-gray-700 mb-3">Pass Rate by Course Type</h3>
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                       {Object.entries(examSummary.courseTypes).map(([course, data]) => {
-                        const taken = data.passed + data.failed
-                        const rate = taken > 0 ? Math.round(data.passed / taken * 100) : null
+                        const p = data.passed || 0
+                        const f = data.failed || 0
+                        const taken = p + f
+                        const rate = taken > 0 ? Math.round(p / taken * 100) : null
                         return (
                           <div key={course} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                             <div>
@@ -1316,7 +1318,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
                                   <p className={`text-lg font-bold ${rate >= 70 ? 'text-green-600' : rate >= 50 ? 'text-amber-600' : 'text-red-600'}`}>
                                     {rate}%
                                   </p>
-                                  <p className="text-xs text-gray-500">{data.passed}P / {data.failed}F</p>
+                                  <p className="text-xs text-gray-500">{p}P / {f}F</p>
                                 </>
                               ) : (
                                 <p className="text-sm text-gray-400">No results</p>
