@@ -78,9 +78,16 @@ def calculate_prelicensing_totals(enrollments):
         # Fall back to first enrollment
         if enrollments:
             e = enrollments[0]
-            time_val = parse_time_spent_to_minutes(e.get('timeSpent', 0))
+            time_val = 0
+            for _tf in ('timeSpent', 'TimeSpent', 'ActiveTime', 'activeTime'):
+                _tv = e.get(_tf)
+                if _tv:
+                    parsed = parse_time_spent_to_minutes(_tv)
+                    if parsed > 0:
+                        time_val = parsed
+                        break
             progress = e.get('progress', 0)
-            return time_val, progress, e.get('name') or e.get('courseName') or 'No Course', e.get('status', 0)
+            return time_val, progress, e.get('name') or e.get('Name') or e.get('courseName') or 'No Course', e.get('status', 0)
         return 0, 0, 'No Course', 0
 
     # Get the main course's time and progress (not chapters/modules)
@@ -91,7 +98,13 @@ def calculate_prelicensing_totals(enrollments):
         name = e.get('name') or e.get('Name') or e.get('courseName') or e.get('CourseName') or ''
         if is_prelicensing_course(name) and not is_chapter_or_module(name):
             # Use the main prelicensing course's time directly
-            main_course_time = parse_time_spent_to_minutes(e.get('timeSpent', 0))
+            for _tf in ('timeSpent', 'TimeSpent', 'ActiveTime', 'activeTime'):
+                _tv = e.get(_tf)
+                if _tv:
+                    parsed = parse_time_spent_to_minutes(_tv)
+                    if parsed > 0:
+                        main_course_time = parsed
+                        break
             progress = e.get('progress', 0)
             if isinstance(progress, (int, float)):
                 main_course_progress = progress
@@ -99,7 +112,13 @@ def calculate_prelicensing_totals(enrollments):
     # If no main course found, fall back to summing all chapters
     if main_course_time == 0:
         for e in prelicensing_enrollments:
-            main_course_time += parse_time_spent_to_minutes(e.get('timeSpent', 0))
+            for _tf in ('timeSpent', 'TimeSpent', 'ActiveTime', 'activeTime'):
+                _tv = e.get(_tf)
+                if _tv:
+                    parsed = parse_time_spent_to_minutes(_tv)
+                    if parsed > 0:
+                        main_course_time += parsed
+                        break
 
     # Use main course progress directly; fall back to average only if no main course found
     if main_course_progress is not None:
@@ -222,9 +241,15 @@ def get_student_details(student_id):
         # Calculate exam prep time (all non-prelicensing prep/study courses)
         exam_prep_time = 0
         for e in enrollments:
-            e_name = e.get('courseName') or ''
+            e_name = e.get('name') or e.get('Name') or e.get('courseName') or e.get('CourseName') or ''
             if is_exam_prep_course(e_name) and not is_prelicensing_course(e_name):
-                exam_prep_time += parse_time_spent_to_minutes(e.get('timeSpent', 0))
+                for _tf in ('timeSpent', 'TimeSpent', 'ActiveTime', 'activeTime'):
+                    _tv = e.get(_tf)
+                    if _tv:
+                        parsed = parse_time_spent_to_minutes(_tv)
+                        if parsed > 0:
+                            exam_prep_time += parsed
+                            break
 
         # Add enrollment data to student with calculated totals
         student['enrollments'] = enrollments
