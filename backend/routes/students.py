@@ -49,11 +49,13 @@ def is_chapter_or_module(name):
 
 
 def is_exam_prep_course(name):
-    """Check if course is an exam prep course."""
+    """Check if course is an exam prep course (excludes practice exams)."""
     if not name:
         return False
     lower = name.lower()
-    return ('practice' in lower or 'prep' in lower or 'study' in lower)
+    if 'practice' in lower:
+        return False
+    return 'prep' in lower or 'study' in lower
 
 
 def calculate_prelicensing_totals(enrollments):
