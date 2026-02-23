@@ -67,6 +67,14 @@ def login():
                 }), 401
             raise
 
+        # Check allowlist before proceeding
+        from snapshot_db import is_user_allowed
+        if not is_user_allowed(username):
+            return jsonify({
+                'success': False,
+                'error': 'Account not authorized. Please contact your administrator for access.'
+            }), 403
+
         # Set the token for subsequent API calls
         client.set_token(auth_result['token'])
 

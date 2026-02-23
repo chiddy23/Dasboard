@@ -826,3 +826,90 @@ def get_scheduler_status():
     })
 
 
+# ── Allowed Users (allowlist) endpoints ──────────────────────────────
+
+@exam_bp.route('/allowlist', methods=['GET'])
+@login_required
+def get_allowlist():
+    """Get all allowed users. Admin only."""
+    admin_key = request.args.get('adminKey', '')
+    if admin_key != ADMIN_PASSWORD:
+        return jsonify({'success': False, 'error': 'Admin access required'}), 403
+
+    from snapshot_db import get_all_allowed_users, get_allowlist_count
+    users = get_all_allowed_users()
+    return jsonify({
+        'success': True,
+        'users': users,
+        'count': len(users),
+        'enforcing': get_allowlist_count() > 0
+    })
+
+
+@exam_bp.route('/allowlist/add', methods=['POST'])
+@login_required
+def add_to_allowlist():
+    """Add a user to the allowlist. Admin only.
+    Auto-adds the current admin if this is the first user being added."""
+    data = request.get_json() or {}
+    admin_key = data.get('adminKey', '')
+    if admin_key != ADMIN_PASSWORD:
+        return jsonify({'success': False, 'error': 'Admin access required'}), 403
+
+    email = (data.get('email') or '').lower().strip()
+    name = (data.get('name') or '').strip()
+    if not email:
+        return jsonify({'success': False, 'error': 'Email is required'}), 400
+
+    admin_email = (g.user.get('email') or g.user.get('username') or '').lower().strip()
+
+    from snapshot_db import get_allowlist_count, add_allowed_user, save_allowlist_to_sheet, get_all_allowed_users
+
+    was_empty = get_allowlist_count() == 0
+    if was_empty and email != admin_email and admin_email:
+        add_allowed_user(admin_email, name=admin_email.split('@')[0].title(), added_by='system-auto')
+        print(f"[ALLOWLIST] Auto-added admin {admin_email} to prevent lockout")
+
+    add_allowed_user(email, name=name, added_by=admin_email)
+    print(f"[ALLOWLIST] Added {email} by {admin_email}")
+
+    save_allowlist_to_sheet()
+
+    return jsonify({
+        'success': True,
+        'email': email,
+        'users': get_all_allowed_users(),
+        'autoAddedAdmin': was_empty and email != admin_email
+    })
+
+
+@exam_bp.route('/allowlist/remove', methods=['POST'])
+@login_required
+def remove_from_allowlist():
+    """Remove a user from the allowlist. Admin only."""
+    data = request.get_json() or {}
+    admin_key = data.get('adminKey', '')
+    if admin_key != ADMIN_PASSWORD:
+        return jsonify({'success': False, 'error': 'Admin access required'}), 403
+
+    email = (data.get('email') or '').lower().strip()
+    if not email:
+        return jsonify({'success': False, 'error': 'Email is required'}), 400
+
+    from snapshot_db import remove_allowed_user, save_allowlist_to_sheet, get_all_allowed_users
+
+    remove_allowed_user(email)
+    print(f"[ALLOWLIST] Removed {email}")
+
+    save_allowlist_to_sheet()
+
+    remaining = get_all_allowed_users()
+    return jsonify({
+        'success': True,
+        'email': email,
+        'users': remaining,
+        'enforcing': len(remaining) > 0,
+        'warning': 'Allowlist is now empty. All users can log in.' if len(remaining) == 0 else None
+    })
+
+

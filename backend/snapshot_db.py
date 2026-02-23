@@ -61,8 +61,90 @@ def init_db():
         updated_at TEXT NOT NULL
     )''')
 
+    # Allowed users table (active user allowlist for production lockdown)
+    conn.execute('''CREATE TABLE IF NOT EXISTS allowed_users (
+        email TEXT PRIMARY KEY,
+        name TEXT DEFAULT '',
+        added_by TEXT DEFAULT '',
+        added_at TEXT NOT NULL,
+        active INTEGER DEFAULT 1
+    )''')
+
     conn.commit()
     conn.close()
+
+
+# ── Allowed Users (allowlist) functions ──────────────────────────────
+
+def is_user_allowed(email):
+    """Check if a user is on the allowlist.
+    Returns True if allowlist is empty (not enforcing) or user is active."""
+    email = email.lower().strip()
+    conn = _get_connection()
+    count = conn.execute(
+        'SELECT COUNT(*) FROM allowed_users WHERE active = 1'
+    ).fetchone()[0]
+    if count == 0:
+        conn.close()
+        return True
+    row = conn.execute(
+        'SELECT 1 FROM allowed_users WHERE email = ? AND active = 1',
+        (email,)
+    ).fetchone()
+    conn.close()
+    return row is not None
+
+
+def add_allowed_user(email, name='', added_by=''):
+    """Add a user to the allowlist (or reactivate if previously removed)."""
+    email = email.lower().strip()
+    conn = _get_connection()
+    now = datetime.utcnow().isoformat()
+    existing = conn.execute(
+        'SELECT name FROM allowed_users WHERE email = ?', (email,)
+    ).fetchone()
+    if existing:
+        conn.execute(
+            'UPDATE allowed_users SET active = 1, name = ?, added_by = ?, added_at = ? WHERE email = ?',
+            (name or (existing['name'] if existing else ''), added_by, now, email)
+        )
+    else:
+        conn.execute(
+            'INSERT INTO allowed_users (email, name, added_by, added_at, active) VALUES (?, ?, ?, ?, 1)',
+            (email, name, added_by, now)
+        )
+    conn.commit()
+    conn.close()
+    return True
+
+
+def remove_allowed_user(email):
+    """Soft-delete a user from the allowlist (set active=0)."""
+    email = email.lower().strip()
+    conn = _get_connection()
+    conn.execute('UPDATE allowed_users SET active = 0 WHERE email = ?', (email,))
+    conn.commit()
+    conn.close()
+
+
+def get_all_allowed_users():
+    """Get all active allowed users as a list of dicts."""
+    conn = _get_connection()
+    rows = conn.execute(
+        'SELECT email, name, added_by, added_at FROM allowed_users WHERE active = 1 ORDER BY added_at DESC'
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_allowlist_count():
+    """Count of active allowed users. 0 means not enforcing."""
+    conn = _get_connection()
+    count = conn.execute(
+        'SELECT COUNT(*) FROM allowed_users WHERE active = 1'
+    ).fetchone()[0]
+    conn.close()
+    return count
 
 
 def compute_snapshot_metrics(enrollments):
@@ -423,8 +505,98 @@ def load_snapshots_from_sheet():
         return 0
 
 
+# ── Allowlist Google Sheets sync ──────────────────────────────────────
+
+ALLOWLIST_HEADERS = ['email', 'name', 'added_by', 'added_at', 'active']
+
+
+def _get_allowlist_sheet():
+    """Get the AllowedUsers worksheet (second tab of snapshot sheet)."""
+    import json
+    import gspread
+    from google.oauth2.service_account import Credentials
+
+    creds_json = Config.GOOGLE_SHEETS_CREDENTIALS_JSON
+    sheet_id = Config.SNAPSHOT_SHEET_ID
+    if not creds_json or not sheet_id:
+        return None
+
+    creds_data = json.loads(creds_json)
+    scopes = ['https://www.googleapis.com/auth/spreadsheets']
+    credentials = Credentials.from_service_account_info(creds_data, scopes=scopes)
+    gc = gspread.authorize(credentials)
+    spreadsheet = gc.open_by_key(sheet_id)
+
+    try:
+        return spreadsheet.worksheet('AllowedUsers')
+    except gspread.exceptions.WorksheetNotFound:
+        ws = spreadsheet.add_worksheet(title='AllowedUsers', rows=100, cols=5)
+        ws.update('A1', [ALLOWLIST_HEADERS])
+        return ws
+
+
+def save_allowlist_to_sheet():
+    """Write the full allowlist to Google Sheets (overwrite). Non-fatal."""
+    try:
+        ws = _get_allowlist_sheet()
+        if not ws:
+            print("[ALLOWLIST] No Google Sheet configured, skipping sheet save")
+            return
+        users = get_all_allowed_users()
+        ws.clear()
+        ws.update('A1', [ALLOWLIST_HEADERS])
+        if users:
+            rows = [[u['email'], u['name'], u['added_by'], u['added_at'], '1'] for u in users]
+            ws.append_rows(rows, value_input_option='RAW')
+        print(f"[ALLOWLIST] Saved {len(users)} allowed users to Google Sheet")
+    except Exception as e:
+        print(f"[ALLOWLIST] Failed to save to Google Sheet (non-fatal): {e}")
+
+
+def load_allowlist_from_sheet():
+    """Load allowlist from Google Sheet into SQLite on startup."""
+    try:
+        ws = _get_allowlist_sheet()
+        if not ws:
+            print("[ALLOWLIST] No Google Sheet configured, skipping allowlist load")
+            return 0
+        all_values = ws.get_all_values()
+        if len(all_values) <= 1:
+            print("[ALLOWLIST] Allowlist sheet is empty")
+            return 0
+        headers = all_values[0]
+        data_rows = all_values[1:]
+        conn = _get_connection()
+        loaded = 0
+        for row in data_rows:
+            row_dict = {h: row[i] if i < len(row) else '' for i, h in enumerate(headers)}
+            email = (row_dict.get('email') or '').lower().strip()
+            if not email:
+                continue
+            if row_dict.get('active', '1') != '1':
+                continue
+            existing = conn.execute('SELECT 1 FROM allowed_users WHERE email = ?', (email,)).fetchone()
+            if not existing:
+                conn.execute(
+                    'INSERT INTO allowed_users (email, name, added_by, added_at, active) VALUES (?, ?, ?, ?, 1)',
+                    (email, row_dict.get('name', ''), row_dict.get('added_by', ''),
+                     row_dict.get('added_at', datetime.utcnow().isoformat()))
+                )
+                loaded += 1
+        conn.commit()
+        conn.close()
+        print(f"[ALLOWLIST] Loaded {loaded} new allowed users from Google Sheet")
+        return loaded
+    except Exception as e:
+        print(f"[ALLOWLIST] Failed to load from Google Sheet (non-fatal): {e}")
+        return 0
+
+
 # Initialize DB on import
 init_db()
 
 # Load historical snapshots from Google Sheet (survives Render deploys)
 load_snapshots_from_sheet()
+
+# Load allowlist from Google Sheet (survives Render deploys)
+load_allowlist_from_sheet()

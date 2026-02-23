@@ -37,6 +37,15 @@ function Dashboard({ user, department, onLogout, initialData }) {
   // Scheduler info
   const [schedulerInfo, setSchedulerInfo] = useState(null)
 
+  // Allowlist state
+  const [allowedUsers, setAllowedUsers] = useState([])
+  const [allowlistLoading, setAllowlistLoading] = useState(false)
+  const [showAllowlist, setShowAllowlist] = useState(false)
+  const [newAllowEmail, setNewAllowEmail] = useState('')
+  const [newAllowName, setNewAllowName] = useState('')
+  const [allowlistError, setAllowlistError] = useState('')
+  const [allowlistEnforcing, setAllowlistEnforcing] = useState(false)
+
   // Multi-department state
   const [extraDepartments, setExtraDepartments] = useState(() => {
     try {
@@ -365,6 +374,8 @@ function Dashboard({ user, department, onLogout, initialData }) {
         // Re-fetch exam data with admin key to get tracking data
         setExamLoaded(false)
         fetchExamData(password)
+        // Load allowlist data
+        fetchAllowlist(password)
       } else {
         setAdminError('Invalid password')
       }
@@ -378,9 +389,81 @@ function Dashboard({ user, department, onLogout, initialData }) {
     setAdminKey('')
     setShowAdminInput(false)
     setAdminError('')
+    setAllowedUsers([])
+    setAllowlistEnforcing(false)
+    setShowAllowlist(false)
     // Re-fetch without admin data
     setExamLoaded(false)
     fetchExamData('')
+  }
+
+  // ── Allowlist handlers ──────────────────────────────────
+  const fetchAllowlist = async (key) => {
+    setAllowlistLoading(true)
+    try {
+      const res = await fetch(`${API_BASE}/exam/allowlist?adminKey=${encodeURIComponent(key || adminKey)}`, {
+        credentials: 'include'
+      })
+      const data = await res.json()
+      if (data.success) {
+        setAllowedUsers(data.users)
+        setAllowlistEnforcing(data.enforcing)
+      }
+    } catch (err) {
+      console.error('Failed to fetch allowlist:', err)
+    } finally {
+      setAllowlistLoading(false)
+    }
+  }
+
+  const handleAddAllowedUser = async () => {
+    if (!newAllowEmail.trim()) {
+      setAllowlistError('Email is required')
+      return
+    }
+    setAllowlistError('')
+    try {
+      const res = await fetch(`${API_BASE}/exam/allowlist/add`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ email: newAllowEmail.trim(), name: newAllowName.trim(), adminKey })
+      })
+      const data = await res.json()
+      if (data.success) {
+        setAllowedUsers(data.users)
+        setAllowlistEnforcing(true)
+        setNewAllowEmail('')
+        setNewAllowName('')
+        if (data.autoAddedAdmin) {
+          alert('Your admin account was automatically added to the allowlist to prevent lockout.')
+        }
+      } else {
+        setAllowlistError(data.error || 'Failed to add user')
+      }
+    } catch {
+      setAllowlistError('Network error')
+    }
+  }
+
+  const handleRemoveAllowedUser = async (email) => {
+    if (!confirm(`Remove ${email} from allowed users? They will not be able to log in.`)) return
+    try {
+      const res = await fetch(`${API_BASE}/exam/allowlist/remove`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ email, adminKey })
+      })
+      const data = await res.json()
+      if (data.success) {
+        setAllowedUsers(data.users)
+        setAllowlistEnforcing(data.enforcing)
+        if (data.warning) alert(data.warning)
+      }
+    } catch (err) {
+      console.error('Failed to remove from allowlist:', err)
+    }
   }
 
   const recalcExamSummary = (students) => {
@@ -1233,6 +1316,92 @@ function Dashboard({ user, department, onLogout, initialData }) {
                 </button>
               </div>
             </div>
+
+            {/* Allowed Users Panel - Admin Only */}
+            {adminMode && (
+              <div className="bg-white rounded-xl shadow-md p-4 mb-6 border-l-4 border-purple-500">
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-2">
+                    <svg className="w-5 h-5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                    </svg>
+                    <h3 className="text-sm font-semibold text-gray-700">Allowed Users</h3>
+                    <span className={`px-2 py-0.5 text-xs rounded-full font-medium ${
+                      allowlistEnforcing
+                        ? 'bg-green-100 text-green-700'
+                        : 'bg-gray-100 text-gray-500'
+                    }`}>
+                      {allowlistEnforcing ? `Active (${allowedUsers.length} users)` : 'Not enforcing'}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => { setShowAllowlist(!showAllowlist); if (!showAllowlist && allowedUsers.length === 0) fetchAllowlist() }}
+                    className="text-sm text-purple-600 hover:text-purple-800 font-medium"
+                  >
+                    {showAllowlist ? 'Hide' : 'Manage'}
+                  </button>
+                </div>
+
+                {!allowlistEnforcing && !showAllowlist && (
+                  <p className="text-xs text-gray-500">
+                    No users in allowlist. All authenticated Absorb users can log in. Add a user to start restricting access.
+                  </p>
+                )}
+
+                {showAllowlist && (
+                  <div className="mt-3">
+                    <div className="flex gap-2 mb-3">
+                      <input
+                        type="email"
+                        placeholder="Email address"
+                        value={newAllowEmail}
+                        onChange={(e) => { setNewAllowEmail(e.target.value); setAllowlistError('') }}
+                        onKeyDown={(e) => e.key === 'Enter' && handleAddAllowedUser()}
+                        className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      />
+                      <input
+                        type="text"
+                        placeholder="Name (optional)"
+                        value={newAllowName}
+                        onChange={(e) => setNewAllowName(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && handleAddAllowedUser()}
+                        className="w-40 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      />
+                      <button
+                        onClick={handleAddAllowedUser}
+                        className="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm font-medium hover:bg-purple-700"
+                      >
+                        Add
+                      </button>
+                    </div>
+                    {allowlistError && <p className="text-xs text-red-500 mb-2">{allowlistError}</p>}
+
+                    {allowlistLoading ? (
+                      <p className="text-sm text-gray-400">Loading...</p>
+                    ) : allowedUsers.length > 0 ? (
+                      <div className="divide-y divide-gray-100 max-h-64 overflow-y-auto">
+                        {allowedUsers.map(u => (
+                          <div key={u.email} className="flex items-center justify-between py-2">
+                            <div>
+                              <p className="text-sm font-medium text-gray-800">{u.name || u.email}</p>
+                              <p className="text-xs text-gray-500">{u.email} &middot; Added {new Date(u.added_at).toLocaleDateString()}</p>
+                            </div>
+                            <button
+                              onClick={() => handleRemoveAllowedUser(u.email)}
+                              className="text-xs text-red-500 hover:text-red-700 px-2 py-1 rounded hover:bg-red-50"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-gray-400">No users in allowlist yet.</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Exam Charts (collapsible) */}
             {showExamCharts && examSummary && (
