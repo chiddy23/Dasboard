@@ -37,6 +37,9 @@ function Dashboard({ user, department, onLogout, initialData }) {
   // Scheduler info
   const [schedulerInfo, setSchedulerInfo] = useState(null)
 
+  // KPI filter state
+  const [kpisFiltered, setKpisFiltered] = useState(false)
+
   // Allowlist state
   const [allowedUsers, setAllowedUsers] = useState([])
   const [allowlistLoading, setAllowlistLoading] = useState(false)
@@ -134,6 +137,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
       if (data.success) {
         setExamStudents(data.students)
         setExamSummary(data.examSummary)
+        setKpisFiltered(false)
         setExamLoaded(true)
 
         // Fetch scheduler status in admin mode
@@ -466,10 +470,14 @@ function Dashboard({ user, department, onLogout, initialData }) {
     }
   }
 
-  const recalcExamSummary = (students) => {
+  const formatMins = (m) => m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`
+
+  const calculateFullKPIs = (students) => {
     const total = students.length
-    const passed = students.filter(s => (s.passFail || '').toUpperCase() === 'PASS').length
-    const failed = students.filter(s => (s.passFail || '').toUpperCase() === 'FAIL').length
+    const passedStudents = students.filter(s => (s.passFail || '').toUpperCase() === 'PASS')
+    const failedStudents = students.filter(s => (s.passFail || '').toUpperCase() === 'FAIL')
+    const passed = passedStudents.length
+    const failed = failedStudents.length
     const now = Date.now()
     let upcoming = 0, atRisk = 0
     students.forEach(s => {
@@ -482,11 +490,38 @@ function Dashboard({ user, department, onLogout, initialData }) {
     })
     const completedExams = passed + failed
     const passRate = completedExams > 0 ? Math.round(passed / completedExams * 1000) / 10 : 0
-    return prev => ({
-      ...prev,
-      total, passed, failed, upcoming, atRisk, passRate,
-      noResult: total - passed - failed - upcoming
+
+    // Study time analytics (matched students only)
+    const matched = students.filter(s => s.matched !== false)
+    const matchedPassed = passedStudents.filter(s => s.matched !== false)
+    const matchedFailed = failedStudents.filter(s => s.matched !== false)
+
+    const studyMins = (s) => ((s.timeSpent?.minutes || 0) + (s.examPrepTime?.minutes || 0))
+
+    const avgStudyTime = matched.length > 0 ? Math.round(matched.reduce((sum, s) => sum + studyMins(s), 0) / matched.length) : 0
+    const avgStudyPassed = matchedPassed.length > 0 ? Math.round(matchedPassed.reduce((sum, s) => sum + studyMins(s), 0) / matchedPassed.length) : 0
+    const avgStudyFailed = matchedFailed.length > 0 ? Math.round(matchedFailed.reduce((sum, s) => sum + studyMins(s), 0) / matchedFailed.length) : 0
+    const averageProgress = matched.length > 0 ? Math.round(matched.reduce((sum, s) => sum + (s.progress?.value || 0), 0) / matched.length * 10) / 10 : 0
+
+    // Course type breakdown
+    const courseTypes = {}
+    students.forEach(s => {
+      const course = (s.examCourse || 'Unknown').trim()
+      if (!courseTypes[course]) courseTypes[course] = { total: 0, passed: 0, failed: 0 }
+      courseTypes[course].total++
+      const pf = (s.passFail || '').toUpperCase()
+      if (pf === 'PASS') courseTypes[course].passed++
+      else if (pf === 'FAIL') courseTypes[course].failed++
     })
+
+    return {
+      total, passed, failed, upcoming, atRisk, passRate,
+      noResult: total - passed - failed - upcoming,
+      avgStudyTime, avgStudyTimeFormatted: formatMins(avgStudyTime),
+      avgStudyPassed, avgStudyPassedFormatted: formatMins(avgStudyPassed),
+      avgStudyFailed, avgStudyFailedFormatted: formatMins(avgStudyFailed),
+      averageProgress, courseTypes
+    }
   }
 
   const handleUpdateResult = async (email, result) => {
@@ -505,7 +540,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
         )
         setExamStudents(updated)
         // Recalculate KPIs
-        setExamSummary(recalcExamSummary(updated))
+        setExamSummary(calculateFullKPIs(updated))
         // Also update selectedStudent if viewing this student
         setSelectedStudent(prev =>
           prev && prev.email === email ? { ...prev, passFail: result } : prev
@@ -549,7 +584,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
         )
         setExamStudents(updated)
         // Recalculate KPIs (upcoming, at-risk depend on exam date)
-        setExamSummary(recalcExamSummary(updated))
+        setExamSummary(calculateFullKPIs(updated))
         // Also update selectedStudent if viewing this student
         setSelectedStudent(prev =>
           prev && prev.email === email ? {
@@ -1413,6 +1448,16 @@ function Dashboard({ user, department, onLogout, initialData }) {
             {/* Exam KPI Row 1 - Core Metrics */}
             {examSummary && (
               <>
+                {kpisFiltered && (
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
+                      <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+                      </svg>
+                      KPIs filtered ({examSummary.total} students)
+                    </span>
+                  </div>
+                )}
                 <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4 mb-4">
                   <div className="kpi-card bg-gray-50 border-l-4 border-gray-500 animate-fadeIn">
                     <p className="text-sm font-medium text-gray-600">Total Students</p>
@@ -1661,8 +1706,24 @@ function Dashboard({ user, department, onLogout, initialData }) {
                 )}
               </div>
 
-              <div className="mt-3 text-sm text-gray-500">
-                Showing {filteredExamStudents.length} of {visibleExamStudents.length} exam students
+              <div className="mt-3 flex items-center gap-3 text-sm text-gray-500">
+                <span>Showing {filteredExamStudents.length} of {visibleExamStudents.length} exam students</span>
+                {filteredExamStudents.length !== examStudents.length && !kpisFiltered && (
+                  <button
+                    onClick={() => { setExamSummary(calculateFullKPIs(filteredExamStudents)); setKpisFiltered(true) }}
+                    className="px-3 py-1 bg-ji-blue-bright text-white rounded-lg text-xs font-medium hover:bg-ji-blue-medium transition-colors"
+                  >
+                    Calculate KPIs by Filter
+                  </button>
+                )}
+                {kpisFiltered && (
+                  <button
+                    onClick={() => { setExamSummary(calculateFullKPIs(examStudents)); setKpisFiltered(false) }}
+                    className="px-3 py-1 bg-gray-200 text-gray-700 rounded-lg text-xs font-medium hover:bg-gray-300 transition-colors"
+                  >
+                    Reset KPIs to All
+                  </button>
+                )}
               </div>
             </div>
 
