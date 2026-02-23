@@ -231,6 +231,7 @@ function StudentModal({ studentId, examInfo, onClose, onSessionExpired, onUpdate
   const [contactSaving, setContactSaving] = useState(false)
   const [snapshots, setSnapshots] = useState([])
   const [snapshotsExpanded, setSnapshotsExpanded] = useState(false)
+  const [showTimeline, setShowTimeline] = useState(false)
 
   useEffect(() => {
     fetchStudentDetails()
@@ -814,6 +815,49 @@ function StudentModal({ studentId, examInfo, onClose, onSessionExpired, onUpdate
                       <p className="text-xs text-gray-500">Last Gap Date</p>
                     </div>
                   </div>
+
+                  {/* Gap Timeline */}
+                  {student.gapMetrics.timeline && student.gapMetrics.timeline.length > 0 && (
+                    <div className="mt-3">
+                      <button
+                        onClick={() => setShowTimeline(!showTimeline)}
+                        className="text-xs text-orange-600 hover:text-orange-800 font-medium mb-2"
+                      >
+                        {showTimeline ? 'Hide Timeline' : 'Show Timeline'}
+                      </button>
+                      {showTimeline && (
+                        <div className="space-y-1 max-h-48 overflow-y-auto">
+                          {student.gapMetrics.timeline.map((period, i) => {
+                            const startDate = new Date(period.start + 'T00:00:00')
+                            const endDate = new Date(period.end + 'T00:00:00')
+                            const fmt = (d) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                            const dateStr = period.days === 1 ? fmt(startDate) : `${fmt(startDate)} - ${fmt(endDate)}`
+                            const isGap = period.type === 'gap'
+                            const longGap = isGap && period.days >= 4
+
+                            return (
+                              <div key={i} className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs ${
+                                isGap
+                                  ? longGap ? 'bg-red-50 border border-red-200' : 'bg-orange-50 border border-orange-200'
+                                  : 'bg-green-50 border border-green-200'
+                              }`}>
+                                <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                                  isGap ? longGap ? 'bg-red-400' : 'bg-orange-400' : 'bg-green-400'
+                                }`} />
+                                <span className="font-medium text-gray-700 min-w-[120px]">{dateStr}</span>
+                                <span className="text-gray-500">({period.days}d)</span>
+                                <span className={`font-medium ${
+                                  isGap ? longGap ? 'text-red-600' : 'text-orange-600' : 'text-green-600'
+                                }`}>
+                                  {isGap ? 'Gap' : 'Studied'}
+                                </span>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 
