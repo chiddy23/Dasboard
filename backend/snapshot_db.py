@@ -79,6 +79,7 @@ def init_db():
 def is_user_allowed(email):
     """Check if a user is on the allowlist.
     Returns True if allowlist is empty (not enforcing) or user is active."""
+    _ensure_allowlist_loaded()
     email = email.lower().strip()
     conn = _get_connection()
     count = conn.execute(
@@ -129,6 +130,7 @@ def remove_allowed_user(email):
 
 def get_all_allowed_users():
     """Get all active allowed users as a list of dicts."""
+    _ensure_allowlist_loaded()
     conn = _get_connection()
     rows = conn.execute(
         'SELECT email, name, added_by, added_at FROM allowed_users WHERE active = 1 ORDER BY added_at DESC'
@@ -598,5 +600,13 @@ init_db()
 # Load historical snapshots from Google Sheet (survives Render deploys)
 load_snapshots_from_sheet()
 
-# Load allowlist from Google Sheet (survives Render deploys)
-load_allowlist_from_sheet()
+# Allowlist loaded lazily on first access (saves startup memory)
+_allowlist_loaded = False
+
+
+def _ensure_allowlist_loaded():
+    """Load allowlist from Google Sheet once, on first access."""
+    global _allowlist_loaded
+    if not _allowlist_loaded:
+        _allowlist_loaded = True
+        load_allowlist_from_sheet()
