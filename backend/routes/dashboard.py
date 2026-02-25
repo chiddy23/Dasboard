@@ -14,6 +14,7 @@ from absorb_api import AbsorbAPIClient, AbsorbAPIError
 from middleware import login_required
 from utils import format_student_for_response, get_status_from_last_login
 from routes.exam import invalidate_exam_absorb_cache, get_department_name
+from snapshot_db import get_user_dept_prefs, save_user_dept_prefs
 
 dashboard_bp = Blueprint('dashboard', __name__)
 
@@ -484,3 +485,26 @@ def export_data():
         return jsonify({'success': False, 'error': str(e.message)}), e.status_code or 500
     except Exception as e:
         return jsonify({'success': False, 'error': 'Failed to export data'}), 500
+
+
+# ── User Department Preferences ──────────────────────────────────────
+
+@dashboard_bp.route('/dept-prefs', methods=['GET'])
+@login_required
+def get_dept_prefs():
+    """Get the logged-in user's saved extra departments."""
+    email = (g.user.get('emailAddress') or '').lower().strip()
+    dept_ids = get_user_dept_prefs(email)
+    return jsonify({'success': True, 'departmentIds': dept_ids})
+
+
+@dashboard_bp.route('/dept-prefs', methods=['POST'])
+@login_required
+def save_dept_prefs():
+    """Save the logged-in user's extra departments."""
+    email = (g.user.get('emailAddress') or '').lower().strip()
+    data = request.get_json() or {}
+    dept_ids = data.get('departmentIds', [])
+    valid = [d for d in dept_ids[:MAX_EXTRA_DEPTS] if isinstance(d, str) and GUID_RE.match(d)]
+    save_user_dept_prefs(email, valid)
+    return jsonify({'success': True, 'departmentIds': valid})

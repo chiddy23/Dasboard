@@ -5,6 +5,7 @@ This builds a historical record for tracking study patterns over time.
 """
 
 import sqlite3
+import json
 import os
 from datetime import datetime, timedelta
 
@@ -58,6 +59,13 @@ def init_db():
         pass_fail TEXT DEFAULT '',
         exam_date TEXT DEFAULT '',
         exam_time TEXT DEFAULT '',
+        updated_at TEXT NOT NULL
+    )''')
+
+    # User department preferences (per-user extra department IDs)
+    conn.execute('''CREATE TABLE IF NOT EXISTS user_department_prefs (
+        email TEXT PRIMARY KEY,
+        department_ids TEXT DEFAULT '[]',
         updated_at TEXT NOT NULL
     )''')
 
@@ -145,6 +153,36 @@ def get_allowlist_count():
     ).fetchone()[0]
     conn.close()
     return count
+
+
+# ── User Department Preferences functions ─────────────────────────────
+
+def get_user_dept_prefs(email):
+    """Get saved extra department IDs for a user."""
+    email = email.lower().strip()
+    conn = _get_connection()
+    row = conn.execute(
+        'SELECT department_ids FROM user_department_prefs WHERE email = ?',
+        (email,)
+    ).fetchone()
+    conn.close()
+    if row:
+        return json.loads(row['department_ids'])
+    return []
+
+
+def save_user_dept_prefs(email, dept_ids):
+    """Save extra department IDs for a user (upsert)."""
+    email = email.lower().strip()
+    conn = _get_connection()
+    now = datetime.utcnow().isoformat()
+    conn.execute('''
+        INSERT INTO user_department_prefs (email, department_ids, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(email) DO UPDATE SET department_ids = ?, updated_at = ?
+    ''', (email, json.dumps(dept_ids), now, json.dumps(dept_ids), now))
+    conn.commit()
+    conn.close()
 
 
 def compute_snapshot_metrics(enrollments):

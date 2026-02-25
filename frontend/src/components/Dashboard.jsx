@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import KPICards from './KPICards'
 import StudentTable from './StudentTable'
 import ExamTable from './ExamTable'
@@ -50,12 +50,8 @@ function Dashboard({ user, department, onLogout, initialData }) {
   const [allowlistEnforcing, setAllowlistEnforcing] = useState(false)
 
   // Multi-department state
-  const [extraDepartments, setExtraDepartments] = useState(() => {
-    try {
-      const saved = localStorage.getItem('ji_extra_departments')
-      return saved ? JSON.parse(saved) : []
-    } catch { return [] }
-  })
+  const [extraDepartments, setExtraDepartments] = useState([])
+  const deptPrefsLoaded = useRef(false)
   const [showDeptManager, setShowDeptManager] = useState(false)
   const [deptInputValue, setDeptInputValue] = useState('')
   const [deptError, setDeptError] = useState('')
@@ -89,9 +85,33 @@ function Dashboard({ user, department, onLogout, initialData }) {
     }
   }, [])
 
-  // Persist extra departments to localStorage
+  // Load department prefs from backend on mount
   useEffect(() => {
-    localStorage.setItem('ji_extra_departments', JSON.stringify(extraDepartments))
+    if (!user?.email) return
+    const loadDeptPrefs = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/dashboard/dept-prefs`, { credentials: 'include' })
+        if (res.ok) {
+          const data = await res.json()
+          if (data.success && data.departmentIds?.length > 0) {
+            setExtraDepartments(data.departmentIds)
+          }
+        }
+      } catch (err) { console.error('[DEPT] Failed to load dept prefs:', err) }
+      deptPrefsLoaded.current = true
+    }
+    loadDeptPrefs()
+  }, [user?.email])
+
+  // Save department prefs to backend when they change (skip initial load)
+  useEffect(() => {
+    if (!user?.email || !deptPrefsLoaded.current) return
+    fetch(`${API_BASE}/dashboard/dept-prefs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ departmentIds: extraDepartments })
+    }).catch(err => console.error('[DEPT] Failed to save dept prefs:', err))
   }, [extraDepartments])
 
   // Re-fetch students when extra departments change
