@@ -10,6 +10,7 @@ import sys
 from flask import Flask, jsonify, send_from_directory, make_response
 from flask_cors import CORS
 from flask_session import Session
+from flask_compress import Compress
 from datetime import timedelta
 
 # Path to built frontend
@@ -39,6 +40,9 @@ def create_app():
 
     # Initialize session
     Session(app)
+
+    # Enable gzip compression for responses
+    Compress(app)
 
     # Configure CORS (allow all for tunnel/deployment)
     CORS(app,
