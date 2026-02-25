@@ -12,7 +12,7 @@ services:
       ls -la dist/assets/
       cd ..
       pip install -r backend/requirements.txt
-    startCommand: cd backend && gunicorn app:app --bind 0.0.0.0:$PORT --timeout 120 --workers 2
+    startCommand: cd backend && gunicorn app:app --bind 0.0.0.0:$PORT --timeout 120 --workers 4
     envVars:
       - key: NODE_VERSION
         value: "20.11.0"
