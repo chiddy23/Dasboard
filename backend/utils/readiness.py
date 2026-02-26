@@ -137,6 +137,33 @@ def _is_prelicensing(name):
     return ('pre-licens' in lower or 'prelicens' in lower or 'pre licens' in lower)
 
 
+def _detect_course_type(enrollments):
+    """Auto-detect course type (Life, Health, or Life & Health) from enrollment names.
+
+    Scans all enrollment names for 'life' and 'health' keywords.
+    Returns 'Life & Health', 'Life', 'Health', or None if undetectable.
+    """
+    has_life = False
+    has_health = False
+    for e in enrollments:
+        name = (_get_enrollment_name(e) or '').lower()
+        if not name:
+            name = (e.get('name') or e.get('Name') or '').lower()
+        if not name:
+            continue
+        if 'life' in name:
+            has_life = True
+        if 'health' in name:
+            has_health = True
+    if has_life and has_health:
+        return 'Life & Health'
+    elif has_life:
+        return 'Life'
+    elif has_health:
+        return 'Health'
+    return None
+
+
 def _course_type_needs_life(course_type):
     """Check if course type requires Life content."""
     if not course_type:
@@ -214,6 +241,11 @@ def calculate_readiness(enrollments, course_type=None, days_until_exam=None):
     # --- Criterion 2: Time in Course ---
     total_course_minutes = sum(_get_enrollment_minutes(e) for e in prelicensing_courses)
     total_course_hours = total_course_minutes / 60.0
+
+    # Auto-detect course type from enrollment names if not provided
+    original_course_type = course_type
+    if not course_type:
+        course_type = _detect_course_type(enrollments)
 
     needs_life = _course_type_needs_life(course_type)
     needs_health = _course_type_needs_health(course_type)
