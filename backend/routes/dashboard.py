@@ -15,7 +15,10 @@ from middleware import login_required
 from utils import format_student_for_response, get_status_from_last_login
 from routes.exam import invalidate_exam_absorb_cache, get_department_name
 from snapshot_db import get_user_dept_prefs, save_user_dept_prefs
-from demo_data import is_demo_dept, is_demo_student, get_demo_students, get_demo_student_detail, DEMO_DEPT_ID, DEMO_DEPT_NAME
+from demo_data import (
+    is_demo_dept, DEMO_DEPT_ID, DEMO_DEPT_NAME,
+    get_cached_demo_students, register_sheet_emails, build_demo_from_real
+)
 
 dashboard_bp = Blueprint('dashboard', __name__)
 
@@ -27,9 +30,55 @@ CACHE_TTL_MINUTES = 5  # Cache data for 5 minutes
 
 def get_cached_students(department_id, token):
     """Get students from cache or fetch fresh data."""
-    # Demo mode — return fake data without hitting Absorb API
+    # Demo mode — serve anonymized real data
     if is_demo_dept(department_id):
-        raw = get_demo_students()
+        cached = get_cached_demo_students()
+        if cached:
+            formatted = [format_student_for_response(s) for s in cached]
+            formatted.sort(key=lambda s: (s['status']['priority'], -s['progress']['value']))
+            return cached, formatted
+
+        # Build demo data from real students (Google Sheet emails + Absorb)
+        print("[DEMO] Building demo data from real students...")
+        from google_sheets import fetch_exam_sheet
+        sheet_students = fetch_exam_sheet()
+        emails = list(set(s['email'] for s in sheet_students if s.get('email')))
+
+        if not emails:
+            print("[DEMO] No emails found in Google Sheet")
+            return [], []
+
+        # Assign fake names to ALL sheet students first
+        register_sheet_emails(sheet_students)
+
+        # Fetch real users from Absorb by email
+        client = AbsorbAPIClient()
+        client.set_token(token)
+        found_users = client.get_users_by_emails_batch(emails)
+        print(f"[DEMO] Found {len(found_users)}/{len(emails)} users in Absorb")
+
+        # Process each to get enrollment data (parallel)
+        processed = []
+        if found_users:
+            max_workers = min(50, len(found_users))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {executor.submit(client._process_single_user, u): u for u in found_users}
+                completed = 0
+                for future in as_completed(futures):
+                    completed += 1
+                    try:
+                        result = future.result()
+                        if result:
+                            processed.append(result)
+                    except AbsorbAPIError:
+                        raise
+                    except Exception as e:
+                        print(f"[DEMO] Error processing user: {e}")
+                    if completed % 10 == 0 or completed == len(found_users):
+                        print(f"[DEMO] Processed {completed}/{len(found_users)} students...")
+
+        # Anonymize and cache
+        raw = build_demo_from_real(processed)
         formatted = [format_student_for_response(s) for s in raw]
         formatted.sort(key=lambda s: (s['status']['priority'], -s['progress']['value']))
         return raw, formatted

@@ -120,17 +120,20 @@ def get_exam_students():
         )
 
         # 3. Build email maps from current department cache
+        # Use _realEmail for demo students so they match against sheet emails
         raw_email_map = {}
         for s in raw_students:
-            email = (s.get('emailAddress') or '').lower().strip()
+            email = (s.get('_realEmail') or s.get('emailAddress') or '').lower().strip()
             if email:
                 raw_email_map[email] = s
 
+        # Build formatted map by bridging raw (real email) → formatted (by ID)
+        _fmt_by_id = {s.get('id'): s for s in formatted_students if s.get('id')}
         formatted_email_map = {}
-        for s in formatted_students:
-            email = (s.get('email') or '').lower().strip()
-            if email:
-                formatted_email_map[email] = s
+        for email, raw_s in raw_email_map.items():
+            sid = raw_s.get('id') or raw_s.get('Id')
+            if sid and sid in _fmt_by_id:
+                formatted_email_map[email] = _fmt_by_id[sid]
 
         # 2b. Also merge students from extra departments (multi-dept mode)
         extra_param = request.args.get('departments', '')
@@ -149,16 +152,18 @@ def get_exam_students():
                         extra_raw, extra_formatted = get_cached_students(dept_id, g.absorb_token)
                         merged_raw = 0
                         merged_fmt = 0
+                        # Build formatted-by-ID for this extra dept
+                        extra_fmt_by_id = {s.get('id'): s for s in extra_formatted if s.get('id')}
                         for s in extra_raw:
-                            email = (s.get('emailAddress') or '').lower().strip()
+                            email = (s.get('_realEmail') or s.get('emailAddress') or '').lower().strip()
                             if email and email not in raw_email_map:
                                 raw_email_map[email] = s
                                 merged_raw += 1
-                        for s in extra_formatted:
-                            email = (s.get('email') or '').lower().strip()
-                            if email and email not in formatted_email_map:
-                                formatted_email_map[email] = s
-                                merged_fmt += 1
+                                # Bridge to formatted
+                                sid = s.get('id') or s.get('Id')
+                                if sid and sid in extra_fmt_by_id and email not in formatted_email_map:
+                                    formatted_email_map[email] = extra_fmt_by_id[sid]
+                                    merged_fmt += 1
                         print(f"[EXAM] Merged {merged_fmt} new students from extra dept {dept_id[:8]} (total dept had {len(extra_formatted)})")
                     except Exception as e:
                         import traceback
@@ -294,7 +299,40 @@ def get_exam_students():
             if is_admin:
                 exam_entry['sheetTracking'] = _build_tracking_data(sheet_student)
 
+            # Stash real sheet email for demo anonymization lookup
+            exam_entry['_sheetEmail'] = email
             exam_students.append(exam_entry)
+
+        # 6b. Anonymize all entries if demo department is active
+        has_demo = is_demo_dept(g.department_id)
+        if not has_demo and extra_param:
+            for d in extra_param.split(','):
+                if is_demo_dept(d.strip()):
+                    has_demo = True
+                    break
+
+        if has_demo:
+            from demo_data import get_demo_email_lookup
+            demo_lookup = get_demo_email_lookup()
+            for entry in exam_students:
+                real_email = (entry.get('_sheetEmail') or '').lower().strip()
+                if real_email and real_email in demo_lookup:
+                    demo = demo_lookup[real_email]
+                    entry['fullName'] = demo['fullName']
+                    entry['email'] = demo['email']
+                    entry['firstName'] = demo.get('firstName', '')
+                    entry['lastName'] = demo.get('lastName', '')
+                    entry['agencyOwner'] = 'Demo Agency'
+                    if not entry.get('matched'):
+                        entry['departmentName'] = DEMO_DEPT_NAME
+                # Clear phone from tracking data
+                if 'sheetTracking' in entry:
+                    entry['sheetTracking']['phone'] = ''
+
+        # Strip internal fields before sending to frontend
+        for entry in exam_students:
+            entry.pop('_sheetEmail', None)
+            entry.pop('_realEmail', None)
 
         # 7. Sort: upcoming first, then past
         now = datetime.utcnow()
