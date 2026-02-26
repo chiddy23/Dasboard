@@ -23,7 +23,7 @@ from utils import (
 from utils.formatters import parse_time_spent_to_minutes
 from utils.readiness import calculate_readiness
 from utils.gap_metrics import calculate_gap_metrics
-from demo_data import is_demo_student, get_real_id, get_demo_name
+from demo_data import is_demo_student, get_real_id, get_demo_name, is_demo_cache_valid, DEMO_DEPT_ID
 
 
 def is_prelicensing_course(name):
@@ -139,6 +139,96 @@ def calculate_prelicensing_totals(enrollments):
 students_bp = Blueprint('students', __name__)
 
 
+def _demo_student_detail(student_id):
+    """Fetch real Absorb data for a demo student and return anonymized response."""
+    real_id = get_real_id(student_id)
+    if not real_id:
+        return jsonify({'success': False, 'error': 'Demo student not found'}), 404
+
+    try:
+        client = AbsorbAPIClient()
+        client.set_token(g.absorb_token)
+        student = client.get_user_by_id(real_id)
+        enrollments = client.get_user_enrollments(real_id)
+    except (AbsorbAPIError, Exception):
+        return jsonify({'success': False, 'error': 'Student data not available'}), 404
+
+    # Format enrollments (same as real path)
+    formatted_enrollments = []
+    for enrollment in enrollments:
+        progress_val = enrollment.get('progress', 0)
+        time_spent_val = '0'
+        for _tf in ('timeSpent', 'TimeSpent', 'ActiveTime', 'activeTime'):
+            _tv = enrollment.get(_tf)
+            if _tv and parse_time_spent_to_minutes(_tv) > 0:
+                time_spent_val = _tv
+                break
+        status_val = enrollment.get('status', 0)
+        course_name = enrollment.get('name') or enrollment.get('Name') or enrollment.get('courseName') or enrollment.get('CourseName') or 'Unknown Course'
+        date_enrolled = enrollment.get('dateAdded') or enrollment.get('dateStarted')
+        date_completed = enrollment.get('dateCompleted')
+        date_last_accessed = enrollment.get('accessDate') or enrollment.get('dateEdited') or enrollment.get('dateStarted')
+        time_spent_minutes = parse_time_spent_to_minutes(time_spent_val)
+        formatted_enrollments.append({
+            'id': enrollment.get('id'),
+            'courseId': enrollment.get('courseId'),
+            'courseName': course_name,
+            'progress': format_progress(progress_val),
+            'timeSpent': {'minutes': time_spent_minutes, 'formatted': format_time_spent(time_spent_val)},
+            'status': status_val,
+            'statusText': get_enrollment_status_text(status_val),
+            'enrolledDate': format_datetime(parse_absorb_date(date_enrolled)),
+            'completedDate': format_datetime(parse_absorb_date(date_completed)),
+            'lastAccessed': {
+                'formatted': format_datetime(parse_absorb_date(date_last_accessed)),
+                'relative': format_relative_time(parse_absorb_date(date_last_accessed))
+            }
+        })
+    formatted_enrollments.sort(key=lambda e: (0 if e['status'] == 1 else 1, -e['progress']['value']))
+
+    # Calculate totals
+    total_time, avg_progress, course_name_calc, primary_status = calculate_prelicensing_totals(enrollments)
+    exam_prep_time = 0
+    for e in enrollments:
+        e_name = e.get('name') or e.get('Name') or e.get('courseName') or e.get('CourseName') or ''
+        if is_exam_prep_course(e_name) and not is_prelicensing_course(e_name):
+            for _tf in ('timeSpent', 'TimeSpent', 'ActiveTime', 'activeTime'):
+                _tv = e.get(_tf)
+                if _tv:
+                    parsed = parse_time_spent_to_minutes(_tv)
+                    if parsed > 0:
+                        exam_prep_time += parsed
+                        break
+
+    student['enrollments'] = enrollments
+    student['progress'] = avg_progress
+    student['timeSpent'] = total_time
+    student['examPrepTime'] = exam_prep_time
+    student['courseName'] = course_name_calc
+    student['enrollmentStatus'] = primary_status
+
+    formatted_student = format_student_for_response(student)
+
+    # Anonymize personal info
+    first, last, demo_email = get_demo_name(student_id)
+    formatted_student['id'] = student_id
+    formatted_student['firstName'] = first
+    formatted_student['lastName'] = last
+    formatted_student['fullName'] = f'{first} {last}'
+    formatted_student['email'] = demo_email
+    formatted_student['phone'] = ''
+    formatted_student['username'] = ''
+    formatted_student.pop('_realEmail', None)
+
+    formatted_student['enrollments'] = formatted_enrollments
+    formatted_student['totalEnrollments'] = len(enrollments)
+    formatted_student['completedEnrollments'] = sum(1 for e in enrollments if e.get('status') in [2, 3])
+    course_type = request.args.get('courseType', '')
+    formatted_student['readiness'] = calculate_readiness(enrollments, course_type=course_type)
+    formatted_student['gapMetrics'] = calculate_gap_metrics(enrollments)
+    return jsonify({'success': True, 'student': formatted_student})
+
+
 @students_bp.route('/<student_id>', methods=['GET'])
 @login_required
 def get_student_details(student_id):
@@ -153,92 +243,7 @@ def get_student_details(student_id):
     """
     # Demo student — fetch real data from Absorb, anonymize personal info
     if is_demo_student(student_id):
-        real_id = get_real_id(student_id)
-        if not real_id:
-            return jsonify({'success': False, 'error': 'Demo student not found'}), 404
-
-        try:
-            client = AbsorbAPIClient()
-            client.set_token(g.absorb_token)
-            student = client.get_user_by_id(real_id)
-            enrollments = client.get_user_enrollments(real_id)
-        except (AbsorbAPIError, Exception):
-            return jsonify({'success': False, 'error': 'Student data not available'}), 404
-
-        # Format enrollments (same as real path)
-        formatted_enrollments = []
-        for enrollment in enrollments:
-            progress_val = enrollment.get('progress', 0)
-            time_spent_val = '0'
-            for _tf in ('timeSpent', 'TimeSpent', 'ActiveTime', 'activeTime'):
-                _tv = enrollment.get(_tf)
-                if _tv and parse_time_spent_to_minutes(_tv) > 0:
-                    time_spent_val = _tv
-                    break
-            status_val = enrollment.get('status', 0)
-            course_name = enrollment.get('name') or enrollment.get('Name') or enrollment.get('courseName') or enrollment.get('CourseName') or 'Unknown Course'
-            date_enrolled = enrollment.get('dateAdded') or enrollment.get('dateStarted')
-            date_completed = enrollment.get('dateCompleted')
-            date_last_accessed = enrollment.get('accessDate') or enrollment.get('dateEdited') or enrollment.get('dateStarted')
-            time_spent_minutes = parse_time_spent_to_minutes(time_spent_val)
-            formatted_enrollments.append({
-                'id': enrollment.get('id'),
-                'courseId': enrollment.get('courseId'),
-                'courseName': course_name,
-                'progress': format_progress(progress_val),
-                'timeSpent': {'minutes': time_spent_minutes, 'formatted': format_time_spent(time_spent_val)},
-                'status': status_val,
-                'statusText': get_enrollment_status_text(status_val),
-                'enrolledDate': format_datetime(parse_absorb_date(date_enrolled)),
-                'completedDate': format_datetime(parse_absorb_date(date_completed)),
-                'lastAccessed': {
-                    'formatted': format_datetime(parse_absorb_date(date_last_accessed)),
-                    'relative': format_relative_time(parse_absorb_date(date_last_accessed))
-                }
-            })
-        formatted_enrollments.sort(key=lambda e: (0 if e['status'] == 1 else 1, -e['progress']['value']))
-
-        # Calculate totals
-        total_time, avg_progress, course_name_calc, primary_status = calculate_prelicensing_totals(enrollments)
-        exam_prep_time = 0
-        for e in enrollments:
-            e_name = e.get('name') or e.get('Name') or e.get('courseName') or e.get('CourseName') or ''
-            if is_exam_prep_course(e_name) and not is_prelicensing_course(e_name):
-                for _tf in ('timeSpent', 'TimeSpent', 'ActiveTime', 'activeTime'):
-                    _tv = e.get(_tf)
-                    if _tv:
-                        parsed = parse_time_spent_to_minutes(_tv)
-                        if parsed > 0:
-                            exam_prep_time += parsed
-                            break
-
-        student['enrollments'] = enrollments
-        student['progress'] = avg_progress
-        student['timeSpent'] = total_time
-        student['examPrepTime'] = exam_prep_time
-        student['courseName'] = course_name_calc
-        student['enrollmentStatus'] = primary_status
-
-        formatted_student = format_student_for_response(student)
-
-        # Anonymize personal info
-        first, last, demo_email = get_demo_name(student_id)
-        formatted_student['id'] = student_id
-        formatted_student['firstName'] = first
-        formatted_student['lastName'] = last
-        formatted_student['fullName'] = f'{first} {last}'
-        formatted_student['email'] = demo_email
-        formatted_student['phone'] = ''
-        formatted_student['username'] = ''
-        formatted_student.pop('_realEmail', None)
-
-        formatted_student['enrollments'] = formatted_enrollments
-        formatted_student['totalEnrollments'] = len(enrollments)
-        formatted_student['completedEnrollments'] = sum(1 for e in enrollments if e.get('status') in [2, 3])
-        course_type = request.args.get('courseType', '')
-        formatted_student['readiness'] = calculate_readiness(enrollments, course_type=course_type)
-        formatted_student['gapMetrics'] = calculate_gap_metrics(enrollments)
-        return jsonify({'success': True, 'student': formatted_student})
+        return _demo_student_detail(student_id)
 
     try:
         # Initialize API client with user's token
@@ -265,6 +270,15 @@ def get_student_details(student_id):
                 print(f"[STUDENT DETAIL] Successfully fetched cross-department student: {student.get('emailAddress', 'unknown')}")
             except AbsorbAPIError as e:
                 print(f"[STUDENT DETAIL] Direct fetch failed: {e}")
+                # Might be a demo student on a different worker — rebuild demo cache
+                if not is_demo_cache_valid():
+                    try:
+                        from routes.dashboard import get_cached_students
+                        get_cached_students(DEMO_DEPT_ID, g.absorb_token)
+                    except Exception:
+                        pass
+                    if is_demo_student(student_id):
+                        return _demo_student_detail(student_id)
                 return jsonify({
                     'success': False,
                     'error': 'Student not found'
