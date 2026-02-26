@@ -23,6 +23,7 @@ from utils import (
 from utils.formatters import parse_time_spent_to_minutes
 from utils.readiness import calculate_readiness
 from utils.gap_metrics import calculate_gap_metrics
+from demo_data import is_demo_student, get_demo_student_detail
 
 
 def is_prelicensing_course(name):
@@ -150,6 +151,40 @@ def get_student_details(student_id):
     Returns:
         JSON response with detailed student information
     """
+    # Demo student — return fake data without hitting Absorb API
+    if is_demo_student(student_id):
+        demo = get_demo_student_detail(student_id)
+        if demo:
+            enrollments = demo.get('enrollments', [])
+            formatted_enrollments = []
+            for e in enrollments:
+                e_name = e.get('name', 'Unknown Course')
+                time_min = e.get('timeSpent', 0) if isinstance(e.get('timeSpent'), (int, float)) else parse_time_spent_to_minutes(e.get('timeSpent', '0'))
+                formatted_enrollments.append({
+                    'id': e.get('id', ''),
+                    'courseId': e.get('courseId', ''),
+                    'courseName': e_name,
+                    'progress': format_progress(e.get('progress', 0)),
+                    'timeSpent': {'minutes': time_min, 'formatted': format_time_spent(time_min)},
+                    'status': e.get('status', 0),
+                    'statusText': get_enrollment_status_text(e.get('status', 0)),
+                    'enrolledDate': format_datetime(parse_absorb_date(e.get('dateStarted'))),
+                    'completedDate': format_datetime(parse_absorb_date(e.get('dateCompleted'))),
+                    'lastAccessed': {
+                        'formatted': format_datetime(parse_absorb_date(e.get('dateCompleted') or e.get('dateStarted'))),
+                        'relative': format_relative_time(parse_absorb_date(e.get('dateCompleted') or e.get('dateStarted')))
+                    }
+                })
+            formatted_student = format_student_for_response(demo)
+            formatted_student['enrollments'] = formatted_enrollments
+            formatted_student['totalEnrollments'] = len(enrollments)
+            formatted_student['completedEnrollments'] = sum(1 for e in enrollments if e.get('status') in [2, 3])
+            course_type = request.args.get('courseType', '')
+            formatted_student['readiness'] = calculate_readiness(enrollments, course_type=course_type)
+            formatted_student['gapMetrics'] = calculate_gap_metrics(enrollments)
+            return jsonify({'success': True, 'student': formatted_student})
+        return jsonify({'success': False, 'error': 'Demo student not found'}), 404
+
     try:
         # Initialize API client with user's token
         client = AbsorbAPIClient()

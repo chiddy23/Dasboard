@@ -58,6 +58,11 @@ def get_department_name(client, department_id):
     if not department_id:
         return 'Unknown'
 
+    # Demo department
+    from demo_data import is_demo_dept, DEMO_DEPT_NAME
+    if is_demo_dept(department_id):
+        return DEMO_DEPT_NAME
+
     if department_id in _dept_name_cache:
         return _dept_name_cache[department_id]
 
