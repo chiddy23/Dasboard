@@ -15,6 +15,7 @@ from utils import format_student_for_response
 from google_sheets import fetch_exam_sheet, invalidate_sheet_cache, parse_exam_date_for_sort, update_sheet_passfail, update_sheet_exam_date, update_sheet_contact
 from utils.readiness import calculate_readiness
 from utils.gap_metrics import calculate_gap_metrics
+from demo_data import is_demo_dept, DEMO_DEPT_NAME, get_demo_email_lookup
 
 exam_bp = Blueprint('exam', __name__)
 
@@ -59,7 +60,6 @@ def get_department_name(client, department_id):
         return 'Unknown'
 
     # Demo department
-    from demo_data import is_demo_dept, DEMO_DEPT_NAME
     if is_demo_dept(department_id):
         return DEMO_DEPT_NAME
 
@@ -312,7 +312,6 @@ def get_exam_students():
                     break
 
         if has_demo:
-            from demo_data import get_demo_email_lookup
             demo_lookup = get_demo_email_lookup()
             for entry in exam_students:
                 real_email = (entry.get('_sheetEmail') or '').lower().strip()
