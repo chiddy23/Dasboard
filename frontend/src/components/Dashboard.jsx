@@ -694,8 +694,8 @@ function Dashboard({ user, department, onLogout, initialData }) {
         setSelectedStudent(prev =>
           prev && prev.email === email ? { ...prev, passFail: result } : prev
         )
-        if (!data.sheetSaved) {
-          alert('Warning: Result saved locally but failed to save to Google Sheet. It may be lost after server restart. Check GOOGLE_SHEETS_CREDENTIALS_JSON env var.')
+        if (!data.sheetSaved && !data.ghlSaved) {
+          alert('Warning: Result saved locally but failed to save to data source. It may be lost after server restart.')
         }
       } else {
         alert('Failed to save result: ' + (data.error || 'Unknown error'))
@@ -743,8 +743,8 @@ function Dashboard({ user, department, onLogout, initialData }) {
             examTime: newTime || prev.examTime
           } : prev
         )
-        if (!data.sheetSaved) {
-          alert('Warning: Date saved locally but failed to save to Google Sheet. It may be lost after server restart.')
+        if (!data.sheetSaved && !data.ghlSaved) {
+          alert('Warning: Date saved locally but failed to save to data source. It may be lost after server restart.')
         }
       } else {
         alert('Failed to save date: ' + (data.error || 'Unknown error'))
@@ -818,8 +818,8 @@ function Dashboard({ user, department, onLogout, initialData }) {
             sheetTracking: { ...prev.sheetTracking, phone: phone || prev.sheetTracking?.phone }
           } : prev
         )
-        if (!data.sheetSaved) {
-          alert('Warning: Contact saved locally but failed to save to Google Sheet. Check GOOGLE_SHEETS_CREDENTIALS_JSON env var.')
+        if (!data.sheetSaved && !data.ghlSaved) {
+          alert('Warning: Contact saved locally but failed to save to data source.')
         }
       } else {
         alert('Failed to save contact: ' + (data.error || 'Unknown error'))
