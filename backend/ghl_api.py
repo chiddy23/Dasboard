@@ -202,6 +202,7 @@ def fetch_ghl_appointments(token, location_id, calendar_id, user_email):
                 'contact_id': cid,
                 'appointment_id': appt.get('id', ''),
                 'calendar_id': appt.get('calendarId', calendar_id),
+                'assigned_user_id': appt.get('assignedUserId', ''),
             }
 
     print(f"[GHL] Processed {len(students)} unique students from GHL")
@@ -259,7 +260,8 @@ def update_ghl_contact(token, contact_id, location_id, name='', email='', phone=
 
 
 def update_ghl_appointment(token, appointment_id, calendar_id, location_id,
-                           start_time_iso='', end_time_iso=''):
+                           start_time_iso='', end_time_iso='',
+                           assigned_user_id=''):
     """Update a GHL appointment's start/end time.
 
     Times should be ISO 8601 format (e.g. '2026-03-15T14:00:00-05:00').
@@ -272,6 +274,8 @@ def update_ghl_appointment(token, appointment_id, calendar_id, location_id,
         'ignoreFreeSlotValidation': True,
         'ignoreDateRange': True,
     }
+    if assigned_user_id:
+        body['assignedUserId'] = assigned_user_id
     if start_time_iso:
         body['startTime'] = start_time_iso
     if end_time_iso:

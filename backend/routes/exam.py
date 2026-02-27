@@ -743,7 +743,8 @@ def update_exam_date():
             ghl_saved = update_ghl_appointment(
                 ghl_settings['ghl_token'], ids['appointment_id'],
                 ids['calendar_id'], ghl_settings['location_id'],
-                start_time_iso=start_iso, end_time_iso=end_iso
+                start_time_iso=start_iso, end_time_iso=end_iso,
+                assigned_user_id=ids.get('assigned_user_id', '')
             )
             if ghl_saved:
                 invalidate_ghl_cache(user_email)
