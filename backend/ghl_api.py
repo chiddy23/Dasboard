@@ -35,11 +35,11 @@ def fetch_ghl_calendars(token, location_id):
     return [{'id': c.get('id', ''), 'name': c.get('name', 'Unnamed')} for c in calendars]
 
 
-def _fetch_contact(token, contact_id):
+def _fetch_contact(token, contact_id, location_id):
     """Fetch a single contact's details from GHL."""
     url = f'{GHL_BASE_URL}/contacts/{contact_id}'
     try:
-        resp = requests.get(url, headers=_ghl_headers(token), timeout=10)
+        resp = requests.get(url, headers=_ghl_headers(token), params={'locationId': location_id}, timeout=10)
         resp.raise_for_status()
         contact = resp.json().get('contact', {})
         return {
@@ -118,7 +118,7 @@ def fetch_ghl_appointments(token, location_id, calendar_id, user_email):
     if contact_ids:
         max_workers = min(10, len(contact_ids))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(_fetch_contact, token, cid): cid for cid in contact_ids}
+            futures = {executor.submit(_fetch_contact, token, cid, location_id): cid for cid in contact_ids}
             for future in as_completed(futures):
                 result = future.result()
                 if result and result.get('email'):

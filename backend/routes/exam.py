@@ -103,7 +103,7 @@ def get_exam_students():
         is_admin = admin_key == ADMIN_PASSWORD
 
         # 1. Fetch student data (GHL calendar or Google Sheet)
-        user_email = (g.user.get('emailAddress') or '').lower().strip()
+        user_email = (g.user.get('email') or g.user.get('emailAddress') or '').lower().strip()
         from snapshot_db import get_user_ghl_settings
         ghl_settings = get_user_ghl_settings(user_email)
 
@@ -839,7 +839,7 @@ def sync_exam_data():
     try:
         invalidate_exam_absorb_cache()
 
-        user_email = (g.user.get('emailAddress') or '').lower().strip()
+        user_email = (g.user.get('email') or g.user.get('emailAddress') or '').lower().strip()
         from snapshot_db import get_user_ghl_settings
         ghl_settings = get_user_ghl_settings(user_email)
 
