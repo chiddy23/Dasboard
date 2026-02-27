@@ -40,6 +40,8 @@ def _fetch_contact(token, contact_id, location_id):
     url = f'{GHL_BASE_URL}/contacts/{contact_id}'
     try:
         resp = requests.get(url, headers=_ghl_headers(token), params={'locationId': location_id}, timeout=10)
+        if resp.status_code == 401:
+            print(f"[GHL] Contact 401 body: {resp.text[:300]}")
         resp.raise_for_status()
         contact = resp.json().get('contact', {})
         return {
@@ -96,6 +98,9 @@ def fetch_ghl_appointments(token, location_id, calendar_id, user_email):
     data = resp.json()
     print(f"[GHL] Response keys: {list(data.keys())}")
     print(f"[GHL] Response preview: {str(data)[:500]}")
+    # Log full first appointment to see all available fields
+    if data.get('events') and len(data['events']) > 0:
+        print(f"[GHL] First appointment FULL: {data['events'][0]}")
     events = data.get('events', data.get('data', data.get('appointments', [])))
     all_appointments.extend(events)
     print(f"[GHL] Fetched {len(all_appointments)} appointments")
@@ -123,6 +128,10 @@ def fetch_ghl_appointments(token, location_id, calendar_id, user_email):
                 result = future.result()
                 if result and result.get('email'):
                     contact_map[result['id']] = result
+
+    if contact_ids and not contact_map:
+        print("[GHL] WARNING: All contact lookups failed! Token likely missing 'contacts.readonly' scope."
+              " Go to GHL > Settings > Integrations > Private Integrations > edit your app > enable Contacts scope.")
 
     # Transform appointments into sheet-format dicts
     students = []
