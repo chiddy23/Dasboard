@@ -641,16 +641,20 @@ def update_exam_result():
     set_override(email, pass_fail=result)
     print(f"[EXAM] Pass/fail override saved: {email} -> {result or '(cleared)'}")
 
-    # Write back to Google Sheet (primary persistence on Render)
-    sheet_saved = False
-    if result:
-        sheet_saved = update_sheet_passfail(email, result)
-    else:
-        # Clear pass/fail from sheet too
-        sheet_saved = update_sheet_passfail(email, '')
+    # Write back to Google Sheet (skip in GHL mode — no pass/fail field in GHL)
+    user_email_pf = (g.user.get('email') or g.user.get('emailAddress') or '').lower().strip()
+    from snapshot_db import get_user_ghl_settings as _get_ghl
+    _ghl_pf = _get_ghl(user_email_pf)
+    is_ghl_pf = _ghl_pf['enabled'] and _ghl_pf['ghl_token'] and _ghl_pf['calendar_id']
 
-    if not sheet_saved:
-        print(f"[EXAM] WARNING: Pass/fail for {email} saved locally but NOT to Google Sheet")
+    sheet_saved = False
+    if not is_ghl_pf:
+        if result:
+            sheet_saved = update_sheet_passfail(email, result)
+        else:
+            sheet_saved = update_sheet_passfail(email, '')
+        if not sheet_saved:
+            print(f"[EXAM] WARNING: Pass/fail for {email} saved locally but NOT to Google Sheet")
 
     return jsonify({
         'success': True, 'email': email, 'result': result,
@@ -700,14 +704,51 @@ def update_exam_date():
     set_override(email, exam_date=new_date, exam_time=new_time)
     print(f"[EXAM] Exam date override saved: {email} -> {new_date} {new_time}")
 
-    # Write back to Google Sheet (primary persistence on Render)
-    sheet_saved = update_sheet_exam_date(email, new_date, new_time)
-    if not sheet_saved:
-        print(f"[EXAM] WARNING: Exam date for {email} saved locally but NOT to Google Sheet")
+    # Write to GHL or Google Sheet depending on mode
+    user_email = (g.user.get('email') or g.user.get('emailAddress') or '').lower().strip()
+    from snapshot_db import get_user_ghl_settings
+    ghl_settings = get_user_ghl_settings(user_email)
+    is_ghl_mode = ghl_settings['enabled'] and ghl_settings['ghl_token'] and ghl_settings['calendar_id']
+
+    ghl_saved = False
+    sheet_saved = False
+    if is_ghl_mode:
+        from ghl_api import get_ghl_ids, update_ghl_appointment, invalidate_ghl_cache
+        ids = get_ghl_ids(email)
+        if ids:
+            # Build ISO datetime for GHL (use existing appointment timezone offset)
+            # Parse time like "2:00 PM" into hours/minutes
+            hour, minute = 9, 0  # default 9am
+            if new_time:
+                try:
+                    t = datetime.strptime(new_time, '%I:%M %p')
+                    hour, minute = t.hour, t.minute
+                except ValueError:
+                    try:
+                        t = datetime.strptime(new_time, '%H:%M')
+                        hour, minute = t.hour, t.minute
+                    except ValueError:
+                        pass
+            start_iso = f"{new_date}T{hour:02d}:{minute:02d}:00-05:00"
+            end_hour = hour + 1 if hour < 23 else hour
+            end_iso = f"{new_date}T{end_hour:02d}:{minute:02d}:00-05:00"
+            ghl_saved = update_ghl_appointment(
+                ghl_settings['ghl_token'], ids['appointment_id'],
+                ids['calendar_id'], ghl_settings['location_id'],
+                start_time_iso=start_iso, end_time_iso=end_iso
+            )
+            if ghl_saved:
+                invalidate_ghl_cache(user_email)
+        else:
+            print(f"[EXAM] No GHL IDs found for {email}, cannot update appointment in GHL")
+    else:
+        sheet_saved = update_sheet_exam_date(email, new_date, new_time)
+        if not sheet_saved:
+            print(f"[EXAM] WARNING: Exam date for {email} saved locally but NOT to Google Sheet")
 
     return jsonify({
         'success': True, 'email': email, 'date': new_date, 'time': new_time,
-        'sheetSaved': sheet_saved
+        'sheetSaved': sheet_saved, 'ghlSaved': ghl_saved
     })
 
 
@@ -808,7 +849,27 @@ def update_exam_contact():
     if not new_name and not new_email and not new_phone:
         return jsonify({'success': False, 'error': 'No fields to update'}), 400
 
-    sheet_saved = update_sheet_contact(email, name=new_name, new_email=new_email, phone=new_phone)
+    # Write to GHL or Google Sheet depending on mode
+    user_email = (g.user.get('email') or g.user.get('emailAddress') or '').lower().strip()
+    from snapshot_db import get_user_ghl_settings
+    ghl_settings = get_user_ghl_settings(user_email)
+    is_ghl = ghl_settings['enabled'] and ghl_settings['ghl_token'] and ghl_settings['calendar_id']
+
+    ghl_saved = False
+    sheet_saved = False
+    if is_ghl:
+        from ghl_api import get_ghl_ids, update_ghl_contact
+        ids = get_ghl_ids(email)
+        if ids:
+            ghl_saved = update_ghl_contact(
+                ghl_settings['ghl_token'], ids['contact_id'],
+                ghl_settings['location_id'],
+                name=new_name, email=new_email, phone=new_phone
+            )
+        else:
+            print(f"[EXAM] No GHL IDs found for {email}, cannot update contact in GHL")
+    else:
+        sheet_saved = update_sheet_contact(email, name=new_name, new_email=new_email, phone=new_phone)
 
     return jsonify({
         'success': True,
@@ -816,7 +877,8 @@ def update_exam_contact():
         'name': new_name,
         'newEmail': new_email,
         'phone': new_phone,
-        'sheetSaved': sheet_saved
+        'sheetSaved': sheet_saved,
+        'ghlSaved': ghl_saved
     })
 
 

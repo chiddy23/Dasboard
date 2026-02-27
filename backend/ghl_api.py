@@ -11,6 +11,9 @@ GHL_API_VERSION = '2021-07-28'
 _ghl_cache = {}
 GHL_CACHE_TTL = 300  # 5 minutes
 
+# Reverse lookup: {contact_email: {contact_id, appointment_id, calendar_id}}
+_ghl_id_map = {}
+
 
 def _ghl_headers(token):
     """Build GHL API request headers."""
@@ -183,16 +186,105 @@ def fetch_ghl_appointments(token, location_id, calendar_id, user_email):
             'weeklyTracking': [],
         })
 
-    # Dedup by email (last occurrence wins)
+    # Dedup by email (last occurrence wins) and build ID map for write-backs
     seen = {}
     for s in students:
         seen[s['email']] = s
     students = list(seen.values())
 
+    # Build reverse lookup for write-backs (email → GHL IDs)
+    for appt in all_appointments:
+        cid = appt.get('contactId')
+        contact = contact_map.get(cid, {})
+        cemail = contact.get('email', '')
+        if cemail:
+            _ghl_id_map[cemail] = {
+                'contact_id': cid,
+                'appointment_id': appt.get('id', ''),
+                'calendar_id': appt.get('calendarId', calendar_id),
+            }
+
     print(f"[GHL] Processed {len(students)} unique students from GHL")
 
     _ghl_cache[cache_key] = {'data': students, 'timestamp': now}
     return students
+
+
+def get_ghl_ids(email):
+    """Look up GHL contact/appointment IDs for an email.
+
+    Returns dict with contact_id, appointment_id, calendar_id or None.
+    """
+    return _ghl_id_map.get(email.lower().strip())
+
+
+def update_ghl_contact(token, contact_id, location_id, name='', email='', phone=''):
+    """Update a GHL contact's name, email, and/or phone.
+
+    Returns True on success, False on failure.
+    """
+    url = f'{GHL_BASE_URL}/contacts/{contact_id}'
+    body = {}
+    if name:
+        parts = name.strip().split(' ', 1)
+        body['firstName'] = parts[0]
+        body['lastName'] = parts[1] if len(parts) > 1 else ''
+    if email:
+        body['email'] = email
+    if phone:
+        body['phone'] = phone
+
+    if not body:
+        return False
+
+    try:
+        headers = _ghl_headers(token)
+        headers['Content-Type'] = 'application/json'
+        resp = requests.put(url, headers=headers, json=body,
+                            params={'locationId': location_id}, timeout=10)
+        resp.raise_for_status()
+        print(f"[GHL] Updated contact {contact_id}: {body}")
+
+        # Update ID map if email changed
+        if email:
+            old_entries = {k: v for k, v in _ghl_id_map.items() if v.get('contact_id') == contact_id}
+            for old_email in old_entries:
+                entry = _ghl_id_map.pop(old_email)
+                _ghl_id_map[email.lower().strip()] = entry
+
+        return True
+    except Exception as e:
+        print(f"[GHL] Failed to update contact {contact_id}: {e}")
+        return False
+
+
+def update_ghl_appointment(token, appointment_id, calendar_id, location_id,
+                           start_time_iso='', end_time_iso=''):
+    """Update a GHL appointment's start/end time.
+
+    Times should be ISO 8601 format (e.g. '2026-03-15T14:00:00-05:00').
+    Returns True on success, False on failure.
+    """
+    url = f'{GHL_BASE_URL}/calendars/events/appointments/{appointment_id}'
+    body = {'calendarId': calendar_id, 'locationId': location_id}
+    if start_time_iso:
+        body['startTime'] = start_time_iso
+    if end_time_iso:
+        body['endTime'] = end_time_iso
+
+    if not start_time_iso and not end_time_iso:
+        return False
+
+    try:
+        headers = _ghl_headers(token)
+        headers['Content-Type'] = 'application/json'
+        resp = requests.put(url, headers=headers, json=body, timeout=10)
+        resp.raise_for_status()
+        print(f"[GHL] Updated appointment {appointment_id}: {start_time_iso}")
+        return True
+    except Exception as e:
+        print(f"[GHL] Failed to update appointment {appointment_id}: {e}")
+        return False
 
 
 def invalidate_ghl_cache(user_email):
