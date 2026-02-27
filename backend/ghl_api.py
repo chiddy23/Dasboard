@@ -266,7 +266,12 @@ def update_ghl_appointment(token, appointment_id, calendar_id, location_id,
     Returns True on success, False on failure.
     """
     url = f'{GHL_BASE_URL}/calendars/events/appointments/{appointment_id}'
-    body = {'calendarId': calendar_id, 'locationId': location_id}
+    body = {
+        'calendarId': calendar_id,
+        'locationId': location_id,
+        'ignoreFreeSlotValidation': True,
+        'ignoreDateRange': True,
+    }
     if start_time_iso:
         body['startTime'] = start_time_iso
     if end_time_iso:

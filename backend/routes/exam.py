@@ -664,7 +664,7 @@ def update_exam_result():
 
     return jsonify({
         'success': True, 'email': email, 'result': result,
-        'sheetSaved': sheet_saved
+        'sheetSaved': sheet_saved, 'ghlSaved': is_ghl_pf
     })
 
 
