@@ -597,7 +597,7 @@ def save_hidden_students():
 @login_required
 def get_ghl_settings():
     """Get the logged-in user's GHL integration settings (token masked)."""
-    email = (g.user.get('emailAddress') or '').lower().strip()
+    email = (g.user.get('email') or g.user.get('emailAddress') or '').lower().strip()
     settings = get_user_ghl_settings_masked(email)
     return jsonify({'success': True, **settings})
 
@@ -606,7 +606,7 @@ def get_ghl_settings():
 @login_required
 def save_ghl_settings():
     """Save GHL integration settings for the logged-in user."""
-    email = (g.user.get('emailAddress') or '').lower().strip()
+    email = (g.user.get('email') or g.user.get('emailAddress') or '').lower().strip()
     data = request.get_json() or {}
 
     save_user_ghl_settings(
@@ -629,7 +629,7 @@ def save_ghl_settings():
 @login_required
 def get_ghl_calendars():
     """Fetch available GHL calendars for the user's configured token + location."""
-    email = (g.user.get('emailAddress') or '').lower().strip()
+    email = (g.user.get('email') or g.user.get('emailAddress') or '').lower().strip()
     token = request.args.get('token', '').strip()
     location_id = request.args.get('location_id', '').strip()
 
