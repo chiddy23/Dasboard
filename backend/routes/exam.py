@@ -623,8 +623,14 @@ def update_exam_result():
 
     is_admin = admin_key == ADMIN_PASSWORD
 
-    # Authorization: admin or student must be in user's department
-    if not is_admin:
+    # Check if GHL mode is active (user owns their calendar data)
+    _pf_user_email = (g.user.get('email') or g.user.get('emailAddress') or '').lower().strip()
+    from snapshot_db import get_user_ghl_settings as _get_ghl_pf
+    _pf_ghl = _get_ghl_pf(_pf_user_email)
+    is_ghl_pf_auth = _pf_ghl['enabled'] and _pf_ghl['ghl_token'] and _pf_ghl['calendar_id']
+
+    # Authorization: admin, GHL owner, or student must be in user's department
+    if not is_admin and not is_ghl_pf_auth:
         from routes.dashboard import get_cached_students
         _, formatted_students = get_cached_students(g.department_id, g.absorb_token)
         dept_emails = {(s.get('email') or '').lower().strip() for s in formatted_students}
@@ -686,8 +692,14 @@ def update_exam_date():
 
     is_admin = admin_key == ADMIN_PASSWORD
 
-    # Authorization: admin or student must be in user's department
-    if not is_admin:
+    # Check if GHL mode is active (user owns their calendar data)
+    _dt_user_email = (g.user.get('email') or g.user.get('emailAddress') or '').lower().strip()
+    from snapshot_db import get_user_ghl_settings as _get_ghl_dt
+    _dt_ghl = _get_ghl_dt(_dt_user_email)
+    is_ghl_dt_auth = _dt_ghl['enabled'] and _dt_ghl['ghl_token'] and _dt_ghl['calendar_id']
+
+    # Authorization: admin, GHL owner, or student must be in user's department
+    if not is_admin and not is_ghl_dt_auth:
         from routes.dashboard import get_cached_students
         _, formatted_students = get_cached_students(g.department_id, g.absorb_token)
         dept_emails = {(s.get('email') or '').lower().strip() for s in formatted_students}
