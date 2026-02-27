@@ -4,6 +4,7 @@ from flask import Blueprint, jsonify, g, request
 import re
 import sys
 import os
+import requests as _requests
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -14,7 +15,7 @@ from absorb_api import AbsorbAPIClient, AbsorbAPIError
 from middleware import login_required
 from utils import format_student_for_response, get_status_from_last_login
 from routes.exam import invalidate_exam_absorb_cache, get_department_name
-from snapshot_db import get_user_dept_prefs, save_user_dept_prefs, get_user_hidden_students, save_user_hidden_students
+from snapshot_db import get_user_dept_prefs, save_user_dept_prefs, get_user_hidden_students, save_user_hidden_students, get_user_ghl_settings, get_user_ghl_settings_masked, save_user_ghl_settings
 from demo_data import (
     is_demo_dept, DEMO_DEPT_ID, DEMO_DEPT_NAME,
     get_cached_demo_students, register_sheet_emails, build_demo_from_real
@@ -588,3 +589,61 @@ def save_hidden_students():
     valid = [e for e in hidden[:200] if isinstance(e, str) and e.strip()]
     save_user_hidden_students(email, valid)
     return jsonify({'success': True, 'hiddenEmails': valid})
+
+
+# ── User GHL Settings ────────────────────────────────────────────────
+
+@dashboard_bp.route('/ghl-settings', methods=['GET'])
+@login_required
+def get_ghl_settings():
+    """Get the logged-in user's GHL integration settings (token masked)."""
+    email = (g.user.get('emailAddress') or '').lower().strip()
+    settings = get_user_ghl_settings_masked(email)
+    return jsonify({'success': True, **settings})
+
+
+@dashboard_bp.route('/ghl-settings', methods=['POST'])
+@login_required
+def save_ghl_settings():
+    """Save GHL integration settings for the logged-in user."""
+    email = (g.user.get('emailAddress') or '').lower().strip()
+    data = request.get_json() or {}
+
+    save_user_ghl_settings(
+        email,
+        enabled=data.get('enabled'),
+        ghl_token=data.get('ghl_token'),
+        location_id=data.get('location_id'),
+        calendar_id=data.get('calendar_id'),
+    )
+
+    # Clear GHL cache so next exam fetch uses fresh data
+    from ghl_api import invalidate_ghl_cache
+    invalidate_ghl_cache(email)
+
+    settings = get_user_ghl_settings_masked(email)
+    return jsonify({'success': True, **settings})
+
+
+@dashboard_bp.route('/ghl-calendars', methods=['GET'])
+@login_required
+def get_ghl_calendars():
+    """Fetch available GHL calendars for the user's configured token + location."""
+    email = (g.user.get('emailAddress') or '').lower().strip()
+    token = request.args.get('token', '').strip()
+    location_id = request.args.get('location_id', '').strip()
+
+    if not token or not location_id:
+        return jsonify({'success': False, 'error': 'Token and Location ID are required'}), 400
+
+    try:
+        from ghl_api import fetch_ghl_calendars
+        calendars = fetch_ghl_calendars(token, location_id)
+        return jsonify({'success': True, 'calendars': calendars})
+    except _requests.exceptions.HTTPError as e:
+        status = e.response.status_code if e.response is not None else 500
+        if status == 401:
+            return jsonify({'success': False, 'error': 'Invalid GHL token'}), 401
+        return jsonify({'success': False, 'error': f'GHL API error ({status})'}), status
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500

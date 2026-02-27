@@ -102,8 +102,19 @@ def get_exam_students():
         admin_key = request.args.get('adminKey', '')
         is_admin = admin_key == ADMIN_PASSWORD
 
-        # 1. Fetch Google Sheet data
-        sheet_students = fetch_exam_sheet()
+        # 1. Fetch student data (GHL calendar or Google Sheet)
+        user_email = (g.user.get('emailAddress') or '').lower().strip()
+        from snapshot_db import get_user_ghl_settings
+        ghl_settings = get_user_ghl_settings(user_email)
+
+        if ghl_settings['enabled'] and ghl_settings['ghl_token'] and ghl_settings['calendar_id']:
+            from ghl_api import fetch_ghl_appointments
+            sheet_students = fetch_ghl_appointments(
+                ghl_settings['ghl_token'], ghl_settings['location_id'],
+                ghl_settings['calendar_id'], user_email
+            )
+        else:
+            sheet_students = fetch_exam_sheet()
 
         if not sheet_students:
             return jsonify({
@@ -824,11 +835,24 @@ def get_result_snapshots(email):
 @exam_bp.route('/sync', methods=['POST'])
 @login_required
 def sync_exam_data():
-    """Force refresh exam data from Google Sheet and Absorb lookups."""
+    """Force refresh exam data from data source (GHL or Google Sheet) and Absorb lookups."""
     try:
-        invalidate_sheet_cache()
         invalidate_exam_absorb_cache()
-        sheet_students = fetch_exam_sheet()
+
+        user_email = (g.user.get('emailAddress') or '').lower().strip()
+        from snapshot_db import get_user_ghl_settings
+        ghl_settings = get_user_ghl_settings(user_email)
+
+        if ghl_settings['enabled'] and ghl_settings['ghl_token'] and ghl_settings['calendar_id']:
+            from ghl_api import invalidate_ghl_cache, fetch_ghl_appointments
+            invalidate_ghl_cache(user_email)
+            sheet_students = fetch_ghl_appointments(
+                ghl_settings['ghl_token'], ghl_settings['location_id'],
+                ghl_settings['calendar_id'], user_email
+            )
+        else:
+            invalidate_sheet_cache()
+            sheet_students = fetch_exam_sheet()
 
         return jsonify({
             'success': True,

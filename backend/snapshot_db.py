@@ -76,6 +76,16 @@ def init_db():
         updated_at TEXT NOT NULL
     )''')
 
+    # User GHL settings (per-user GoHighLevel calendar integration)
+    conn.execute('''CREATE TABLE IF NOT EXISTS user_ghl_settings (
+        email TEXT PRIMARY KEY,
+        enabled INTEGER DEFAULT 0,
+        ghl_token TEXT DEFAULT '',
+        location_id TEXT DEFAULT '',
+        calendar_id TEXT DEFAULT '',
+        updated_at TEXT NOT NULL
+    )''')
+
     # Allowed users table (active user allowlist for production lockdown)
     conn.execute('''CREATE TABLE IF NOT EXISTS allowed_users (
         email TEXT PRIMARY KEY,
@@ -223,6 +233,78 @@ def save_user_hidden_students(email, hidden_emails):
         VALUES (?, ?, ?)
         ON CONFLICT(email) DO UPDATE SET hidden_emails = ?, updated_at = ?
     ''', (email, json.dumps(cleaned), now, json.dumps(cleaned), now))
+    conn.commit()
+    conn.close()
+
+
+# ── User GHL Settings functions ───────────────────────────────────────
+
+def get_user_ghl_settings(email):
+    """Get GHL integration settings for a user."""
+    email = email.lower().strip()
+    conn = _get_connection()
+    row = conn.execute(
+        'SELECT enabled, ghl_token, location_id, calendar_id FROM user_ghl_settings WHERE email = ?',
+        (email,)
+    ).fetchone()
+    conn.close()
+    if row:
+        return {
+            'enabled': bool(row['enabled']),
+            'ghl_token': row['ghl_token'] or '',
+            'location_id': row['location_id'] or '',
+            'calendar_id': row['calendar_id'] or '',
+        }
+    return {'enabled': False, 'ghl_token': '', 'location_id': '', 'calendar_id': ''}
+
+
+def get_user_ghl_settings_masked(email):
+    """Get GHL settings with token masked (show only last 4 chars)."""
+    settings = get_user_ghl_settings(email)
+    token = settings['ghl_token']
+    if token and len(token) > 4:
+        settings['ghl_token'] = '••••' + token[-4:]
+    elif token:
+        settings['ghl_token'] = '••••'
+    return settings
+
+
+def save_user_ghl_settings(email, enabled=None, ghl_token=None, location_id=None, calendar_id=None):
+    """Save GHL settings for a user (upsert). Only updates non-None fields."""
+    email = email.lower().strip()
+    conn = _get_connection()
+    now = datetime.utcnow().isoformat()
+
+    existing = conn.execute(
+        'SELECT * FROM user_ghl_settings WHERE email = ?', (email,)
+    ).fetchone()
+
+    if existing:
+        updates = []
+        params = []
+        if enabled is not None:
+            updates.append('enabled = ?')
+            params.append(1 if enabled else 0)
+        if ghl_token is not None:
+            updates.append('ghl_token = ?')
+            params.append(ghl_token)
+        if location_id is not None:
+            updates.append('location_id = ?')
+            params.append(location_id)
+        if calendar_id is not None:
+            updates.append('calendar_id = ?')
+            params.append(calendar_id)
+        if updates:
+            updates.append('updated_at = ?')
+            params.append(now)
+            params.append(email)
+            conn.execute(f'UPDATE user_ghl_settings SET {", ".join(updates)} WHERE email = ?', params)
+    else:
+        conn.execute(
+            'INSERT INTO user_ghl_settings (email, enabled, ghl_token, location_id, calendar_id, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+            (email, 1 if enabled else 0, ghl_token or '', location_id or '', calendar_id or '', now)
+        )
+
     conn.commit()
     conn.close()
 

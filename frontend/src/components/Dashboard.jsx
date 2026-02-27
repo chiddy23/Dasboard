@@ -64,6 +64,17 @@ function Dashboard({ user, department, onLogout, initialData }) {
   const hiddenPrefsLoaded = useRef(false)
   const [showHidden, setShowHidden] = useState(false)
 
+  // GHL integration state
+  const [ghlSettings, setGhlSettings] = useState(null)
+  const [showGhlSetup, setShowGhlSetup] = useState(false)
+  const [ghlCalendars, setGhlCalendars] = useState([])
+  const [ghlTokenInput, setGhlTokenInput] = useState('')
+  const [ghlLocationInput, setGhlLocationInput] = useState('')
+  const [ghlCalendarInput, setGhlCalendarInput] = useState('')
+  const [ghlError, setGhlError] = useState('')
+  const [ghlSaving, setGhlSaving] = useState(false)
+  const [ghlFetchingCals, setGhlFetchingCals] = useState(false)
+
   // Filtering and search
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
@@ -147,6 +158,15 @@ function Dashboard({ user, department, onLogout, initialData }) {
       body: JSON.stringify({ hiddenEmails: hiddenStudents })
     }).catch(err => console.error('[HIDDEN] Failed to save hidden prefs:', err))
   }, [hiddenStudents])
+
+  // Load GHL settings on mount
+  useEffect(() => {
+    if (!user?.email) return
+    fetch(`${API_BASE}/dashboard/ghl-settings`, { credentials: 'include' })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d?.success) setGhlSettings(d) })
+      .catch(err => console.error('[GHL] Failed to load settings:', err))
+  }, [user?.email])
 
   // Re-fetch students when extra departments change
   useEffect(() => {
@@ -311,6 +331,68 @@ function Dashboard({ user, department, onLogout, initialData }) {
   const handleUnhideStudent = (studentEmail) => {
     const normalized = studentEmail.toLowerCase().trim()
     setHiddenStudents(prev => prev.filter(e => e !== normalized))
+  }
+
+  // GHL handlers
+  const handleFetchGhlCalendars = async () => {
+    if (!ghlTokenInput.trim() || !ghlLocationInput.trim()) {
+      setGhlError('Token and Location ID are required')
+      return
+    }
+    setGhlFetchingCals(true)
+    setGhlError('')
+    try {
+      const params = new URLSearchParams({ token: ghlTokenInput.trim(), location_id: ghlLocationInput.trim() })
+      const res = await fetch(`${API_BASE}/dashboard/ghl-calendars?${params}`, { credentials: 'include' })
+      const data = await res.json()
+      if (data.success) {
+        setGhlCalendars(data.calendars || [])
+        if (data.calendars?.length === 0) setGhlError('No calendars found for this location')
+      } else {
+        setGhlError(data.error || 'Failed to fetch calendars')
+      }
+    } catch (err) {
+      setGhlError('Failed to connect to GHL API')
+    } finally {
+      setGhlFetchingCals(false)
+    }
+  }
+
+  const handleSaveGhlSettings = async (enabled) => {
+    setGhlSaving(true)
+    setGhlError('')
+    try {
+      const body = {
+        enabled,
+        ghl_token: ghlTokenInput.trim() || undefined,
+        location_id: ghlLocationInput.trim() || undefined,
+        calendar_id: ghlCalendarInput || undefined,
+      }
+      const res = await fetch(`${API_BASE}/dashboard/ghl-settings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(body),
+      })
+      const data = await res.json()
+      if (data.success) {
+        setGhlSettings(data)
+        if (enabled) {
+          setShowGhlSetup(false)
+          setExamLoaded(false)
+          if (activeTab === 'exam') fetchExamData()
+        } else {
+          setExamLoaded(false)
+          if (activeTab === 'exam') fetchExamData()
+        }
+      } else {
+        setGhlError(data.error || 'Failed to save settings')
+      }
+    } catch (err) {
+      setGhlError('Failed to save GHL settings')
+    } finally {
+      setGhlSaving(false)
+    }
   }
 
   const fetchDashboardData = useCallback(async () => {
@@ -1364,6 +1446,14 @@ function Dashboard({ user, department, onLogout, initialData }) {
                   </svg>
                   <span>{examLoading ? 'Refreshing...' : 'Refresh'}</span>
                 </button>
+                {ghlSettings?.enabled && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-teal-100 text-teal-700 border border-teal-200">
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                    </svg>
+                    GHL Mode
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-3">
                 {/* Admin Mode Toggle */}
@@ -1440,6 +1530,20 @@ function Dashboard({ user, department, onLogout, initialData }) {
                   </div>
                 )}
                 <button
+                  onClick={() => setShowGhlSetup(!showGhlSetup)}
+                  className={`text-sm flex items-center space-x-1 px-2.5 py-1 rounded-lg border transition-colors ${
+                    ghlSettings?.enabled
+                      ? 'text-teal-600 border-teal-200 hover:border-teal-400 hover:bg-teal-50'
+                      : 'text-gray-500 border-gray-200 hover:border-gray-400 hover:bg-gray-50'
+                  }`}
+                  title="Configure exam data source"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" />
+                  </svg>
+                  <span>Data Source</span>
+                </button>
+                <button
                   onClick={() => setShowExamCharts(!showExamCharts)}
                   className="text-sm text-ji-blue-bright hover:text-ji-blue-medium flex items-center space-x-1"
                 >
@@ -1450,6 +1554,119 @@ function Dashboard({ user, department, onLogout, initialData }) {
                 </button>
               </div>
             </div>
+
+            {/* GHL Data Source Setup Panel */}
+            {showGhlSetup && (
+              <div className="bg-white rounded-xl shadow-md p-4 mb-6 border-l-4 border-teal-500">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <svg className="w-5 h-5 text-teal-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                    </svg>
+                    <h3 className="text-sm font-semibold text-gray-700">Exam Data Source</h3>
+                    <span className={`px-2 py-0.5 text-xs rounded-full font-medium ${
+                      ghlSettings?.enabled
+                        ? 'bg-teal-100 text-teal-700'
+                        : 'bg-gray-100 text-gray-500'
+                    }`}>
+                      {ghlSettings?.enabled ? 'GHL Calendar' : 'Google Sheet'}
+                    </span>
+                  </div>
+                  <button onClick={() => setShowGhlSetup(false)} className="text-gray-400 hover:text-gray-600">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+
+                {ghlSettings?.enabled ? (
+                  <div>
+                    <div className="flex items-center gap-4 text-sm text-gray-600 mb-3">
+                      <span>Token: <code className="bg-gray-100 px-1.5 py-0.5 rounded text-xs">{ghlSettings.ghl_token || 'Not set'}</code></span>
+                      <span>Location: <code className="bg-gray-100 px-1.5 py-0.5 rounded text-xs">{ghlSettings.location_id || 'Not set'}</code></span>
+                      <span>Calendar: <code className="bg-gray-100 px-1.5 py-0.5 rounded text-xs">{ghlSettings.calendar_id || 'Not set'}</code></span>
+                    </div>
+                    <button
+                      onClick={() => handleSaveGhlSettings(false)}
+                      disabled={ghlSaving}
+                      className="px-3 py-1.5 bg-gray-100 text-gray-700 rounded text-xs font-medium hover:bg-gray-200 transition-colors"
+                    >
+                      {ghlSaving ? 'Saving...' : 'Disable GHL (use Google Sheet)'}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <p className="text-xs text-gray-500">
+                      Connect a GoHighLevel calendar to pull exam appointments instead of the Google Sheet.
+                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">GHL Private Integration Token</label>
+                        <input
+                          type="password"
+                          value={ghlTokenInput}
+                          onChange={e => setGhlTokenInput(e.target.value)}
+                          placeholder="pit-xxxxxxxx..."
+                          className="w-full px-3 py-1.5 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Location ID</label>
+                        <input
+                          type="text"
+                          value={ghlLocationInput}
+                          onChange={e => setGhlLocationInput(e.target.value)}
+                          placeholder="Location ID from GHL"
+                          className="w-full px-3 py-1.5 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
+                        />
+                      </div>
+                    </div>
+                    <div className="flex items-end gap-3">
+                      <div className="flex-1">
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Calendar</label>
+                        {ghlCalendars.length > 0 ? (
+                          <select
+                            value={ghlCalendarInput}
+                            onChange={e => setGhlCalendarInput(e.target.value)}
+                            className="w-full px-3 py-1.5 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
+                          >
+                            <option value="">Select a calendar...</option>
+                            {ghlCalendars.map(c => (
+                              <option key={c.id} value={c.id}>{c.name}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <p className="text-xs text-gray-400 py-1.5">Enter token & location, then fetch calendars</p>
+                        )}
+                      </div>
+                      <button
+                        onClick={handleFetchGhlCalendars}
+                        disabled={ghlFetchingCals || !ghlTokenInput.trim() || !ghlLocationInput.trim()}
+                        className="px-3 py-1.5 bg-teal-50 text-teal-700 rounded text-xs font-medium hover:bg-teal-100 border border-teal-200 disabled:opacity-50 transition-colors whitespace-nowrap"
+                      >
+                        {ghlFetchingCals ? 'Fetching...' : 'Fetch Calendars'}
+                      </button>
+                    </div>
+                    {ghlError && <p className="text-xs text-red-500">{ghlError}</p>}
+                    <div className="flex gap-2 pt-1">
+                      <button
+                        onClick={() => handleSaveGhlSettings(true)}
+                        disabled={ghlSaving || !ghlCalendarInput}
+                        className="px-4 py-1.5 bg-teal-600 text-white rounded text-xs font-medium hover:bg-teal-700 disabled:opacity-50 transition-colors"
+                      >
+                        {ghlSaving ? 'Enabling...' : 'Enable GHL'}
+                      </button>
+                      <button
+                        onClick={() => setShowGhlSetup(false)}
+                        className="px-3 py-1.5 bg-gray-100 text-gray-600 rounded text-xs hover:bg-gray-200 transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Allowed Users Panel - Admin Only */}
             {adminMode && (
