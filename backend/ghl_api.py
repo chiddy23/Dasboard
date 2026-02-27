@@ -86,10 +86,14 @@ def fetch_ghl_appointments(token, location_id, calendar_id, user_email):
         'endTime': end_time,
     }
 
+    print(f"[GHL] Request URL: {url}")
+    print(f"[GHL] Request params: {params}")
     resp = requests.get(url, headers=_ghl_headers(token), params=params, timeout=30)
     resp.raise_for_status()
     data = resp.json()
-    events = data.get('events', [])
+    print(f"[GHL] Response keys: {list(data.keys())}")
+    print(f"[GHL] Response preview: {str(data)[:500]}")
+    events = data.get('events', data.get('data', data.get('appointments', [])))
     all_appointments.extend(events)
     print(f"[GHL] Fetched {len(all_appointments)} appointments")
 
