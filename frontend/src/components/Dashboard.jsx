@@ -59,6 +59,11 @@ function Dashboard({ user, department, onLogout, initialData }) {
   const [studentDeptFilter, setStudentDeptFilter] = useState([])
   const [showDeptDropdown, setShowDeptDropdown] = useState(false)
 
+  // Hidden students state
+  const [hiddenStudents, setHiddenStudents] = useState([])
+  const hiddenPrefsLoaded = useRef(false)
+  const [showHidden, setShowHidden] = useState(false)
+
   // Filtering and search
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
@@ -113,6 +118,35 @@ function Dashboard({ user, department, onLogout, initialData }) {
       body: JSON.stringify({ departmentIds: extraDepartments })
     }).catch(err => console.error('[DEPT] Failed to save dept prefs:', err))
   }, [extraDepartments])
+
+  // Load hidden students from backend on mount
+  useEffect(() => {
+    if (!user?.email) return
+    const loadHiddenPrefs = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/dashboard/hidden-students`, { credentials: 'include' })
+        if (res.ok) {
+          const data = await res.json()
+          if (data.success && data.hiddenEmails?.length > 0) {
+            setHiddenStudents(data.hiddenEmails)
+          }
+        }
+      } catch (err) { console.error('[HIDDEN] Failed to load hidden prefs:', err) }
+      hiddenPrefsLoaded.current = true
+    }
+    loadHiddenPrefs()
+  }, [user?.email])
+
+  // Save hidden students to backend when they change (skip initial load)
+  useEffect(() => {
+    if (!user?.email || !hiddenPrefsLoaded.current) return
+    fetch(`${API_BASE}/dashboard/hidden-students`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ hiddenEmails: hiddenStudents })
+    }).catch(err => console.error('[HIDDEN] Failed to save hidden prefs:', err))
+  }, [hiddenStudents])
 
   // Re-fetch students when extra departments change
   useEffect(() => {
@@ -264,6 +298,19 @@ function Dashboard({ user, department, onLogout, initialData }) {
 
   const handleRemoveDepartment = (id) => {
     setExtraDepartments(prev => prev.filter(d => d !== id))
+  }
+
+  const handleHideStudent = (studentEmail) => {
+    const normalized = studentEmail.toLowerCase().trim()
+    setHiddenStudents(prev => {
+      if (prev.includes(normalized)) return prev
+      return [...prev, normalized]
+    })
+  }
+
+  const handleUnhideStudent = (studentEmail) => {
+    const normalized = studentEmail.toLowerCase().trim()
+    setHiddenStudents(prev => prev.filter(e => e !== normalized))
   }
 
   const fetchDashboardData = useCallback(async () => {
@@ -708,6 +755,11 @@ function Dashboard({ user, department, onLogout, initialData }) {
 
   // Filter students (works for both tabs)
   const filteredStudents = students.filter(student => {
+    // Hidden student filter
+    const isHidden = hiddenStudents.includes((student.email || '').toLowerCase().trim())
+    if (showHidden) return isHidden
+    if (isHidden) return false
+
     const searchLower = searchTerm.toLowerCase()
     const matchesSearch = !searchTerm ||
       student.fullName.toLowerCase().includes(searchLower) ||
@@ -776,6 +828,11 @@ function Dashboard({ user, department, onLogout, initialData }) {
   }
 
   const filteredExamStudents = examStudents.filter(student => {
+    // Hidden student filter
+    const isHidden = hiddenStudents.includes((student.email || '').toLowerCase().trim())
+    if (showHidden) return isHidden
+    if (isHidden) return false
+
     // In normal mode, only show students from logged-in department (matched in Absorb)
     if (!adminMode && student.matched === false) return false
 
@@ -1247,12 +1304,32 @@ function Dashboard({ user, department, onLogout, initialData }) {
                     </svg>
                     <span>Export CSV</span>
                   </button>
+
+                  {/* Show Hidden Toggle */}
+                  {hiddenStudents.length > 0 && (
+                    <button
+                      onClick={() => setShowHidden(!showHidden)}
+                      className={`flex items-center space-x-1 px-3 py-2 rounded-lg text-sm border transition-colors ${
+                        showHidden
+                          ? 'bg-amber-50 border-amber-300 text-amber-700'
+                          : 'border-gray-300 text-gray-600 hover:bg-gray-50'
+                      }`}
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.878 9.878L3 3m6.878 6.878L21 21" />
+                      </svg>
+                      <span>Hidden ({hiddenStudents.length})</span>
+                    </button>
+                  )}
                 </div>
               </div>
 
               {/* Filter Results Count */}
               <div className="mt-3 text-sm text-gray-500">
-                Showing {filteredStudents.length} of {students.length} students
+                {showHidden
+                  ? `Showing ${filteredStudents.length} hidden students`
+                  : `Showing ${filteredStudents.length} of ${students.length} students`}
+                {!showHidden && hiddenStudents.length > 0 && ` (${hiddenStudents.length} hidden)`}
                 {extraDepartments.length > 0 && ` across ${1 + extraDepartments.length} departments`}
               </div>
             </div>
@@ -1262,6 +1339,8 @@ function Dashboard({ user, department, onLogout, initialData }) {
               students={filteredStudents}
               onViewStudent={setSelectedStudent}
               showDepartment={extraDepartments.length > 0}
+              onHideStudent={showHidden ? handleUnhideStudent : handleHideStudent}
+              showHidden={showHidden}
             />
           </>
         )}
@@ -1724,10 +1803,32 @@ function Dashboard({ user, department, onLogout, initialData }) {
                     Clear All
                   </button>
                 )}
+
+                {/* Show Hidden Toggle */}
+                {hiddenStudents.length > 0 && (
+                  <button
+                    onClick={() => setShowHidden(!showHidden)}
+                    className={`flex items-center space-x-1 px-3 py-2 rounded-lg text-sm border transition-colors ${
+                      showHidden
+                        ? 'bg-amber-50 border-amber-300 text-amber-700'
+                        : 'border-gray-300 text-gray-600 hover:bg-gray-50'
+                    }`}
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.878 9.878L3 3m6.878 6.878L21 21" />
+                    </svg>
+                    <span>Hidden ({hiddenStudents.length})</span>
+                  </button>
+                )}
               </div>
 
               <div className="mt-3 flex items-center gap-3 text-sm text-gray-500">
-                <span>Showing {filteredExamStudents.length} of {visibleExamStudents.length} exam students</span>
+                <span>
+                  {showHidden
+                    ? `Showing ${filteredExamStudents.length} hidden exam students`
+                    : `Showing ${filteredExamStudents.length} of ${visibleExamStudents.length} exam students`}
+                  {!showHidden && hiddenStudents.length > 0 && ` (${hiddenStudents.length} hidden)`}
+                </span>
                 {filteredExamStudents.length !== examStudents.length && !kpisFiltered && (
                   <button
                     onClick={() => { setExamSummary(calculateFullKPIs(filteredExamStudents)); setKpisFiltered(true) }}
@@ -1758,6 +1859,8 @@ function Dashboard({ user, department, onLogout, initialData }) {
                 students={filteredExamStudents}
                 onViewStudent={setSelectedStudent}
                 adminMode={adminMode}
+                onHideStudent={showHidden ? handleUnhideStudent : handleHideStudent}
+                showHidden={showHidden}
               />
             )}
           </>

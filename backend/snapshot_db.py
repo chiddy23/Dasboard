@@ -69,6 +69,13 @@ def init_db():
         updated_at TEXT NOT NULL
     )''')
 
+    # User hidden students (per-user list of student emails to hide from view)
+    conn.execute('''CREATE TABLE IF NOT EXISTS user_hidden_students (
+        email TEXT PRIMARY KEY,
+        hidden_emails TEXT DEFAULT '[]',
+        updated_at TEXT NOT NULL
+    )''')
+
     # Allowed users table (active user allowlist for production lockdown)
     conn.execute('''CREATE TABLE IF NOT EXISTS allowed_users (
         email TEXT PRIMARY KEY,
@@ -181,6 +188,41 @@ def save_user_dept_prefs(email, dept_ids):
         VALUES (?, ?, ?)
         ON CONFLICT(email) DO UPDATE SET department_ids = ?, updated_at = ?
     ''', (email, json.dumps(dept_ids), now, json.dumps(dept_ids), now))
+    conn.commit()
+    conn.close()
+
+
+# ── User Hidden Students functions ────────────────────────────────────
+
+MAX_HIDDEN_STUDENTS = 200
+
+
+def get_user_hidden_students(email):
+    """Get list of hidden student emails for a user."""
+    email = email.lower().strip()
+    conn = _get_connection()
+    row = conn.execute(
+        'SELECT hidden_emails FROM user_hidden_students WHERE email = ?',
+        (email,)
+    ).fetchone()
+    conn.close()
+    if row:
+        return json.loads(row['hidden_emails'])
+    return []
+
+
+def save_user_hidden_students(email, hidden_emails):
+    """Save hidden student emails for a user (upsert). Caps at MAX_HIDDEN_STUDENTS."""
+    email = email.lower().strip()
+    cleaned = list(set(e.lower().strip() for e in hidden_emails if isinstance(e, str) and e.strip()))
+    cleaned = cleaned[:MAX_HIDDEN_STUDENTS]
+    conn = _get_connection()
+    now = datetime.utcnow().isoformat()
+    conn.execute('''
+        INSERT INTO user_hidden_students (email, hidden_emails, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(email) DO UPDATE SET hidden_emails = ?, updated_at = ?
+    ''', (email, json.dumps(cleaned), now, json.dumps(cleaned), now))
     conn.commit()
     conn.close()
 

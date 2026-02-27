@@ -14,7 +14,7 @@ from absorb_api import AbsorbAPIClient, AbsorbAPIError
 from middleware import login_required
 from utils import format_student_for_response, get_status_from_last_login
 from routes.exam import invalidate_exam_absorb_cache, get_department_name
-from snapshot_db import get_user_dept_prefs, save_user_dept_prefs
+from snapshot_db import get_user_dept_prefs, save_user_dept_prefs, get_user_hidden_students, save_user_hidden_students
 from demo_data import (
     is_demo_dept, DEMO_DEPT_ID, DEMO_DEPT_NAME,
     get_cached_demo_students, register_sheet_emails, build_demo_from_real
@@ -565,3 +565,26 @@ def save_dept_prefs():
     valid = [d for d in dept_ids[:MAX_EXTRA_DEPTS] if isinstance(d, str) and GUID_RE.match(d)]
     save_user_dept_prefs(email, valid)
     return jsonify({'success': True, 'departmentIds': valid})
+
+
+# ── User Hidden Students ─────────────────────────────────────────────
+
+@dashboard_bp.route('/hidden-students', methods=['GET'])
+@login_required
+def get_hidden_students():
+    """Get the logged-in user's hidden student emails."""
+    email = (g.user.get('emailAddress') or '').lower().strip()
+    hidden = get_user_hidden_students(email)
+    return jsonify({'success': True, 'hiddenEmails': hidden})
+
+
+@dashboard_bp.route('/hidden-students', methods=['POST'])
+@login_required
+def save_hidden_students():
+    """Save the logged-in user's hidden student emails."""
+    email = (g.user.get('emailAddress') or '').lower().strip()
+    data = request.get_json() or {}
+    hidden = data.get('hiddenEmails', [])
+    valid = [e for e in hidden[:200] if isinstance(e, str) and e.strip()]
+    save_user_hidden_students(email, valid)
+    return jsonify({'success': True, 'hiddenEmails': valid})
