@@ -107,7 +107,8 @@ def get_exam_students():
         from snapshot_db import get_user_ghl_settings
         ghl_settings = get_user_ghl_settings(user_email)
 
-        if ghl_settings['enabled'] and ghl_settings['ghl_token'] and ghl_settings['calendar_id']:
+        is_ghl = ghl_settings['enabled'] and ghl_settings['ghl_token'] and ghl_settings['calendar_id']
+        if is_ghl:
             from ghl_api import fetch_ghl_appointments
             sheet_students = fetch_ghl_appointments(
                 ghl_settings['ghl_token'], ghl_settings['location_id'],
@@ -196,9 +197,9 @@ def get_exam_students():
         client = AbsorbAPIClient()
         client.set_token(g.absorb_token)
 
-        # 5. For admin mode: fetch ONLY the specific students by email (cross-department)
-        # Admin users' tokens have cross-department access
-        if is_admin and unmatched_emails:
+        # 5. For admin/GHL mode: fetch specific students by email (cross-department)
+        # GHL calendars may contain contacts from multiple departments
+        if (is_admin or is_ghl) and unmatched_emails:
             global _exam_absorb_timestamp
 
             # Skip emails already in cache (from a previous admin lookup)
@@ -278,7 +279,7 @@ def get_exam_students():
                 raw_enrollments = raw.get('enrollments', [])
 
                 exam_entry = _build_exam_entry(formatted, sheet_student, dept_name, True, raw_enrollments)
-            elif is_admin and email in _exam_absorb_cache and _exam_absorb_cache[email] is not None:
+            elif (is_admin or is_ghl) and email in _exam_absorb_cache and _exam_absorb_cache[email] is not None:
                 # Found via cross-department lookup (admin only)
                 cached = _exam_absorb_cache[email]
                 dept_id = cached['raw'].get('departmentId') or ''
