@@ -202,10 +202,12 @@ def get_exam_students():
         if (is_admin or is_ghl) and unmatched_emails:
             global _exam_absorb_timestamp
 
-            # Skip emails already in cache (from a previous admin lookup)
+            # Skip emails already in cache WITH DATA (not None failures)
             if is_exam_absorb_cache_valid():
-                truly_unmatched = [e for e in unmatched_emails if e not in _exam_absorb_cache]
-                print(f"[EXAM] Admin mode: {len(unmatched_emails)} unmatched, {len(unmatched_emails) - len(truly_unmatched)} already cached, {len(truly_unmatched)} to fetch")
+                truly_unmatched = [e for e in unmatched_emails
+                                   if e not in _exam_absorb_cache or _exam_absorb_cache[e] is None]
+                cached_count = len(unmatched_emails) - len(truly_unmatched)
+                print(f"[EXAM] Admin mode: {len(unmatched_emails)} unmatched, {cached_count} already cached, {len(truly_unmatched)} to fetch")
             else:
                 truly_unmatched = list(unmatched_emails)
                 print(f"[EXAM] Admin mode: Fetching {len(truly_unmatched)} specific students across all departments...")
@@ -241,23 +243,17 @@ def get_exam_students():
                                 }
                                 found += 1
                             else:
-                                _exam_absorb_cache[email] = None
+                                print(f"[EXAM] No enrollment data for {email}")
                         except AbsorbAPIError as e:
                             if e.status_code == 401:
                                 executor.shutdown(wait=False, cancel_futures=True)
                                 raise
-                            _exam_absorb_cache[email] = None
+                            print(f"[EXAM] Absorb API error for {email}: {e}")
                         except Exception as e:
                             print(f"[EXAM] Error processing {email}: {e}")
-                            _exam_absorb_cache[email] = None
 
                         if completed % 20 == 0 or completed == len(found_users):
                             print(f"[EXAM] Processed {completed}/{len(found_users)} enrollments ({found} complete)")
-
-            # Cache remaining unmatched as None
-            for email in unmatched_emails:
-                if email not in _exam_absorb_cache:
-                    _exam_absorb_cache[email] = None
 
             _exam_absorb_timestamp = datetime.utcnow()
             print(f"[EXAM] Admin fetch complete: {found}/{len(unmatched_emails)} found across all departments")
