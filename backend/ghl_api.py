@@ -278,7 +278,10 @@ def update_ghl_appointment(token, appointment_id, calendar_id, location_id,
     try:
         headers = _ghl_headers(token)
         headers['Content-Type'] = 'application/json'
+        print(f"[GHL] Updating appointment {appointment_id}, body: {body}")
         resp = requests.put(url, headers=headers, json=body, timeout=10)
+        if resp.status_code != 200:
+            print(f"[GHL] Appointment update {resp.status_code} body: {resp.text[:500]}")
         resp.raise_for_status()
         print(f"[GHL] Updated appointment {appointment_id}: {start_time_iso}")
         return True
