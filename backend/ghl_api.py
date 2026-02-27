@@ -72,9 +72,12 @@ def fetch_ghl_appointments(token, location_id, calendar_id, user_email):
 
     print(f"[GHL] Fetching appointments for calendar {calendar_id}...")
 
-    # Date range: 3 months back, 6 months forward
-    start_time = (now - timedelta(days=90)).strftime('%Y-%m-%dT00:00:00Z')
-    end_time = (now + timedelta(days=180)).strftime('%Y-%m-%dT23:59:59Z')
+    # Date range: 3 months back, 6 months forward (epoch milliseconds for GHL API)
+    import calendar as _cal
+    start_dt = now - timedelta(days=90)
+    end_dt = now + timedelta(days=180)
+    start_time = int(_cal.timegm(start_dt.timetuple())) * 1000
+    end_time = int(_cal.timegm(end_dt.timetuple())) * 1000
 
     # Fetch appointments (paginated)
     all_appointments = []
