@@ -86,6 +86,14 @@ def init_db():
         updated_at TEXT NOT NULL
     )''')
 
+    # User Bitrix24 settings (per-user Bitrix CRM integration)
+    conn.execute('''CREATE TABLE IF NOT EXISTS user_bitrix_settings (
+        email TEXT PRIMARY KEY,
+        enabled INTEGER DEFAULT 0,
+        webhook_url TEXT DEFAULT '',
+        updated_at TEXT NOT NULL
+    )''')
+
     # Allowed users table (active user allowlist for production lockdown)
     conn.execute('''CREATE TABLE IF NOT EXISTS allowed_users (
         email TEXT PRIMARY KEY,
@@ -303,6 +311,81 @@ def save_user_ghl_settings(email, enabled=None, ghl_token=None, location_id=None
         conn.execute(
             'INSERT INTO user_ghl_settings (email, enabled, ghl_token, location_id, calendar_id, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
             (email, 1 if enabled else 0, ghl_token or '', location_id or '', calendar_id or '', now)
+        )
+
+    conn.commit()
+    conn.close()
+
+
+# ── User Bitrix24 Settings functions ──────────────────────────────────
+
+def get_user_bitrix_settings(email):
+    """Get Bitrix24 integration settings for a user."""
+    email = email.lower().strip()
+    conn = _get_connection()
+    row = conn.execute(
+        'SELECT enabled, webhook_url FROM user_bitrix_settings WHERE email = ?',
+        (email,)
+    ).fetchone()
+    conn.close()
+    if row:
+        return {
+            'enabled': bool(row['enabled']),
+            'webhook_url': row['webhook_url'] or '',
+        }
+    return {'enabled': False, 'webhook_url': ''}
+
+
+def get_user_bitrix_settings_masked(email):
+    """Get Bitrix24 settings with webhook URL masked (show domain + last 4 chars)."""
+    settings = get_user_bitrix_settings(email)
+    url = settings['webhook_url']
+    if url:
+        # Show domain part + masked secret: https://company.bitrix24.com/rest/1/••••abcd/
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(url.rstrip('/'))
+            parts = parsed.path.strip('/').split('/')
+            if len(parts) >= 3:
+                domain = parsed.netloc
+                secret = parts[2]
+                masked_secret = '••••' + secret[-4:] if len(secret) > 4 else '••••'
+                settings['webhook_url'] = f"https://{domain}/rest/{parts[1]}/{masked_secret}/"
+            else:
+                settings['webhook_url'] = '••••' + url[-4:] if len(url) > 4 else '••••'
+        except Exception:
+            settings['webhook_url'] = '••••' + url[-4:] if len(url) > 4 else '••••'
+    return settings
+
+
+def save_user_bitrix_settings(email, enabled=None, webhook_url=None):
+    """Save Bitrix24 settings for a user (upsert). Only updates non-None fields."""
+    email = email.lower().strip()
+    conn = _get_connection()
+    now = datetime.utcnow().isoformat()
+
+    existing = conn.execute(
+        'SELECT * FROM user_bitrix_settings WHERE email = ?', (email,)
+    ).fetchone()
+
+    if existing:
+        updates = []
+        params = []
+        if enabled is not None:
+            updates.append('enabled = ?')
+            params.append(1 if enabled else 0)
+        if webhook_url is not None:
+            updates.append('webhook_url = ?')
+            params.append(webhook_url)
+        if updates:
+            updates.append('updated_at = ?')
+            params.append(now)
+            params.append(email)
+            conn.execute(f'UPDATE user_bitrix_settings SET {", ".join(updates)} WHERE email = ?', params)
+    else:
+        conn.execute(
+            'INSERT INTO user_bitrix_settings (email, enabled, webhook_url, updated_at) VALUES (?, ?, ?, ?)',
+            (email, 1 if enabled else 0, webhook_url or '', now)
         )
 
     conn.commit()

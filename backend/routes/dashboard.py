@@ -15,7 +15,7 @@ from absorb_api import AbsorbAPIClient, AbsorbAPIError
 from middleware import login_required
 from utils import format_student_for_response, get_status_from_last_login
 from routes.exam import invalidate_exam_absorb_cache, get_department_name
-from snapshot_db import get_user_dept_prefs, save_user_dept_prefs, get_user_hidden_students, save_user_hidden_students, get_user_ghl_settings, get_user_ghl_settings_masked, save_user_ghl_settings
+from snapshot_db import get_user_dept_prefs, save_user_dept_prefs, get_user_hidden_students, save_user_hidden_students, get_user_ghl_settings, get_user_ghl_settings_masked, save_user_ghl_settings, get_user_bitrix_settings, get_user_bitrix_settings_masked, save_user_bitrix_settings
 from demo_data import (
     is_demo_dept, DEMO_DEPT_ID, DEMO_DEPT_NAME,
     get_cached_demo_students, register_sheet_emails, build_demo_from_real
@@ -609,6 +609,12 @@ def save_ghl_settings():
     email = (g.user.get('email') or g.user.get('emailAddress') or '').lower().strip()
     data = request.get_json() or {}
 
+    # Mutual exclusivity: disable Bitrix if enabling GHL
+    if data.get('enabled'):
+        save_user_bitrix_settings(email, enabled=False)
+        from bitrix_api import invalidate_bitrix_cache
+        invalidate_bitrix_cache(email)
+
     save_user_ghl_settings(
         email,
         enabled=data.get('enabled'),
@@ -647,3 +653,59 @@ def get_ghl_calendars():
         return jsonify({'success': False, 'error': f'GHL API error ({status})'}), status
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ── User Bitrix24 Settings ──────────────────────────────────────────
+
+@dashboard_bp.route('/bitrix-settings', methods=['GET'])
+@login_required
+def get_bitrix_settings():
+    """Get the logged-in user's Bitrix24 integration settings (webhook masked)."""
+    email = (g.user.get('email') or g.user.get('emailAddress') or '').lower().strip()
+    settings = get_user_bitrix_settings_masked(email)
+    return jsonify({'success': True, **settings})
+
+
+@dashboard_bp.route('/bitrix-settings', methods=['POST'])
+@login_required
+def save_bitrix_settings():
+    """Save Bitrix24 integration settings for the logged-in user."""
+    email = (g.user.get('email') or g.user.get('emailAddress') or '').lower().strip()
+    data = request.get_json() or {}
+
+    # Mutual exclusivity: disable GHL if enabling Bitrix
+    if data.get('enabled'):
+        save_user_ghl_settings(email, enabled=False)
+        from ghl_api import invalidate_ghl_cache
+        invalidate_ghl_cache(email)
+
+    save_user_bitrix_settings(
+        email,
+        enabled=data.get('enabled'),
+        webhook_url=data.get('webhook_url'),
+    )
+
+    # Clear Bitrix cache so next exam fetch uses fresh data
+    from bitrix_api import invalidate_bitrix_cache
+    invalidate_bitrix_cache(email)
+
+    settings = get_user_bitrix_settings_masked(email)
+    return jsonify({'success': True, **settings})
+
+
+@dashboard_bp.route('/bitrix-validate', methods=['GET'])
+@login_required
+def validate_bitrix_webhook():
+    """Validate a Bitrix24 webhook URL by testing the connection."""
+    webhook_url = request.args.get('webhook_url', '').strip()
+
+    if not webhook_url:
+        return jsonify({'success': False, 'error': 'Webhook URL is required'}), 400
+
+    from bitrix_api import validate_webhook
+    result = validate_webhook(webhook_url)
+
+    if result.get('valid'):
+        return jsonify({'success': True, **result})
+    else:
+        return jsonify({'success': False, 'error': result.get('error', 'Validation failed')}), 400
