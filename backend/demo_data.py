@@ -1,67 +1,155 @@
-"""Demo mode: anonymized real student data for presentations.
+"""Static demo mode: serves pre-captured, anonymized data with zero API calls.
 
-Fetches real student data from the Google Sheet + Absorb API,
-replaces personal info (names, emails, phone) with fake data,
-and serves it under a demo department. All study data, enrollments,
-scores, and progress remain real.
+All demo data is loaded from data/demo_snapshot.json on first access.
+Personal info is already anonymized in the snapshot. Dates are stored as
+offsets and computed at load time so lastLogin stays fresh and exam dates
+stay in the future.
 """
 
-import uuid
-import time
+import json
+import os
+from datetime import datetime, timedelta
+
+from utils.formatters import (
+    format_student_for_response, format_progress, format_time_spent,
+    format_datetime, format_relative_time, parse_absorb_date,
+    parse_time_spent_to_minutes, get_enrollment_status_text
+)
+from utils.readiness import calculate_readiness
+from utils.gap_metrics import calculate_gap_metrics
 
 DEMO_DEPT_ID = 'de000000-0000-0000-0000-de0000000001'
 DEMO_DEPT_NAME = 'Demo Agency - Dashboard Preview'
 
-FAKE_NAMES = [
-    ('James', 'Anderson'), ('Maria', 'Thompson'), ('Robert', 'Garcia'),
-    ('Jennifer', 'Martinez'), ('Michael', 'Robinson'), ('Sarah', 'Clark'),
-    ('David', 'Rodriguez'), ('Emily', 'Lewis'), ('Daniel', 'Walker'),
-    ('Ashley', 'Hall'), ('Christopher', 'Allen'), ('Jessica', 'Young'),
-    ('Matthew', 'King'), ('Amanda', 'Wright'), ('Andrew', 'Lopez'),
-    ('Stephanie', 'Hill'), ('Joshua', 'Scott'), ('Nicole', 'Green'),
-    ('Brandon', 'Adams'), ('Rachel', 'Baker'), ('Ryan', 'Nelson'),
-    ('Megan', 'Carter'), ('Kevin', 'Mitchell'), ('Lauren', 'Perez'),
-    ('Justin', 'Roberts'), ('Amber', 'Turner'), ('Tyler', 'Phillips'),
-    ('Kayla', 'Campbell'), ('Nathan', 'Parker'), ('Brittany', 'Evans'),
-    ('Marcus', 'Flores'), ('Diana', 'Rivera'), ('Derek', 'Nguyen'),
-    ('Lisa', 'Chen'), ('Jason', 'Patel'), ('Sophie', 'Torres'),
-    ('Jordan', 'Hayes'), ('Sydney', 'Sullivan'), ('Oscar', 'Ortega'),
-    ('Erika', 'Vasquez'), ('Connor', 'Reed'), ('Samantha', 'Brooks'),
-    ('Adrian', 'Price'), ('Natalie', 'Barnes'), ('Ethan', 'Howard'),
-    ('Vanessa', 'Coleman'), ('Ian', 'Russell'), ('Alexis', 'Diaz'),
-    ('Luke', 'Foster'), ('Brianna', 'Sanders'),
-]
-
-# Persistent demo cache
-_demo_cache = {
-    'raw': None,
-    'timestamp': 0,
-    'id_map': {},           # demo_id -> real_id
-    'reverse_id_map': {},   # real_id_lower -> demo_id
-    'email_map': {},        # real_email -> index
-    'name_map': {},         # demo_id -> (firstName, lastName, demo_email)
-}
-DEMO_CACHE_TTL = 300  # 5 minutes
+_snapshot = None
+_student_ids = set()
+_student_index = {}  # id -> index in dashboard list
+_name_map = {}       # id -> (firstName, lastName, email)
 
 
-def _generate_demo_id(index):
-    """Generate consistent demo ID from index."""
-    return str(uuid.uuid5(uuid.NAMESPACE_DNS, f'demo-student-{index}'))
+def _load_snapshot():
+    """Load demo_snapshot.json, patch date offsets, pre-compute details."""
+    global _snapshot, _student_ids, _student_index, _name_map
+
+    path = os.path.join(os.path.dirname(__file__), 'data', 'demo_snapshot.json')
+    with open(path, 'r') as f:
+        _snapshot = json.load(f)
+
+    now = datetime.utcnow()
+    today = now.date()
+
+    # Patch dashboard students: convert _loginDaysAgo to real lastLoginDate
+    for i, s in enumerate(_snapshot['dashboard']):
+        days_ago = s.pop('_loginDaysAgo', 1)
+        s['lastLoginDate'] = (now - timedelta(days=days_ago)).isoformat()
+
+        sid = s['id']
+        _student_ids.add(sid)
+        _student_index[sid] = i
+        _name_map[sid] = (s['firstName'], s['lastName'], s['emailAddress'])
+
+    # Patch exam students: convert _examDayOffset to real dates
+    for entry in _snapshot['exam']['students']:
+        offset = entry.pop('_examDayOffset', 0)
+        exam_date = today + timedelta(days=offset)
+        entry['examDate'] = exam_date.strftime('%b %d, %Y')
+        entry['examDateRaw'] = exam_date.strftime('%Y-%m-%d')
+
+    # Pre-compute detail data for each dashboard student
+    _snapshot['details'] = {}
+    for s in _snapshot['dashboard']:
+        sid = s['id']
+        enrollments = s.get('enrollments', [])
+
+        # Format enrollments for detail modal
+        formatted_enrollments = []
+        for enrollment in enrollments:
+            progress_val = enrollment.get('progress', 0)
+            time_spent_val = '0'
+            for tf in ('timeSpent', 'TimeSpent', 'ActiveTime', 'activeTime'):
+                tv = enrollment.get(tf)
+                if tv and parse_time_spent_to_minutes(tv) > 0:
+                    time_spent_val = tv
+                    break
+            status_val = enrollment.get('status', 0)
+            course_name = (enrollment.get('name') or enrollment.get('Name')
+                           or enrollment.get('courseName') or 'Unknown Course')
+            date_enrolled = enrollment.get('dateAdded') or enrollment.get('dateStarted')
+            date_completed = enrollment.get('dateCompleted')
+            date_last_accessed = (enrollment.get('accessDate')
+                                  or enrollment.get('dateEdited')
+                                  or enrollment.get('dateStarted'))
+
+            formatted_enrollments.append({
+                'id': enrollment.get('id'),
+                'courseId': enrollment.get('courseId'),
+                'courseName': course_name,
+                'progress': format_progress(progress_val),
+                'timeSpent': {
+                    'minutes': parse_time_spent_to_minutes(time_spent_val),
+                    'formatted': format_time_spent(time_spent_val)
+                },
+                'status': status_val,
+                'statusText': get_enrollment_status_text(status_val),
+                'enrolledDate': format_datetime(parse_absorb_date(date_enrolled)),
+                'completedDate': format_datetime(parse_absorb_date(date_completed)),
+                'lastAccessed': {
+                    'formatted': format_datetime(parse_absorb_date(date_last_accessed)),
+                    'relative': format_relative_time(parse_absorb_date(date_last_accessed))
+                }
+            })
+        formatted_enrollments.sort(
+            key=lambda e: (0 if e['status'] == 1 else 1, -e['progress']['value'])
+        )
+
+        _snapshot['details'][sid] = {
+            'formatted_enrollments': formatted_enrollments,
+            'totalEnrollments': len(enrollments),
+            'completedEnrollments': sum(
+                1 for e in enrollments if e.get('status') in [2, 3]
+            ),
+            'readiness': calculate_readiness(enrollments),
+            'gapMetrics': calculate_gap_metrics(enrollments),
+        }
+
+    # Enrich exam entries with dashboard data (progress, status, timeSpent, etc.)
+    for entry in _snapshot['exam']['students']:
+        sid = entry.get('id')
+        if sid and sid in _student_index:
+            s = _snapshot['dashboard'][_student_index[sid]]
+            formatted = format_student_for_response(s)
+            # Merge formatted fields into exam entry
+            for key in ('status', 'lastLogin', 'progress', 'courseName',
+                        'timeSpent', 'examPrepTime', 'phone', 'username',
+                        'enrollmentStatus', 'enrollmentStatusText', 'departmentId'):
+                entry[key] = formatted.get(key, entry.get(key))
+            # Add readiness and gap metrics
+            detail = _snapshot['details'].get(sid, {})
+            entry['readiness'] = detail.get('readiness')
+            entry['gapMetrics'] = detail.get('gapMetrics')
+        else:
+            # Unmatched student
+            entry.setdefault('status', {
+                'status': 'UNKNOWN', 'class': 'gray', 'emoji': '', 'priority': 99
+            })
+            entry.setdefault('lastLogin', {
+                'raw': None, 'formatted': 'N/A', 'relative': 'N/A'
+            })
+            entry.setdefault('progress', {
+                'value': 0, 'display': '0%', 'colorClass': 'low', 'color': '#ef4444'
+            })
+            entry.setdefault('courseName', 'Not in Absorb')
+            entry.setdefault('timeSpent', {'minutes': 0, 'formatted': '0m'})
+            entry.setdefault('examPrepTime', {'minutes': 0, 'formatted': '0m'})
+            entry['departmentName'] = 'Not in Absorb'
+
+    print(f"[DEMO] Loaded static snapshot: {len(_snapshot['dashboard'])} students, "
+          f"{len(_snapshot['exam']['students'])} exam entries")
 
 
-def _fake_name(index):
-    """Get fake name pair for an index."""
-    return FAKE_NAMES[index % len(FAKE_NAMES)]
-
-
-def _fake_email(first, last):
-    """Generate fake email from name."""
-    return f'{first.lower()}.{last.lower()}.demo@justinsurance.com'
-
-
-def _fake_phone(index):
-    """Generate fake phone number."""
-    return f'(555) {100 + index:03d}-{1000 + index * 7:04d}'
+def _ensure_loaded():
+    if _snapshot is None:
+        _load_snapshot()
 
 
 # ── Public API ────────────────────────────────────────────────────────
@@ -75,126 +163,156 @@ def is_demo_dept(dept_id):
 
 def is_demo_student(student_id):
     """Check if this is a demo student ID."""
-    if not student_id:
-        return False
-    return student_id in _demo_cache.get('id_map', {})
-
-
-def get_real_id(demo_id):
-    """Look up real Absorb student ID from demo ID."""
-    return _demo_cache.get('id_map', {}).get(demo_id)
+    _ensure_loaded()
+    return student_id in _student_ids
 
 
 def get_demo_name(demo_id):
-    """Get fake name info for a demo student.
-
-    Returns (firstName, lastName, demoEmail).
-    """
-    return _demo_cache.get('name_map', {}).get(
-        demo_id, ('Demo', 'Student', 'demo@justinsurance.com')
-    )
+    """Get fake name info for a demo student. Returns (firstName, lastName, email)."""
+    _ensure_loaded()
+    return _name_map.get(demo_id, ('Demo', 'Student', 'demo@justinsurance.com'))
 
 
 def get_demo_email_lookup():
-    """Get real_email -> demo info mapping for ALL registered students.
+    """Get email -> demo info mapping for exam tab anonymization.
 
-    Used by the exam tab to anonymize entries after matching.
-    Returns dict: real_email -> {firstName, lastName, fullName, email, demoId}
+    Returns dict: email -> {firstName, lastName, fullName, email, demoId}
     """
+    _ensure_loaded()
     lookup = {}
-    for real_email, index in _demo_cache.get('email_map', {}).items():
-        first, last = _fake_name(index)
-        demo_email = _fake_email(first, last)
-        demo_id = _generate_demo_id(index)
-        lookup[real_email] = {
-            'firstName': first,
-            'lastName': last,
-            'fullName': f'{first} {last}',
-            'email': demo_email,
-            'demoId': demo_id,
+    for s in _snapshot['dashboard']:
+        email = s['emailAddress'].lower()
+        lookup[email] = {
+            'firstName': s['firstName'],
+            'lastName': s['lastName'],
+            'fullName': f"{s['firstName']} {s['lastName']}",
+            'email': s['emailAddress'],
+            'demoId': s['id'],
         }
     return lookup
 
 
-def is_demo_cache_valid():
-    """Check if demo cache is still valid."""
-    if not _demo_cache['raw']:
-        return False
-    return (time.time() - _demo_cache['timestamp']) < DEMO_CACHE_TTL
-
-
 def get_cached_demo_students():
-    """Get demo students from cache if valid, else None."""
-    if is_demo_cache_valid():
-        return _demo_cache['raw']
-    return None
+    """Get demo students from static snapshot. Always returns data, never None."""
+    _ensure_loaded()
+    return _snapshot['dashboard']
 
 
-def register_sheet_emails(sheet_students):
-    """Assign consistent fake name indices to all sheet students.
+def get_demo_student_detail(demo_id):
+    """Get pre-computed detail for a demo student (for the detail modal).
 
-    Call BEFORE build_demo_from_real so that ALL students (including
-    those not found in Absorb) get a fake name assignment.
+    Returns the full formatted student dict with enrollments, readiness, gapMetrics.
     """
-    for i, s in enumerate(sheet_students):
-        email = (s.get('email') or '').lower().strip()
-        if email and email not in _demo_cache['email_map']:
-            _demo_cache['email_map'][email] = i
+    _ensure_loaded()
+    if demo_id not in _student_index:
+        return None
+
+    s = _snapshot['dashboard'][_student_index[demo_id]]
+    detail = _snapshot['details'][demo_id]
+
+    # Build the formatted student response
+    formatted = format_student_for_response(s)
+    formatted['enrollments'] = detail['formatted_enrollments']
+    formatted['totalEnrollments'] = detail['totalEnrollments']
+    formatted['completedEnrollments'] = detail['completedEnrollments']
+    formatted['readiness'] = detail['readiness']
+    formatted['gapMetrics'] = detail['gapMetrics']
+    return formatted
 
 
-def build_demo_from_real(real_students):
-    """Take real processed students, anonymize personal info, cache and return.
+def get_demo_exam_data():
+    """Get static exam data (students + summary). Returns dict with 'students' and 'examSummary'."""
+    _ensure_loaded()
 
-    Args:
-        real_students: List of student dicts from _process_single_user()
+    students = _snapshot['exam']['students']
+    now = datetime.utcnow()
 
-    Returns:
-        List of anonymized student dicts (real study data, fake personal info)
-    """
-    demo_students = []
-    id_map = {}
-    reverse_id_map = {}
-    name_map = {}
+    # Calculate summary from the enriched exam entries
+    total = len(students)
+    passed_students = [s for s in students if (s.get('passFail') or '').upper() == 'PASS']
+    failed_students = [s for s in students if (s.get('passFail') or '').upper() == 'FAIL']
+    passed = len(passed_students)
+    failed = len(failed_students)
 
-    for student in real_students:
-        real_id = student.get('id') or student.get('Id') or ''
-        real_email = (student.get('emailAddress') or '').lower().strip()
+    upcoming = 0
+    at_risk = 0
+    for s in students:
+        exam_raw = s.get('examDateRaw', '')
+        try:
+            dt = datetime.strptime(exam_raw, '%Y-%m-%d')
+        except (ValueError, TypeError):
+            continue
+        has_result = bool(s.get('passFail', '').strip())
+        if dt > now and not has_result:
+            upcoming += 1
+            if s.get('matched') and s.get('progress', {}).get('value', 0) < 80:
+                at_risk += 1
 
-        # Look up index from email_map (registered from sheet)
-        index = _demo_cache['email_map'].get(real_email)
-        if index is None:
-            # Not in sheet — assign next available index
-            index = len(_demo_cache['email_map'])
-            _demo_cache['email_map'][real_email] = index
+    no_result = total - passed - failed - upcoming
+    completed_exams = passed + failed
+    pass_rate = round((passed / completed_exams * 100), 1) if completed_exams > 0 else 0
 
-        demo_id = _generate_demo_id(index)
-        first, last = _fake_name(index)
-        demo_email = _fake_email(first, last)
+    matched = [s for s in students if s.get('matched')]
+    avg_progress = 0
+    avg_study_time = 0
+    if matched:
+        avg_progress = round(
+            sum(s['progress']['value'] for s in matched) / len(matched), 1
+        )
+        total_study = sum(
+            (s.get('timeSpent', {}).get('minutes', 0) or 0) +
+            (s.get('examPrepTime', {}).get('minutes', 0) or 0)
+            for s in matched
+        )
+        avg_study_time = round(total_study / len(matched))
 
-        # Shallow copy and anonymize personal fields only
-        anonymized = dict(student)
-        anonymized['id'] = demo_id
-        anonymized['firstName'] = first
-        anonymized['lastName'] = last
-        anonymized['emailAddress'] = demo_email
-        anonymized['username'] = f'{first[0].lower()}{last.lower()}.demo'
-        anonymized['phone'] = _fake_phone(index)
-        anonymized['departmentId'] = DEMO_DEPT_ID
-        # Internal fields for matching (not sent to frontend)
-        anonymized['_realEmail'] = real_email
-        anonymized['_realId'] = real_id
+    def fmt(m):
+        return f"{m // 60}h {m % 60}m" if m >= 60 else f"{m}m"
 
-        id_map[demo_id] = real_id
-        reverse_id_map[real_id.lower()] = demo_id
-        name_map[demo_id] = (first, last, demo_email)
+    matched_passed = [s for s in passed_students if s.get('matched')]
+    matched_failed = [s for s in failed_students if s.get('matched')]
+    avg_passed = 0
+    avg_failed = 0
+    if matched_passed:
+        t = sum((s.get('timeSpent', {}).get('minutes', 0) or 0) +
+                (s.get('examPrepTime', {}).get('minutes', 0) or 0)
+                for s in matched_passed)
+        avg_passed = round(t / len(matched_passed))
+    if matched_failed:
+        t = sum((s.get('timeSpent', {}).get('minutes', 0) or 0) +
+                (s.get('examPrepTime', {}).get('minutes', 0) or 0)
+                for s in matched_failed)
+        avg_failed = round(t / len(matched_failed))
 
-        demo_students.append(anonymized)
+    course_types = {}
+    for s in students:
+        c = (s.get('examCourse') or 'Unknown').strip()
+        if c not in course_types:
+            course_types[c] = {'total': 0, 'passed': 0, 'failed': 0}
+        course_types[c]['total'] += 1
+        pf = (s.get('passFail') or '').upper()
+        if pf == 'PASS':
+            course_types[c]['passed'] += 1
+        elif pf == 'FAIL':
+            course_types[c]['failed'] += 1
 
-    _demo_cache['raw'] = demo_students
-    _demo_cache['timestamp'] = time.time()
-    _demo_cache['id_map'] = id_map
-    _demo_cache['reverse_id_map'] = reverse_id_map
-    _demo_cache['name_map'] = name_map
-
-    print(f"[DEMO] Built {len(demo_students)} anonymized students from real data")
-    return demo_students
+    return {
+        'students': students,
+        'examSummary': {
+            'total': total,
+            'upcoming': upcoming,
+            'passed': passed,
+            'failed': failed,
+            'noResult': max(0, no_result),
+            'passRate': pass_rate,
+            'atRisk': at_risk,
+            'averageProgress': avg_progress,
+            'avgStudyTime': avg_study_time,
+            'avgStudyTimeFormatted': fmt(avg_study_time),
+            'avgStudyPassed': avg_passed,
+            'avgStudyPassedFormatted': fmt(avg_passed),
+            'avgStudyFailed': avg_failed,
+            'avgStudyFailedFormatted': fmt(avg_failed),
+            'courseTypes': course_types,
+        }
+    }

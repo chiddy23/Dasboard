@@ -18,7 +18,7 @@ from routes.exam import invalidate_exam_absorb_cache, get_department_name
 from snapshot_db import get_user_dept_prefs, save_user_dept_prefs, get_user_hidden_students, save_user_hidden_students, get_user_ghl_settings, get_user_ghl_settings_masked, save_user_ghl_settings, get_user_bitrix_settings, get_user_bitrix_settings_masked, save_user_bitrix_settings
 from demo_data import (
     is_demo_dept, DEMO_DEPT_ID, DEMO_DEPT_NAME,
-    get_cached_demo_students, register_sheet_emails, build_demo_from_real
+    get_cached_demo_students
 )
 
 dashboard_bp = Blueprint('dashboard', __name__)
@@ -31,58 +31,12 @@ CACHE_TTL_MINUTES = 5  # Cache data for 5 minutes
 
 def get_cached_students(department_id, token):
     """Get students from cache or fetch fresh data."""
-    # Demo mode — serve anonymized real data
+    # Demo mode — serve static anonymized data (zero API calls)
     if is_demo_dept(department_id):
         cached = get_cached_demo_students()
-        if cached:
-            formatted = [format_student_for_response(s) for s in cached]
-            formatted.sort(key=lambda s: (s['status']['priority'], -s['progress']['value']))
-            return cached, formatted
-
-        # Build demo data from real students (Google Sheet emails + Absorb)
-        print("[DEMO] Building demo data from real students...")
-        from google_sheets import fetch_exam_sheet
-        sheet_students = fetch_exam_sheet()
-        emails = list(set(s['email'] for s in sheet_students if s.get('email')))
-
-        if not emails:
-            print("[DEMO] No emails found in Google Sheet")
-            return [], []
-
-        # Assign fake names to ALL sheet students first
-        register_sheet_emails(sheet_students)
-
-        # Fetch real users from Absorb by email
-        client = AbsorbAPIClient()
-        client.set_token(token)
-        found_users = client.get_users_by_emails_batch(emails)
-        print(f"[DEMO] Found {len(found_users)}/{len(emails)} users in Absorb")
-
-        # Process each to get enrollment data (parallel)
-        processed = []
-        if found_users:
-            max_workers = min(50, len(found_users))
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                futures = {executor.submit(client._process_single_user, u): u for u in found_users}
-                completed = 0
-                for future in as_completed(futures):
-                    completed += 1
-                    try:
-                        result = future.result()
-                        if result:
-                            processed.append(result)
-                    except AbsorbAPIError:
-                        raise
-                    except Exception as e:
-                        print(f"[DEMO] Error processing user: {e}")
-                    if completed % 10 == 0 or completed == len(found_users):
-                        print(f"[DEMO] Processed {completed}/{len(found_users)} students...")
-
-        # Anonymize and cache
-        raw = build_demo_from_real(processed)
-        formatted = [format_student_for_response(s) for s in raw]
+        formatted = [format_student_for_response(s) for s in cached]
         formatted.sort(key=lambda s: (s['status']['priority'], -s['progress']['value']))
-        return raw, formatted
+        return cached, formatted
 
     now = datetime.utcnow()
 
@@ -405,6 +359,21 @@ def sync_data():
     Accepts optional extraDepartments list in JSON body for multi-dept sync.
     """
     try:
+        # Demo mode: static data, no sync needed
+        if is_demo_dept(g.department_id):
+            cached = get_cached_demo_students()
+            formatted = [format_student_for_response(s) for s in cached]
+            formatted.sort(key=lambda s: (s['status']['priority'], -s['progress']['value']))
+            return jsonify({
+                'success': True,
+                'message': 'Demo mode - data is static',
+                'summary': _compute_summary(formatted),
+                'students': formatted,
+                'departments': [{'id': DEMO_DEPT_ID, 'name': DEMO_DEPT_NAME,
+                                 'studentCount': len(formatted), 'status': 'ok'}],
+                'syncedAt': datetime.utcnow().isoformat()
+            })
+
         data = request.get_json(silent=True) or {}
         extra_dept_ids = data.get('extraDepartments', [])
 

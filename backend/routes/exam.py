@@ -98,6 +98,17 @@ def invalidate_exam_absorb_cache():
 def get_exam_students():
     """Get exam-scheduled students matched with their Absorb data."""
     try:
+        # Demo mode: return static exam data (zero API calls)
+        if is_demo_dept(g.department_id):
+            from demo_data import get_demo_exam_data
+            exam_data = get_demo_exam_data()
+            return jsonify({
+                'success': True,
+                'students': exam_data['students'],
+                'examSummary': exam_data['examSummary'],
+                'count': len(exam_data['students'])
+            })
+
         # Check admin mode
         admin_key = request.args.get('adminKey', '')
         is_admin = admin_key == ADMIN_PASSWORD
@@ -613,6 +624,9 @@ def verify_admin():
 @login_required
 def update_exam_result():
     """Update pass/fail result for a student (in-memory override)."""
+    if is_demo_dept(g.department_id):
+        return jsonify({'success': True, 'demo': True, 'message': 'Demo mode - changes not persisted'})
+
     data = request.get_json() or {}
     email = (data.get('email') or '').lower().strip()
     result = (data.get('result') or '').upper().strip()
@@ -679,6 +693,9 @@ def update_exam_result():
 @login_required
 def update_exam_date():
     """Update exam date for a student (in-memory override)."""
+    if is_demo_dept(g.department_id):
+        return jsonify({'success': True, 'demo': True, 'message': 'Demo mode - changes not persisted'})
+
     data = request.get_json() or {}
     email = (data.get('email') or '').lower().strip()
     new_date = (data.get('date') or '').strip()  # Expected format: YYYY-MM-DD
