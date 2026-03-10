@@ -24,11 +24,22 @@ def _is_practice_exam(name):
 
 
 def _is_state_law(name):
-    """Check if enrollment is a state law course (contains 'law' and/or 'specific')."""
+    """Check if enrollment is a state law course (contains 'law' and/or 'specific').
+
+    Excludes quizzes, exams, outlines, and practice courses — those are assessments,
+    not actual state laws study time.
+    """
     if not name:
         return False
     lower = name.lower()
-    return 'law' in lower or 'specific' in lower
+    if not ('law' in lower or 'specific' in lower):
+        return False
+    # Exclude assessments/quizzes — they aren't state laws study time
+    exclude = ('quiz', 'exam', 'practice', 'outline', 'content', 'test')
+    for word in exclude:
+        if word in lower:
+            return False
+    return True
 
 
 def _is_video_course(name):
