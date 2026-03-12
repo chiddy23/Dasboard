@@ -87,6 +87,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
   // Filtering and search
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
+  const [studentCourseFilter, setStudentCourseFilter] = useState('all')
   const [examResultFilter, setExamResultFilter] = useState('no-result')
   const [examCourseFilter, setExamCourseFilter] = useState('all')
   const [examDeptFilter, setExamDeptFilter] = useState([])
@@ -918,6 +919,11 @@ function Dashboard({ user, department, onLogout, initialData }) {
     students.map(s => (s.departmentName || '').trim()).filter(Boolean)
   )].sort()
 
+  // Build unique course names for Students tab filter
+  const studentCourseTypes = [...new Set(
+    students.map(s => (s.courseName || '').trim()).filter(c => c && c !== 'No Course')
+  )].sort()
+
   // Filter students (works for both tabs)
   const filteredStudents = students.filter(student => {
     // Hidden student filter
@@ -937,7 +943,10 @@ function Dashboard({ user, department, onLogout, initialData }) {
     const matchesDept = studentDeptFilter.length === 0 ||
       studentDeptFilter.includes((student.departmentName || '').trim())
 
-    return matchesSearch && matchesStatus && matchesDept
+    const matchesCourse = studentCourseFilter === 'all' ||
+      (student.courseName || '').trim() === studentCourseFilter
+
+    return matchesSearch && matchesStatus && matchesDept && matchesCourse
   })
 
   // Helper: compute readiness for an exam student (GREEN/RED/GRAY)
@@ -1458,6 +1467,35 @@ function Dashboard({ user, department, onLogout, initialData }) {
                     <option value="abandoned">Abandoned</option>
                     <option value="course expired">Course Expired</option>
                   </select>
+
+                  {/* Course Filter */}
+                  {studentCourseTypes.length > 1 && (
+                    <select
+                      className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-ji-blue-bright"
+                      value={studentCourseFilter}
+                      onChange={(e) => setStudentCourseFilter(e.target.value)}
+                    >
+                      <option value="all">All Courses</option>
+                      {studentCourseTypes.map(c => (
+                        <option key={c} value={c}>{c}</option>
+                      ))}
+                    </select>
+                  )}
+
+                  {/* Clear All Filters */}
+                  {(searchTerm || statusFilter !== 'all' || studentCourseFilter !== 'all' || studentDeptFilter.length > 0) && (
+                    <button
+                      onClick={() => {
+                        setSearchTerm('')
+                        setStatusFilter('all')
+                        setStudentCourseFilter('all')
+                        setStudentDeptFilter([])
+                      }}
+                      className="px-3 py-2 border border-red-300 text-red-600 rounded-lg hover:bg-red-50 text-sm font-medium transition-colors"
+                    >
+                      Clear All
+                    </button>
+                  )}
 
                   {/* Export Button */}
                   <button
