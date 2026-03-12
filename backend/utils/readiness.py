@@ -34,6 +34,9 @@ def _is_state_law(name):
     lower = name.lower()
     if not ('law' in lower or 'specific' in lower):
         return False
+    # Exclude pre-licensing main courses (e.g. CA courses with "Law & Ethics" in title)
+    if _is_prelicensing(name):
+        return False
     # Exclude assessments/quizzes — they aren't state laws study time
     exclude = ('quiz', 'exam', 'practice', 'outline', 'content', 'test')
     for word in exclude:
