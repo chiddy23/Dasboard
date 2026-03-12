@@ -1402,7 +1402,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
 
                 <div className="flex items-center gap-4 flex-wrap">
                   {/* Department Filter - multi-select checklist */}
-                  {extraDepartments.length > 0 && studentDepartments.length > 1 && (
+                  {studentDepartments.length > 0 && (
                     <div className="relative">
                       <button
                         onClick={() => setShowDeptDropdown(!showDeptDropdown)}
