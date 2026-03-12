@@ -417,7 +417,7 @@ def compute_snapshot_metrics(enrollments):
             prelicensing_time += minutes
             prelicensing_progress_values.append(progress)
 
-        if name and ('prep' in name.lower() or 'study' in name.lower()) and not _is_practice_exam(name):
+        if name and ('prep' in name.lower() or 'study' in name.lower() or 'practice' in name.lower()):
             exam_prep_time += minutes
             exam_prep_progress_values.append(progress)
 

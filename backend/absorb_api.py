@@ -474,13 +474,11 @@ class AbsorbAPIClient:
         return False
 
     def _is_exam_prep_course(self, course_name: str) -> bool:
-        """Check if a course is an Exam Prep course (excludes practice exams)."""
+        """Check if a course is an Exam Prep course (includes practice exams)."""
         if not course_name:
             return False
         name_lower = course_name.lower()
-        if 'practice' in name_lower:
-            return False
-        return 'prep' in name_lower or 'study' in name_lower
+        return 'prep' in name_lower or 'study' in name_lower or 'practice' in name_lower
 
     def _is_module_or_chapter(self, course_name: str) -> bool:
         """Check if a course name indicates it's a module/chapter."""
