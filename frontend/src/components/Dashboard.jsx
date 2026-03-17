@@ -326,8 +326,8 @@ function Dashboard({ user, department, onLogout, initialData }) {
       setDeptError('Department already added')
       return
     }
-    if (extraDepartments.length >= 10) {
-      setDeptError('Maximum 10 additional departments')
+    if (extraDepartments.length >= 20) {
+      setDeptError('Maximum 20 additional departments')
       return
     }
     setDeptError('')

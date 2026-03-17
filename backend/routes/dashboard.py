@@ -241,7 +241,7 @@ def get_students():
 
 
 GUID_RE = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
-MAX_EXTRA_DEPTS = 10
+MAX_EXTRA_DEPTS = 20
 
 
 def _compute_summary(formatted_students):
