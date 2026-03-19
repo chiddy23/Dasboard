@@ -94,6 +94,15 @@ def init_db():
         updated_at TEXT NOT NULL
     )''')
 
+    # User Google Sheet settings (per-user custom sheet for exam data)
+    conn.execute('''CREATE TABLE IF NOT EXISTS user_sheet_settings (
+        email TEXT PRIMARY KEY,
+        enabled INTEGER DEFAULT 0,
+        sheet_url TEXT DEFAULT '',
+        sheet_id TEXT DEFAULT '',
+        updated_at TEXT NOT NULL
+    )''')
+
     # Allowed users table (active user allowlist for production lockdown)
     conn.execute('''CREATE TABLE IF NOT EXISTS allowed_users (
         email TEXT PRIMARY KEY,
@@ -386,6 +395,72 @@ def save_user_bitrix_settings(email, enabled=None, webhook_url=None):
         conn.execute(
             'INSERT INTO user_bitrix_settings (email, enabled, webhook_url, updated_at) VALUES (?, ?, ?, ?)',
             (email, 1 if enabled else 0, webhook_url or '', now)
+        )
+
+    conn.commit()
+    conn.close()
+
+
+def get_user_sheet_settings(email):
+    """Get Google Sheet settings for a user."""
+    email = email.lower().strip()
+    conn = _get_connection()
+    row = conn.execute(
+        'SELECT enabled, sheet_url, sheet_id FROM user_sheet_settings WHERE email = ?',
+        (email,)
+    ).fetchone()
+    conn.close()
+    if row:
+        return {
+            'enabled': bool(row['enabled']),
+            'sheet_url': row['sheet_url'] or '',
+            'sheet_id': row['sheet_id'] or '',
+        }
+    return {'enabled': False, 'sheet_url': '', 'sheet_id': ''}
+
+
+def get_user_sheet_settings_masked(email):
+    """Get Google Sheet settings with URL partially masked for display."""
+    settings = get_user_sheet_settings(email)
+    url = settings.get('sheet_url', '')
+    if url and len(url) > 30:
+        settings['sheet_url_masked'] = url[:35] + '...' + url[-12:]
+    else:
+        settings['sheet_url_masked'] = url
+    return settings
+
+
+def save_user_sheet_settings(email, enabled=None, sheet_url=None, sheet_id=None):
+    """Save Google Sheet settings for a user (upsert). Only updates non-None fields."""
+    email = email.lower().strip()
+    conn = _get_connection()
+    now = datetime.utcnow().isoformat()
+
+    existing = conn.execute(
+        'SELECT * FROM user_sheet_settings WHERE email = ?', (email,)
+    ).fetchone()
+
+    if existing:
+        updates = []
+        params = []
+        if enabled is not None:
+            updates.append('enabled = ?')
+            params.append(1 if enabled else 0)
+        if sheet_url is not None:
+            updates.append('sheet_url = ?')
+            params.append(sheet_url)
+        if sheet_id is not None:
+            updates.append('sheet_id = ?')
+            params.append(sheet_id)
+        if updates:
+            updates.append('updated_at = ?')
+            params.append(now)
+            params.append(email)
+            conn.execute(f'UPDATE user_sheet_settings SET {", ".join(updates)} WHERE email = ?', params)
+    else:
+        conn.execute(
+            'INSERT INTO user_sheet_settings (email, enabled, sheet_url, sheet_id, updated_at) VALUES (?, ?, ?, ?, ?)',
+            (email, 1 if enabled else 0, sheet_url or '', sheet_id or '', now)
         )
 
     conn.commit()

@@ -113,14 +113,16 @@ def get_exam_students():
         admin_key = request.args.get('adminKey', '')
         is_admin = admin_key == ADMIN_PASSWORD
 
-        # 1. Fetch student data (GHL calendar, Bitrix CRM, or Google Sheet)
+        # 1. Fetch student data (GHL calendar, Bitrix CRM, User Sheet, or Admin Sheet)
         user_email = (g.user.get('email') or g.user.get('emailAddress') or '').lower().strip()
-        from snapshot_db import get_user_ghl_settings, get_user_bitrix_settings
+        from snapshot_db import get_user_ghl_settings, get_user_bitrix_settings, get_user_sheet_settings
         ghl_settings = get_user_ghl_settings(user_email)
         bitrix_settings = get_user_bitrix_settings(user_email)
+        sheet_settings = get_user_sheet_settings(user_email)
 
         is_ghl = ghl_settings['enabled'] and ghl_settings['ghl_token'] and ghl_settings['calendar_id']
         is_bitrix = bitrix_settings['enabled'] and bitrix_settings['webhook_url']
+        is_user_sheet = sheet_settings['enabled'] and sheet_settings['sheet_id']
         if is_ghl:
             from ghl_api import fetch_ghl_appointments
             sheet_students = fetch_ghl_appointments(
@@ -132,6 +134,9 @@ def get_exam_students():
             sheet_students = fetch_bitrix_activities(
                 bitrix_settings['webhook_url'], user_email
             )
+        elif is_user_sheet:
+            from google_sheets import fetch_user_exam_sheet
+            sheet_students = fetch_user_exam_sheet(sheet_settings['sheet_id'], user_email)
         else:
             sheet_students = fetch_exam_sheet()
 
@@ -640,16 +645,18 @@ def update_exam_result():
 
     is_admin = admin_key == ADMIN_PASSWORD
 
-    # Check if GHL/Bitrix mode is active (user owns their calendar data)
+    # Check if GHL/Bitrix/User Sheet mode is active (user owns their data)
     _pf_user_email = (g.user.get('email') or g.user.get('emailAddress') or '').lower().strip()
-    from snapshot_db import get_user_ghl_settings as _get_ghl_pf, get_user_bitrix_settings as _get_bx_pf
+    from snapshot_db import get_user_ghl_settings as _get_ghl_pf, get_user_bitrix_settings as _get_bx_pf, get_user_sheet_settings as _get_sheet_pf_auth
     _pf_ghl = _get_ghl_pf(_pf_user_email)
     is_ghl_pf_auth = _pf_ghl['enabled'] and _pf_ghl['ghl_token'] and _pf_ghl['calendar_id']
     _pf_bx = _get_bx_pf(_pf_user_email)
     is_bitrix_pf_auth = _pf_bx['enabled'] and _pf_bx['webhook_url']
+    _pf_sheet = _get_sheet_pf_auth(_pf_user_email)
+    is_user_sheet_pf_auth = _pf_sheet['enabled'] and _pf_sheet['sheet_id']
 
-    # Authorization: admin, GHL/Bitrix owner, or student must be in user's department
-    if not is_admin and not is_ghl_pf_auth and not is_bitrix_pf_auth:
+    # Authorization: admin, GHL/Bitrix/Sheet owner, or student must be in user's department
+    if not is_admin and not is_ghl_pf_auth and not is_bitrix_pf_auth and not is_user_sheet_pf_auth:
         from routes.dashboard import get_cached_students
         _, formatted_students = get_cached_students(g.department_id, g.absorb_token)
         dept_emails = {(s.get('email') or '').lower().strip() for s in formatted_students}
@@ -668,18 +675,21 @@ def update_exam_result():
 
     # Write back to Google Sheet (skip in GHL/Bitrix mode — no pass/fail field)
     user_email_pf = (g.user.get('email') or g.user.get('emailAddress') or '').lower().strip()
-    from snapshot_db import get_user_ghl_settings as _get_ghl, get_user_bitrix_settings as _get_bx
+    from snapshot_db import get_user_ghl_settings as _get_ghl, get_user_bitrix_settings as _get_bx, get_user_sheet_settings as _get_sheet_pf
     _ghl_pf = _get_ghl(user_email_pf)
     is_ghl_pf = _ghl_pf['enabled'] and _ghl_pf['ghl_token'] and _ghl_pf['calendar_id']
     _bx_pf = _get_bx(user_email_pf)
     is_bitrix_pf = _bx_pf['enabled'] and _bx_pf['webhook_url']
+    _sheet_pf = _get_sheet_pf(user_email_pf)
+    is_user_sheet_pf = _sheet_pf['enabled'] and _sheet_pf['sheet_id']
 
     sheet_saved = False
     if not is_ghl_pf and not is_bitrix_pf:
+        target_sheet_id = _sheet_pf['sheet_id'] if is_user_sheet_pf else None
         if result:
-            sheet_saved = update_sheet_passfail(email, result)
+            sheet_saved = update_sheet_passfail(email, result, sheet_id=target_sheet_id)
         else:
-            sheet_saved = update_sheet_passfail(email, '')
+            sheet_saved = update_sheet_passfail(email, '', sheet_id=target_sheet_id)
         if not sheet_saved:
             print(f"[EXAM] WARNING: Pass/fail for {email} saved locally but NOT to Google Sheet")
 
@@ -716,16 +726,18 @@ def update_exam_date():
 
     is_admin = admin_key == ADMIN_PASSWORD
 
-    # Check if GHL/Bitrix mode is active (user owns their calendar data)
+    # Check if GHL/Bitrix/User Sheet mode is active (user owns their data)
     _dt_user_email = (g.user.get('email') or g.user.get('emailAddress') or '').lower().strip()
-    from snapshot_db import get_user_ghl_settings as _get_ghl_dt, get_user_bitrix_settings as _get_bx_dt
+    from snapshot_db import get_user_ghl_settings as _get_ghl_dt, get_user_bitrix_settings as _get_bx_dt, get_user_sheet_settings as _get_sheet_dt_auth
     _dt_ghl = _get_ghl_dt(_dt_user_email)
     is_ghl_dt_auth = _dt_ghl['enabled'] and _dt_ghl['ghl_token'] and _dt_ghl['calendar_id']
     _dt_bx = _get_bx_dt(_dt_user_email)
     is_bitrix_dt_auth = _dt_bx['enabled'] and _dt_bx['webhook_url']
+    _dt_sheet = _get_sheet_dt_auth(_dt_user_email)
+    is_user_sheet_dt_auth = _dt_sheet['enabled'] and _dt_sheet['sheet_id']
 
-    # Authorization: admin, GHL/Bitrix owner, or student must be in user's department
-    if not is_admin and not is_ghl_dt_auth and not is_bitrix_dt_auth:
+    # Authorization: admin, GHL/Bitrix/Sheet owner, or student must be in user's department
+    if not is_admin and not is_ghl_dt_auth and not is_bitrix_dt_auth and not is_user_sheet_dt_auth:
         from routes.dashboard import get_cached_students
         _, formatted_students = get_cached_students(g.department_id, g.absorb_token)
         dept_emails = {(s.get('email') or '').lower().strip() for s in formatted_students}
@@ -799,7 +811,10 @@ def update_exam_date():
         else:
             print(f"[EXAM] No Bitrix IDs found for {email}, cannot update activity in Bitrix")
     else:
-        sheet_saved = update_sheet_exam_date(email, new_date, new_time)
+        from snapshot_db import get_user_sheet_settings as _get_sheet_dt
+        _sheet_dt = _get_sheet_dt(user_email)
+        target_sheet_id = _sheet_dt['sheet_id'] if (_sheet_dt['enabled'] and _sheet_dt['sheet_id']) else None
+        sheet_saved = update_sheet_exam_date(email, new_date, new_time, sheet_id=target_sheet_id)
         if not sheet_saved:
             print(f"[EXAM] WARNING: Exam date for {email} saved locally but NOT to Google Sheet")
 
@@ -939,7 +954,10 @@ def update_exam_contact():
         else:
             print(f"[EXAM] No Bitrix IDs found for {email}, cannot update contact in Bitrix")
     else:
-        sheet_saved = update_sheet_contact(email, name=new_name, new_email=new_email, phone=new_phone)
+        from snapshot_db import get_user_sheet_settings as _get_sheet_ct
+        _sheet_ct = _get_sheet_ct(user_email)
+        target_sheet_id = _sheet_ct['sheet_id'] if (_sheet_ct['enabled'] and _sheet_ct['sheet_id']) else None
+        sheet_saved = update_sheet_contact(email, name=new_name, new_email=new_email, phone=new_phone, sheet_id=target_sheet_id)
 
     return jsonify({
         'success': True,
@@ -974,9 +992,10 @@ def sync_exam_data():
         invalidate_exam_absorb_cache()
 
         user_email = (g.user.get('email') or g.user.get('emailAddress') or '').lower().strip()
-        from snapshot_db import get_user_ghl_settings, get_user_bitrix_settings
+        from snapshot_db import get_user_ghl_settings, get_user_bitrix_settings, get_user_sheet_settings
         ghl_settings = get_user_ghl_settings(user_email)
         bitrix_settings = get_user_bitrix_settings(user_email)
+        sheet_settings = get_user_sheet_settings(user_email)
 
         if ghl_settings['enabled'] and ghl_settings['ghl_token'] and ghl_settings['calendar_id']:
             from ghl_api import invalidate_ghl_cache, fetch_ghl_appointments
@@ -991,6 +1010,10 @@ def sync_exam_data():
             sheet_students = fetch_bitrix_activities(
                 bitrix_settings['webhook_url'], user_email
             )
+        elif sheet_settings['enabled'] and sheet_settings['sheet_id']:
+            from google_sheets import invalidate_user_sheet_cache, fetch_user_exam_sheet
+            invalidate_user_sheet_cache(user_email)
+            sheet_students = fetch_user_exam_sheet(sheet_settings['sheet_id'], user_email)
         else:
             invalidate_sheet_cache()
             sheet_students = fetch_exam_sheet()

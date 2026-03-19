@@ -15,7 +15,7 @@ from absorb_api import AbsorbAPIClient, AbsorbAPIError
 from middleware import login_required
 from utils import format_student_for_response, get_status_from_last_login
 from routes.exam import invalidate_exam_absorb_cache, get_department_name
-from snapshot_db import get_user_dept_prefs, save_user_dept_prefs, get_user_hidden_students, save_user_hidden_students, get_user_ghl_settings, get_user_ghl_settings_masked, save_user_ghl_settings, get_user_bitrix_settings, get_user_bitrix_settings_masked, save_user_bitrix_settings
+from snapshot_db import get_user_dept_prefs, save_user_dept_prefs, get_user_hidden_students, save_user_hidden_students, get_user_ghl_settings, get_user_ghl_settings_masked, save_user_ghl_settings, get_user_bitrix_settings, get_user_bitrix_settings_masked, save_user_bitrix_settings, get_user_sheet_settings, get_user_sheet_settings_masked, save_user_sheet_settings
 from demo_data import (
     is_demo_dept, DEMO_DEPT_ID, DEMO_DEPT_NAME,
     get_cached_demo_students
@@ -578,11 +578,14 @@ def save_ghl_settings():
     email = (g.user.get('email') or g.user.get('emailAddress') or '').lower().strip()
     data = request.get_json() or {}
 
-    # Mutual exclusivity: disable Bitrix if enabling GHL
+    # Mutual exclusivity: disable Bitrix and User Sheet if enabling GHL
     if data.get('enabled'):
         save_user_bitrix_settings(email, enabled=False)
+        save_user_sheet_settings(email, enabled=False)
         from bitrix_api import invalidate_bitrix_cache
+        from google_sheets import invalidate_user_sheet_cache
         invalidate_bitrix_cache(email)
+        invalidate_user_sheet_cache(email)
 
     save_user_ghl_settings(
         email,
@@ -642,11 +645,14 @@ def save_bitrix_settings():
     email = (g.user.get('email') or g.user.get('emailAddress') or '').lower().strip()
     data = request.get_json() or {}
 
-    # Mutual exclusivity: disable GHL if enabling Bitrix
+    # Mutual exclusivity: disable GHL and User Sheet if enabling Bitrix
     if data.get('enabled'):
         save_user_ghl_settings(email, enabled=False)
+        save_user_sheet_settings(email, enabled=False)
         from ghl_api import invalidate_ghl_cache
+        from google_sheets import invalidate_user_sheet_cache
         invalidate_ghl_cache(email)
+        invalidate_user_sheet_cache(email)
 
     save_user_bitrix_settings(
         email,
@@ -678,3 +684,70 @@ def validate_bitrix_webhook():
         return jsonify({'success': True, **result})
     else:
         return jsonify({'success': False, 'error': result.get('error', 'Validation failed')}), 400
+
+
+# ── User Google Sheet Settings ──────────────────────────────────────
+
+@dashboard_bp.route('/sheet-settings', methods=['GET'])
+@login_required
+def get_sheet_settings():
+    """Get the logged-in user's Google Sheet settings."""
+    email = (g.user.get('email') or g.user.get('emailAddress') or '').lower().strip()
+    settings = get_user_sheet_settings_masked(email)
+    return jsonify({'success': True, **settings})
+
+
+@dashboard_bp.route('/sheet-settings', methods=['POST'])
+@login_required
+def save_sheet_settings():
+    """Save Google Sheet settings for the logged-in user."""
+    email = (g.user.get('email') or g.user.get('emailAddress') or '').lower().strip()
+    data = request.get_json() or {}
+
+    # Mutual exclusivity: disable GHL and Bitrix if enabling User Sheet
+    if data.get('enabled'):
+        save_user_ghl_settings(email, enabled=False)
+        save_user_bitrix_settings(email, enabled=False)
+        from ghl_api import invalidate_ghl_cache
+        from bitrix_api import invalidate_bitrix_cache
+        invalidate_ghl_cache(email)
+        invalidate_bitrix_cache(email)
+
+    # Parse sheet URL to extract ID
+    sheet_url = data.get('sheet_url', '').strip()
+    sheet_id = None
+    if sheet_url:
+        from google_sheets import parse_sheet_id
+        sheet_id = parse_sheet_id(sheet_url)
+
+    save_user_sheet_settings(
+        email,
+        enabled=data.get('enabled'),
+        sheet_url=sheet_url if sheet_url else None,
+        sheet_id=sheet_id,
+    )
+
+    from google_sheets import invalidate_user_sheet_cache
+    invalidate_user_sheet_cache(email)
+
+    settings = get_user_sheet_settings_masked(email)
+    return jsonify({'success': True, **settings})
+
+
+@dashboard_bp.route('/sheet-validate', methods=['GET'])
+@login_required
+def validate_sheet():
+    """Validate a Google Sheet URL by testing fetch and checking columns."""
+    sheet_url = request.args.get('sheet_url', '').strip()
+    if not sheet_url:
+        return jsonify({'success': False, 'error': 'Sheet URL is required'}), 400
+
+    from google_sheets import parse_sheet_id, validate_user_sheet
+    sheet_id = parse_sheet_id(sheet_url)
+    if not sheet_id:
+        return jsonify({'success': False, 'error': 'Could not parse a valid Google Sheet ID from that URL'}), 400
+
+    result = validate_user_sheet(sheet_id)
+    if result.get('valid'):
+        return jsonify({'success': True, **result})
+    return jsonify({'success': False, 'error': result.get('error', 'Validation failed')}), 400

@@ -84,6 +84,16 @@ function Dashboard({ user, department, onLogout, initialData }) {
   const [bitrixValidating, setBitrixValidating] = useState(false)
   const [bitrixValidated, setBitrixValidated] = useState(false)
 
+  // User Google Sheet integration state
+  const [sheetSettings, setSheetSettings] = useState(null)
+  const [showSheetSetup, setShowSheetSetup] = useState(false)
+  const [sheetUrlInput, setSheetUrlInput] = useState('')
+  const [sheetError, setSheetError] = useState('')
+  const [sheetSaving, setSheetSaving] = useState(false)
+  const [sheetValidating, setSheetValidating] = useState(false)
+  const [sheetValidated, setSheetValidated] = useState(false)
+  const [sheetValidationInfo, setSheetValidationInfo] = useState(null)
+
   // Filtering and search
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
@@ -185,6 +195,15 @@ function Dashboard({ user, department, onLogout, initialData }) {
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d?.success) setBitrixSettings(d) })
       .catch(err => console.error('[Bitrix] Failed to load settings:', err))
+  }, [user?.email])
+
+  // Load User Sheet settings on mount
+  useEffect(() => {
+    if (!user?.email) return
+    fetch(`${API_BASE}/dashboard/sheet-settings`, { credentials: 'include' })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d?.success) setSheetSettings(d) })
+      .catch(err => console.error('[Sheet] Failed to load settings:', err))
   }, [user?.email])
 
   // Re-fetch students when extra departments change
@@ -397,8 +416,9 @@ function Dashboard({ user, department, onLogout, initialData }) {
       if (data.success) {
         setGhlSettings(data)
         if (enabled) {
-          // GHL enabled — disable Bitrix on frontend too
+          // GHL enabled — disable Bitrix and User Sheet on frontend too
           setBitrixSettings(prev => prev ? { ...prev, enabled: false } : prev)
+          setSheetSettings(prev => prev ? { ...prev, enabled: false } : prev)
           setShowGhlSetup(false)
           setExamLoaded(false)
           if (activeTab === 'exam') fetchExamData()
@@ -460,8 +480,9 @@ function Dashboard({ user, department, onLogout, initialData }) {
       if (data.success) {
         setBitrixSettings(data)
         if (enabled) {
-          // Bitrix enabled — disable GHL on frontend too
+          // Bitrix enabled — disable GHL and User Sheet on frontend too
           setGhlSettings(prev => prev ? { ...prev, enabled: false } : prev)
+          setSheetSettings(prev => prev ? { ...prev, enabled: false } : prev)
           setShowBitrixSetup(false)
           setExamLoaded(false)
           if (activeTab === 'exam') fetchExamData()
@@ -476,6 +497,67 @@ function Dashboard({ user, department, onLogout, initialData }) {
       setBitrixError('Failed to save Bitrix settings')
     } finally {
       setBitrixSaving(false)
+    }
+  }
+
+  // ── User Google Sheet handlers ──────────────────────────────────
+  const handleValidateSheet = async () => {
+    setSheetValidating(true)
+    setSheetError('')
+    setSheetValidated(false)
+    setSheetValidationInfo(null)
+    try {
+      const params = new URLSearchParams({ sheet_url: sheetUrlInput.trim() })
+      const res = await fetch(`${API_BASE}/dashboard/sheet-validate?${params}`, { credentials: 'include' })
+      const data = await res.json()
+      if (data.success) {
+        setSheetValidated(true)
+        setSheetValidationInfo({ row_count: data.row_count, columns: data.columns })
+      } else {
+        setSheetError(data.error || 'Sheet validation failed')
+      }
+    } catch (err) {
+      setSheetError('Failed to validate sheet')
+    } finally {
+      setSheetValidating(false)
+    }
+  }
+
+  const handleSaveSheetSettings = async (enabled) => {
+    setSheetSaving(true)
+    setSheetError('')
+    try {
+      const body = {
+        enabled,
+        sheet_url: sheetUrlInput.trim() || undefined,
+      }
+      const res = await fetch(`${API_BASE}/dashboard/sheet-settings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(body),
+      })
+      const data = await res.json()
+      if (data.success) {
+        setSheetSettings(data)
+        if (enabled) {
+          // Sheet enabled — disable GHL and Bitrix on frontend too
+          setGhlSettings(prev => prev ? { ...prev, enabled: false } : prev)
+          setBitrixSettings(prev => prev ? { ...prev, enabled: false } : prev)
+          setShowSheetSetup(false)
+          setExamLoaded(false)
+          if (activeTab === 'exam') fetchExamData()
+        } else {
+          setExamLoaded(false)
+          if (activeTab === 'exam') fetchExamData()
+        }
+      } else {
+        setSheetError(data.error || 'Failed to save settings')
+      }
+    } catch (err) {
+      setSheetError('Failed to save sheet settings')
+    } finally {
+      setSheetSaving(false)
     }
   }
 
@@ -1659,13 +1741,15 @@ function Dashboard({ user, department, onLogout, initialData }) {
                   </div>
                 )}
                 <button
-                  onClick={() => { setShowGhlSetup(!showGhlSetup); setShowBitrixSetup(false) }}
+                  onClick={() => { setShowGhlSetup(!showGhlSetup); setShowBitrixSetup(false); setShowSheetSetup(false) }}
                   className={`text-sm flex items-center space-x-1 px-2.5 py-1 rounded-lg border transition-colors ${
                     ghlSettings?.enabled
                       ? 'text-teal-600 border-teal-200 hover:border-teal-400 hover:bg-teal-50'
                       : bitrixSettings?.enabled
                         ? 'text-blue-600 border-blue-200 hover:border-blue-400 hover:bg-blue-50'
-                        : 'text-gray-500 border-gray-200 hover:border-gray-400 hover:bg-gray-50'
+                        : sheetSettings?.enabled
+                          ? 'text-green-600 border-green-200 hover:border-green-400 hover:bg-green-50'
+                          : 'text-gray-500 border-gray-200 hover:border-gray-400 hover:bg-gray-50'
                   }`}
                   title="Configure exam data source"
                 >
@@ -1700,9 +1784,11 @@ function Dashboard({ user, department, onLogout, initialData }) {
                         ? 'bg-teal-100 text-teal-700'
                         : bitrixSettings?.enabled
                           ? 'bg-blue-100 text-blue-700'
-                          : 'bg-gray-100 text-gray-500'
+                          : sheetSettings?.enabled
+                            ? 'bg-green-100 text-green-700'
+                            : 'bg-gray-100 text-gray-500'
                     }`}>
-                      {ghlSettings?.enabled ? 'GHL Calendar' : bitrixSettings?.enabled ? 'Bitrix24 CRM' : 'Google Sheet'}
+                      {ghlSettings?.enabled ? 'GHL Calendar' : bitrixSettings?.enabled ? 'Bitrix24 CRM' : sheetSettings?.enabled ? 'Your Google Sheet' : 'Admin Sheet'}
                     </span>
                   </div>
                   <button onClick={() => setShowGhlSetup(false)} className="text-gray-400 hover:text-gray-600">
@@ -1794,6 +1880,12 @@ function Dashboard({ user, department, onLogout, initialData }) {
                         className="px-3 py-1.5 bg-blue-50 text-blue-600 rounded text-xs font-medium hover:bg-blue-100 border border-blue-200 transition-colors"
                       >
                         Use Bitrix24 instead
+                      </button>
+                      <button
+                        onClick={() => { setShowGhlSetup(false); setShowSheetSetup(true) }}
+                        className="px-3 py-1.5 bg-green-50 text-green-600 rounded text-xs font-medium hover:bg-green-100 border border-green-200 transition-colors"
+                      >
+                        Use Your Sheet instead
                       </button>
                       <button
                         onClick={() => setShowGhlSetup(false)}
@@ -1892,7 +1984,113 @@ function Dashboard({ user, department, onLogout, initialData }) {
                         Use GHL instead
                       </button>
                       <button
+                        onClick={() => { setShowBitrixSetup(false); setShowSheetSetup(true) }}
+                        className="px-3 py-1.5 bg-green-50 text-green-600 rounded text-xs font-medium hover:bg-green-100 border border-green-200 transition-colors"
+                      >
+                        Use Your Sheet instead
+                      </button>
+                      <button
                         onClick={() => setShowBitrixSetup(false)}
+                        className="px-3 py-1.5 bg-gray-100 text-gray-600 rounded text-xs hover:bg-gray-200 transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* User Google Sheet Data Source Setup Panel */}
+            {showSheetSetup && (
+              <div className="bg-white rounded-xl shadow-md p-4 mb-6 border-l-4 border-green-500">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <svg className="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    <h3 className="text-sm font-semibold text-gray-700">Your Google Sheet</h3>
+                    {sheetSettings?.enabled && (
+                      <span className="px-2 py-0.5 text-xs rounded-full font-medium bg-green-100 text-green-700">Active</span>
+                    )}
+                  </div>
+                  <button onClick={() => setShowSheetSetup(false)} className="text-gray-400 hover:text-gray-600">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+
+                {sheetSettings?.enabled ? (
+                  <div>
+                    <div className="flex items-center gap-4 text-sm text-gray-600 mb-3">
+                      <span>Sheet: <code className="bg-gray-100 px-1.5 py-0.5 rounded text-xs">{sheetSettings.sheet_url_masked || sheetSettings.sheet_url || 'Not set'}</code></span>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => handleSaveSheetSettings(false)}
+                        className="px-3 py-1.5 bg-red-50 text-red-600 rounded text-xs font-medium hover:bg-red-100 border border-red-200 transition-colors"
+                        disabled={sheetSaving}
+                      >
+                        {sheetSaving ? 'Disabling...' : 'Disable Sheet'}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <p className="text-xs text-gray-500 mb-3">
+                      Connect your own Google Sheet to populate the Exam tab. Sheet must be shared as <strong>"Anyone with the link can view"</strong>.
+                    </p>
+                    <p className="text-xs text-gray-400 mb-3">
+                      Required columns: <strong>Email</strong>, <strong>Exam Date</strong>. Optional: Student Name, Phone, Exam Time, State, Course, Agency Owner, Pass/Fail, Final Outcome.
+                    </p>
+                    <div className="space-y-2 mb-3">
+                      <input
+                        type="text"
+                        placeholder="Paste Google Sheet URL or ID"
+                        value={sheetUrlInput}
+                        onChange={e => { setSheetUrlInput(e.target.value); setSheetValidated(false); setSheetError('') }}
+                        className="w-full px-3 py-1.5 border rounded text-sm focus:ring-1 focus:ring-green-300 focus:border-green-400"
+                      />
+                    </div>
+                    {sheetValidated && sheetValidationInfo && (
+                      <div className="bg-green-50 border border-green-200 rounded p-2 mb-3">
+                        <p className="text-xs text-green-700 font-medium">Sheet validated successfully</p>
+                        <p className="text-xs text-green-600">{sheetValidationInfo.row_count} student{sheetValidationInfo.row_count !== 1 ? 's' : ''} found</p>
+                      </div>
+                    )}
+                    {sheetError && (
+                      <p className="text-xs text-red-500 mb-2">{sheetError}</p>
+                    )}
+                    <div className="flex gap-2 flex-wrap">
+                      <button
+                        onClick={handleValidateSheet}
+                        disabled={sheetValidating || !sheetUrlInput.trim()}
+                        className="px-3 py-1.5 bg-green-100 text-green-700 rounded text-xs font-medium hover:bg-green-200 disabled:opacity-50 transition-colors"
+                      >
+                        {sheetValidating ? 'Validating...' : 'Validate Sheet'}
+                      </button>
+                      <button
+                        onClick={() => handleSaveSheetSettings(true)}
+                        disabled={sheetSaving || !sheetValidated}
+                        className="px-4 py-1.5 bg-green-600 text-white rounded text-xs font-medium hover:bg-green-700 disabled:opacity-50 transition-colors"
+                      >
+                        {sheetSaving ? 'Enabling...' : 'Enable Sheet'}
+                      </button>
+                      <button
+                        onClick={() => { setShowSheetSetup(false); setShowGhlSetup(true) }}
+                        className="px-3 py-1.5 bg-teal-50 text-teal-600 rounded text-xs font-medium hover:bg-teal-100 border border-teal-200 transition-colors"
+                      >
+                        Use GHL instead
+                      </button>
+                      <button
+                        onClick={() => { setShowSheetSetup(false); setShowBitrixSetup(true) }}
+                        className="px-3 py-1.5 bg-blue-50 text-blue-600 rounded text-xs font-medium hover:bg-blue-100 border border-blue-200 transition-colors"
+                      >
+                        Use Bitrix24 instead
+                      </button>
+                      <button
+                        onClick={() => setShowSheetSetup(false)}
                         className="px-3 py-1.5 bg-gray-100 text-gray-600 rounded text-xs hover:bg-gray-200 transition-colors"
                       >
                         Cancel

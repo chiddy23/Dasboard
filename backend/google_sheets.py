@@ -2,15 +2,42 @@
 
 import csv
 import io
+import re
 import requests
 from datetime import datetime
 
 
 SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/1Hc7IUA8bZceLFlLdOPuGckDuV0MtqRcb5DPLeMhncbo/export?format=csv"
 
-# Cache for sheet data
+# Cache for admin sheet data (global)
 _sheet_cache = {'data': None, 'timestamp': None}
 SHEET_CACHE_TTL = 300  # 5 minutes
+
+# Cache for per-user sheet data
+_user_sheet_cache = {}  # {user_email: {'data': [...], 'timestamp': datetime}}
+USER_SHEET_CACHE_TTL = 300  # 5 minutes
+
+
+def parse_sheet_id(url_or_id):
+    """Extract Google Sheet ID from a URL or raw ID string.
+
+    Handles:
+      - https://docs.google.com/spreadsheets/d/SHEET_ID/edit#gid=0
+      - https://docs.google.com/spreadsheets/d/SHEET_ID/export?format=csv
+      - https://docs.google.com/spreadsheets/d/SHEET_ID
+      - Raw ID string (alphanumeric + hyphens + underscores, 20+ chars)
+    """
+    if not url_or_id:
+        return None
+    url_or_id = url_or_id.strip()
+    # Try extracting from URL
+    m = re.search(r'/spreadsheets/d/([a-zA-Z0-9_-]+)', url_or_id)
+    if m:
+        return m.group(1)
+    # Check if it's a raw sheet ID
+    if re.match(r'^[a-zA-Z0-9_-]{20,}$', url_or_id):
+        return url_or_id
+    return None
 
 
 def format_exam_date(date_str):
@@ -42,7 +69,7 @@ def parse_exam_date_for_sort(date_str):
 
 
 def fetch_exam_sheet():
-    """Fetch and parse the Google Sheet exam data."""
+    """Fetch and parse the admin Google Sheet exam data."""
     now = datetime.utcnow()
 
     # Check cache
@@ -63,7 +90,25 @@ def fetch_exam_sheet():
             return _sheet_cache['data']
         return []
 
-    reader = csv.DictReader(io.StringIO(response.text))
+    students = _parse_sheet_csv(response.text)
+    print(f"[SHEET] Parsed {len(students)} unique exam students")
+
+    _sheet_cache['data'] = students
+    _sheet_cache['timestamp'] = now
+
+    return students
+
+
+def invalidate_sheet_cache():
+    """Clear the sheet cache."""
+    _sheet_cache['data'] = None
+    _sheet_cache['timestamp'] = None
+    print("[SHEET] Cache invalidated")
+
+
+def _parse_sheet_csv(text):
+    """Parse CSV text into the standard exam student format. Shared by admin + user sheet."""
+    reader = csv.DictReader(io.StringIO(text))
     students = []
 
     for row in reader:
@@ -121,25 +166,76 @@ def fetch_exam_sheet():
         if s['passFail']:
             passfail_by_email[e] = s['passFail']
         seen[e] = s
-    # Apply pass/fail from any duplicate row that had it
     for e, s in seen.items():
         if not s['passFail'] and e in passfail_by_email:
             s['passFail'] = passfail_by_email[e]
-    students = list(seen.values())
+    return list(seen.values())
 
-    print(f"[SHEET] Parsed {len(students)} unique exam students")
 
-    _sheet_cache['data'] = students
-    _sheet_cache['timestamp'] = now
+def fetch_user_exam_sheet(sheet_id, user_email):
+    """Fetch and parse a user's Google Sheet exam data (per-user cache)."""
+    user_email = user_email.lower().strip()
+    now = datetime.utcnow()
 
+    # Check per-user cache
+    if user_email in _user_sheet_cache:
+        cache = _user_sheet_cache[user_email]
+        age = (now - cache['timestamp']).total_seconds()
+        if age < USER_SHEET_CACHE_TTL:
+            print(f"[USER SHEET] Using cached data for {user_email} (age: {int(age)}s)")
+            return cache['data']
+
+    csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+    print(f"[USER SHEET] Fetching fresh data for {user_email}...")
+
+    try:
+        response = requests.get(csv_url, timeout=30)
+        response.raise_for_status()
+    except requests.RequestException as e:
+        print(f"[USER SHEET] Failed to fetch for {user_email}: {e}")
+        if user_email in _user_sheet_cache:
+            return _user_sheet_cache[user_email]['data']
+        return []
+
+    students = _parse_sheet_csv(response.text)
+    print(f"[USER SHEET] Parsed {len(students)} unique exam students for {user_email}")
+
+    _user_sheet_cache[user_email] = {'data': students, 'timestamp': now}
     return students
 
 
-def invalidate_sheet_cache():
-    """Clear the sheet cache."""
-    _sheet_cache['data'] = None
-    _sheet_cache['timestamp'] = None
-    print("[SHEET] Cache invalidated")
+def validate_user_sheet(sheet_id):
+    """Validate a Google Sheet by testing fetch and checking required columns."""
+    csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+    try:
+        response = requests.get(csv_url, timeout=15)
+        response.raise_for_status()
+    except requests.RequestException as e:
+        return {'valid': False, 'error': f'Could not access sheet. Make sure it is shared as "Anyone with the link can view". Error: {e}'}
+
+    reader = csv.DictReader(io.StringIO(response.text))
+    headers = reader.fieldnames or []
+    header_lower = [h.lower().strip() for h in headers]
+
+    if 'email' not in header_lower:
+        return {'valid': False, 'error': 'Sheet is missing required "Email" column'}
+    if 'exam date' not in header_lower:
+        return {'valid': False, 'error': 'Sheet is missing required "Exam Date" column'}
+
+    rows = list(reader)
+    return {
+        'valid': True,
+        'row_count': len(rows),
+        'columns': headers,
+    }
+
+
+def invalidate_user_sheet_cache(user_email):
+    """Clear cached data for a specific user's sheet."""
+    user_email = user_email.lower().strip()
+    if user_email in _user_sheet_cache:
+        del _user_sheet_cache[user_email]
+        print(f"[USER SHEET] Cache invalidated for {user_email}")
 
 
 def _get_gspread_client():
@@ -159,9 +255,10 @@ def _get_gspread_client():
     return gspread.authorize(credentials)
 
 
-def update_sheet_passfail(email, result):
-    """Write pass/fail result back to the Google Sheet's Pass/Fail column.
+def update_sheet_passfail(email, result, sheet_id=None):
+    """Write pass/fail result back to a Google Sheet's Pass/Fail column.
 
+    If sheet_id is provided, writes to that sheet; otherwise uses admin sheet.
     Finds the row by email, then updates the Pass/Fail cell.
     Non-fatal: logs errors but doesn't raise.
     """
@@ -172,7 +269,8 @@ def update_sheet_passfail(email, result):
             return False
 
         from config import Config
-        sheet = gc.open_by_key(Config.GOOGLE_SHEET_ID).sheet1
+        target_id = sheet_id or Config.GOOGLE_SHEET_ID
+        sheet = gc.open_by_key(target_id).sheet1
 
         # Find the email column and pass/fail column
         headers = sheet.row_values(1)
@@ -213,9 +311,10 @@ def update_sheet_passfail(email, result):
         return False
 
 
-def update_sheet_exam_date(email, exam_date, exam_time=''):
-    """Write exam date/time back to the Google Sheet.
+def update_sheet_exam_date(email, exam_date, exam_time='', sheet_id=None):
+    """Write exam date/time back to a Google Sheet.
 
+    If sheet_id is provided, writes to that sheet; otherwise uses admin sheet.
     Finds the row by email, then updates the Exam Date and Exam Time cells.
     exam_date should be in YYYY-MM-DD format; it gets converted to M/D/YYYY for the sheet.
     Non-fatal: logs errors but doesn't raise.
@@ -227,7 +326,8 @@ def update_sheet_exam_date(email, exam_date, exam_time=''):
             return False
 
         from config import Config
-        sheet = gc.open_by_key(Config.GOOGLE_SHEET_ID).sheet1
+        target_id = sheet_id or Config.GOOGLE_SHEET_ID
+        sheet = gc.open_by_key(target_id).sheet1
 
         headers = sheet.row_values(1)
         email_col = None
@@ -280,9 +380,10 @@ def update_sheet_exam_date(email, exam_date, exam_time=''):
         return False
 
 
-def update_sheet_contact(email, name='', new_email='', phone=''):
-    """Write contact info (name, email, phone) back to the Google Sheet.
+def update_sheet_contact(email, name='', new_email='', phone='', sheet_id=None):
+    """Write contact info (name, email, phone) back to a Google Sheet.
 
+    If sheet_id is provided, writes to that sheet; otherwise uses admin sheet.
     Finds the row by current email, then updates the specified fields.
     Non-fatal: logs errors but doesn't raise.
     """
@@ -293,7 +394,8 @@ def update_sheet_contact(email, name='', new_email='', phone=''):
             return False
 
         from config import Config
-        sheet = gc.open_by_key(Config.GOOGLE_SHEET_ID).sheet1
+        target_id = sheet_id or Config.GOOGLE_SHEET_ID
+        sheet = gc.open_by_key(target_id).sheet1
 
         headers = sheet.row_values(1)
         email_col = None
