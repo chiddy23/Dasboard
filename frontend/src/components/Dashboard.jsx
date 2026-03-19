@@ -1145,7 +1145,8 @@ function Dashboard({ user, department, onLogout, initialData }) {
   })
 
   // Get unique values for filter dropdowns
-  const visibleExamStudents = adminMode ? examStudents : examStudents.filter(s => s.matched !== false)
+  const hasOwnDataSource = ghlSettings?.enabled || bitrixSettings?.enabled || sheetSettings?.enabled
+  const visibleExamStudents = (adminMode || hasOwnDataSource) ? examStudents : examStudents.filter(s => s.matched !== false)
   const examCourseTypes = [...new Set(visibleExamStudents.map(s => (s.examCourse || '').trim()).filter(Boolean))].sort()
   const examDepartments = [...new Set(visibleExamStudents.map(s => (s.departmentName || '').trim()).filter(Boolean))].sort()
   const examStates = [...new Set(visibleExamStudents.map(s => (s.examState || '').trim()).filter(Boolean))].sort()
