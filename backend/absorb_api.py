@@ -268,6 +268,10 @@ class AbsorbAPIClient:
 
     def fetch_user_by_email_odata(self, email: str) -> Optional[Dict[str, Any]]:
         """Fetch a single user by email using OData filter (simple, direct approach)."""
+        # Skip if we already know token is expired (avoid spamming 400 failed requests)
+        if getattr(self, '_token_expired', False):
+            return None
+
         url = f"{self.base_url}/users"
         try:
             params = {"_filter": f"emailAddress eq '{email}'", "_limit": 1}
@@ -281,7 +285,9 @@ class AbsorbAPIClient:
                 self._logged_odata_attempt = True
 
             if response.status_code == 401:
-                raise AbsorbAPIError("Session expired. Please log in again.", 401)
+                self._token_expired = True
+                print(f"[API] Absorb token expired during cross-dept lookup — skipping remaining emails")
+                return None
 
             if response.status_code == 200:
                 data = response.json()
