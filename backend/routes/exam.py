@@ -222,7 +222,7 @@ def get_exam_students():
 
         # 5. For admin/GHL/Bitrix mode: fetch specific students by email (cross-department)
         # External calendars may contain contacts from multiple departments
-        if (is_admin or is_ghl or is_bitrix) and unmatched_emails:
+        if (is_admin or is_ghl or is_bitrix or is_user_sheet) and unmatched_emails:
             global _exam_absorb_timestamp
 
             # Skip emails already in cache WITH DATA (not None failures)
@@ -298,7 +298,7 @@ def get_exam_students():
                 raw_enrollments = raw.get('enrollments', [])
 
                 exam_entry = _build_exam_entry(formatted, sheet_student, dept_name, True, raw_enrollments)
-            elif (is_admin or is_ghl or is_bitrix) and email in _exam_absorb_cache and _exam_absorb_cache[email] is not None:
+            elif (is_admin or is_ghl or is_bitrix or is_user_sheet) and email in _exam_absorb_cache and _exam_absorb_cache[email] is not None:
                 # Found via cross-department lookup (admin only)
                 cached = _exam_absorb_cache[email]
                 dept_id = cached['raw'].get('departmentId') or ''

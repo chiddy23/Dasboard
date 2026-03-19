@@ -720,6 +720,8 @@ def save_sheet_settings():
         from google_sheets import parse_sheet_id
         sheet_id = parse_sheet_id(sheet_url)
 
+    print(f"[SHEET SETTINGS] Saving for {email}: enabled={data.get('enabled')}, url={sheet_url[:50] if sheet_url else 'EMPTY'}, parsed_id={sheet_id}")
+
     save_user_sheet_settings(
         email,
         enabled=data.get('enabled'),
