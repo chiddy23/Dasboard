@@ -197,6 +197,13 @@ def fetch_user_exam_sheet(sheet_id, user_email):
             return _user_sheet_cache[user_email]['data']
         return []
 
+    # Google returns HTML (not CSV) when sheet isn't publicly shared
+    content_type = response.headers.get('Content-Type', '')
+    if 'text/html' in content_type:
+        print(f"[USER SHEET] ERROR: Got HTML instead of CSV for {user_email} — sheet is likely not shared as 'Anyone with the link'")
+        print(f"[USER SHEET] Content-Type: {content_type}, first 200 chars: {response.text[:200]}")
+        return []
+
     students = _parse_sheet_csv(response.text)
     print(f"[USER SHEET] Parsed {len(students)} unique exam students for {user_email}")
 
@@ -212,6 +219,11 @@ def validate_user_sheet(sheet_id):
         response.raise_for_status()
     except requests.RequestException as e:
         return {'valid': False, 'error': f'Could not access sheet. Make sure it is shared as "Anyone with the link can view". Error: {e}'}
+
+    # Google returns HTML instead of CSV when sheet isn't publicly shared
+    content_type = response.headers.get('Content-Type', '')
+    if 'text/html' in content_type:
+        return {'valid': False, 'error': 'Sheet is not publicly accessible. Go to Share > "Anyone with the link" > Viewer, then try again.'}
 
     reader = csv.DictReader(io.StringIO(response.text))
     headers = reader.fieldnames or []
