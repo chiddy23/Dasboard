@@ -2042,8 +2042,14 @@ function Dashboard({ user, department, onLogout, initialData }) {
                     <p className="text-xs text-gray-500 mb-3">
                       Connect your own Google Sheet to populate the Exam tab. Sheet must be shared as <strong>"Anyone with the link can view"</strong>.
                     </p>
+                    <p className="text-xs text-gray-400 mb-2">
+                      Use these as <strong>column headers</strong> in Row 1 (any order, case-insensitive):
+                    </p>
+                    <p className="text-xs text-gray-400 mb-1">
+                      Required: <strong>Email</strong>, <strong>Exam Date</strong>
+                    </p>
                     <p className="text-xs text-gray-400 mb-3">
-                      Required columns: <strong>Email</strong>, <strong>Exam Date</strong>. Optional: Student Name, Phone, Exam Time, State, Course, Agency Owner, Pass/Fail, Final Outcome.
+                      Optional: <strong>Student Name</strong>, <strong>Phone</strong>, <strong>Exam Time</strong>, <strong>State</strong>, <strong>Course</strong>, <strong>Agency Owner</strong>, <strong>Pass/Fail</strong>, <strong>Final Outcome</strong>
                     </p>
                     <div className="space-y-2 mb-3">
                       <input

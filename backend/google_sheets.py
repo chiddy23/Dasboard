@@ -107,24 +107,45 @@ def invalidate_sheet_cache():
 
 
 def _parse_sheet_csv(text):
-    """Parse CSV text into the standard exam student format. Shared by admin + user sheet."""
+    """Parse CSV text into the standard exam student format. Shared by admin + user sheet.
+
+    Column matching is case-insensitive and tolerates extra whitespace.
+    """
     reader = csv.DictReader(io.StringIO(text))
+    if not reader.fieldnames:
+        return []
+
+    # Build case-insensitive column lookup: lowered+stripped header → original header
+    col_map = {}
+    for h in reader.fieldnames:
+        col_map[h.strip().lower()] = h
+
+    def col(row, *candidates):
+        """Get value from row using first matching column name (case-insensitive)."""
+        for c in candidates:
+            orig = col_map.get(c.lower())
+            if orig:
+                val = (row.get(orig) or '').strip()
+                if val:
+                    return val
+        return ''
+
     students = []
 
     for row in reader:
-        email = (row.get('Email') or '').strip().lower()
+        email = col(row, 'email', 'e-mail', 'email address').lower()
         if not email:
             continue
 
-        raw_date = (row.get('Exam Date') or '').strip()
+        raw_date = col(row, 'exam date', 'examdate', 'date')
 
         # Weekly tracking data (T-5 through T-0)
         weekly = []
         for week in ['T-5', 'T-4', 'T-3', 'T-2', 'T-1']:
-            status = (row.get(f'{week} Status') or '').strip()
-            hours = (row.get(f'{week} Hours') or '').strip()
-            practice = (row.get(f'{week} Practice %') or '').strip()
-            notes = (row.get(f'{week} Notes') or '').strip()
+            status = col(row, f'{week} Status')
+            hours = col(row, f'{week} Hours')
+            practice = col(row, f'{week} Practice %')
+            notes = col(row, f'{week} Notes')
             if status or hours or practice or notes:
                 weekly.append({
                     'week': week,
@@ -135,26 +156,26 @@ def _parse_sheet_csv(text):
                 })
 
         students.append({
-            'name': (row.get('Student Name') or '').strip(),
+            'name': col(row, 'student name', 'name', 'full name', 'student'),
             'email': email,
-            'phone': (row.get('Phone') or '').strip(),
+            'phone': col(row, 'phone', 'phone number', 'tel'),
             'examDate': raw_date,
             'examDateFormatted': format_exam_date(raw_date),
-            'examTime': (row.get('Exam Time') or '').strip(),
-            'state': (row.get('State') or '').strip(),
-            'course': (row.get('Course') or '').strip(),
-            'agencyOwner': (row.get('Agency Owner') or '').strip(),
-            'passFail': (row.get('Pass/Fail') or '').strip(),
-            'finalOutcome': (row.get('Final Outcome') or '').strip(),
+            'examTime': col(row, 'exam time', 'time'),
+            'state': col(row, 'state', 'exam state'),
+            'course': col(row, 'course', 'exam course', 'course type'),
+            'agencyOwner': col(row, 'agency owner', 'agent', 'owner', 'agency'),
+            'passFail': col(row, 'pass/fail', 'pass fail', 'result', 'passfail'),
+            'finalOutcome': col(row, 'final outcome', 'outcome'),
             # Extended tracking data
-            'alertDate': (row.get('Alert Date') or '').strip(),
-            'studyHoursAtExam': (row.get('Study Hours at Exam') or '').strip(),
-            'finalPractice': (row.get('Final Practice %') or '').strip(),
-            'chaptersComplete': (row.get('Chapters Complete') or '').strip(),
-            'videosWatched': (row.get('Videos Watched') or '').strip(),
-            'stateLawsDone': (row.get('State Laws Done') or '').strip(),
-            'studyConsistency': (row.get('Study Consistency') or '').strip(),
-            't0Sent': (row.get('T-0 Sent') or '').strip(),
+            'alertDate': col(row, 'alert date'),
+            'studyHoursAtExam': col(row, 'study hours at exam'),
+            'finalPractice': col(row, 'final practice %', 'final practice'),
+            'chaptersComplete': col(row, 'chapters complete'),
+            'videosWatched': col(row, 'videos watched'),
+            'stateLawsDone': col(row, 'state laws done'),
+            'studyConsistency': col(row, 'study consistency'),
+            't0Sent': col(row, 'T-0 Sent', 't-0 sent'),
             'weeklyTracking': weekly,
         })
 
@@ -229,10 +250,12 @@ def validate_user_sheet(sheet_id):
     headers = reader.fieldnames or []
     header_lower = [h.lower().strip() for h in headers]
 
-    if 'email' not in header_lower:
+    has_email = any(h in header_lower for h in ('email', 'e-mail', 'email address'))
+    has_date = any(h in header_lower for h in ('exam date', 'examdate', 'date'))
+    if not has_email:
         return {'valid': False, 'error': 'Sheet is missing required "Email" column'}
-    if 'exam date' not in header_lower:
-        return {'valid': False, 'error': 'Sheet is missing required "Exam Date" column'}
+    if not has_date:
+        return {'valid': False, 'error': 'Sheet is missing required "Exam Date" column (or "Date")'}
 
     rows = list(reader)
     return {
