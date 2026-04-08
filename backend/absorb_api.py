@@ -624,22 +624,40 @@ class AbsorbAPIClient:
                 if score_val is None:
                     # Skip attempts without a score — nothing to count
                     continue
+                # Attempt records use startDate / completionDate (not the
+                # dateAttempted/dateCompleted pattern used on enrollments).
+                # Prefer completionDate (when available) since that's when
+                # the scored attempt was finalized; fall back through legacy
+                # field names for safety across tenants.
                 date = (
-                    a.get('dateAttempted') or a.get('DateAttempted') or
+                    a.get('completionDate') or a.get('CompletionDate') or
+                    a.get('startDate') or a.get('StartDate') or
                     a.get('dateCompleted') or a.get('DateCompleted') or
+                    a.get('dateAttempted') or a.get('DateAttempted') or
                     a.get('dateStarted') or a.get('DateStarted') or
                     a.get('dateCreated') or a.get('DateCreated') or
                     ''
                 )
                 status = a.get('status') or a.get('Status') or ''
-                duration = (
-                    a.get('duration') or a.get('Duration') or
-                    a.get('timeSpent') or a.get('TimeSpent') or 0
-                )
-                try:
-                    duration_min = parse_time_to_minutes(duration) if isinstance(duration, str) else int(duration or 0)
-                except Exception:
-                    duration_min = 0
+                # Duration: Absorb attempt records use timeSpentTicks in
+                # .NET ticks (1 tick = 100 nanoseconds, so 10M ticks/sec).
+                # ticks / 10_000_000 = seconds, / 60 = minutes.
+                duration_min = 0
+                ticks = a.get('timeSpentTicks') or a.get('TimeSpentTicks')
+                if ticks is not None:
+                    try:
+                        duration_min = int(float(ticks) / 10_000_000 / 60)
+                    except (ValueError, TypeError):
+                        duration_min = 0
+                if duration_min == 0:
+                    duration = (
+                        a.get('duration') or a.get('Duration') or
+                        a.get('timeSpent') or a.get('TimeSpent') or 0
+                    )
+                    try:
+                        duration_min = parse_time_to_minutes(duration) if isinstance(duration, str) else int(duration or 0)
+                    except Exception:
+                        duration_min = 0
                 normalized.append({
                     'score': round(score_val, 2),
                     'date': date,
