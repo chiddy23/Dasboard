@@ -143,12 +143,27 @@ def _get_enrollment_date(enrollment):
     )
 
 
-def _is_prelicensing(name):
-    """Check if course is a pre-licensing course (main course, not modules/chapters)."""
+def _is_module_or_chapter(name):
+    """Check if course name indicates it's a sub-module/chapter of a larger course."""
     if not name:
         return False
     lower = name.lower()
-    return ('pre-licens' in lower or 'prelicens' in lower or 'pre licens' in lower)
+    return ('module' in lower or 'chapter' in lower or 'lesson' in lower or 'unit' in lower)
+
+
+def _is_prelicensing(name):
+    """Check if course is a pre-licensing MAIN course (not a module/chapter).
+
+    Absorb reports the main course's timeSpent as an aggregated rollup of its
+    chapters, so including chapters here would double-count when summed.
+    """
+    if not name:
+        return False
+    lower = name.lower()
+    if not ('pre-licens' in lower or 'prelicens' in lower or 'pre licens' in lower):
+        return False
+    # Exclude sub-modules/chapters — their time is already rolled up into the parent
+    return not _is_module_or_chapter(name)
 
 
 def _detect_course_type(enrollments):

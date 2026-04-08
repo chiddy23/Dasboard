@@ -636,18 +636,30 @@ class AbsorbAPIClient:
             # Find primary enrollment (prioritizes Pre-Licensing course)
             primary, calculated_progress, total_time, course_name = self._find_primary_course(enrollments)
 
-            # Calculate exam prep time (combined time from all exam prep courses)
-            exam_prep_time = 0
+            # Calculate exam prep time — main courses only. Absorb's main course
+            # timeSpent is an aggregated rollup of its chapters/modules, so
+            # summing both double-counts. Use main courses only; fall back to
+            # chapter sum only if no main reports non-zero time. Must stay in
+            # sync with the same calculation in routes/students.py.
+            _main_prep = 0
+            _chapter_prep = 0
             for e in enrollments:
                 e_name = e.get('name') or e.get('Name') or e.get('courseName') or e.get('CourseName') or ''
-                if self._is_exam_prep_course(e_name):
-                    for _tf in ('timeSpent', 'TimeSpent', 'ActiveTime', 'activeTime'):
-                        _tv = e.get(_tf)
-                        if _tv:
-                            parsed = parse_time_to_minutes(_tv)
-                            if parsed > 0:
-                                exam_prep_time += parsed
-                                break
+                if not self._is_exam_prep_course(e_name) or self._is_prelicensing_course(e_name):
+                    continue
+                _min = 0
+                for _tf in ('timeSpent', 'TimeSpent', 'ActiveTime', 'activeTime'):
+                    _tv = e.get(_tf)
+                    if _tv:
+                        parsed = parse_time_to_minutes(_tv)
+                        if parsed > 0:
+                            _min = parsed
+                            break
+                if self._is_module_or_chapter(e_name):
+                    _chapter_prep += _min
+                else:
+                    _main_prep += _min
+            exam_prep_time = _main_prep if _main_prep > 0 else _chapter_prep
 
             # Build student data
             return {

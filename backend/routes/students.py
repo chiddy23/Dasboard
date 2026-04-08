@@ -251,18 +251,30 @@ def get_student_details(student_id):
         # Calculate totals across all pre-licensing courses
         total_time, avg_progress, course_name, primary_status = calculate_prelicensing_totals(enrollments)
 
-        # Calculate exam prep time (all non-prelicensing prep/study courses)
-        exam_prep_time = 0
+        # Calculate exam prep time — main courses only. Absorb reports the main
+        # course timeSpent as an aggregated rollup of its chapters/modules, so
+        # summing main + children double-counts. Use main courses only; fall
+        # back to chapter sum only if no main reports non-zero time (mirrors
+        # the calculate_prelicensing_totals pattern).
+        main_prep_time = 0
+        chapter_prep_time = 0
         for e in enrollments:
             e_name = e.get('name') or e.get('Name') or e.get('courseName') or e.get('CourseName') or ''
-            if is_exam_prep_course(e_name) and not is_prelicensing_course(e_name):
-                for _tf in ('timeSpent', 'TimeSpent', 'ActiveTime', 'activeTime'):
-                    _tv = e.get(_tf)
-                    if _tv:
-                        parsed = parse_time_spent_to_minutes(_tv)
-                        if parsed > 0:
-                            exam_prep_time += parsed
-                            break
+            if not is_exam_prep_course(e_name) or is_prelicensing_course(e_name):
+                continue
+            _min = 0
+            for _tf in ('timeSpent', 'TimeSpent', 'ActiveTime', 'activeTime'):
+                _tv = e.get(_tf)
+                if _tv:
+                    parsed = parse_time_spent_to_minutes(_tv)
+                    if parsed > 0:
+                        _min = parsed
+                        break
+            if is_chapter_or_module(e_name):
+                chapter_prep_time += _min
+            else:
+                main_prep_time += _min
+        exam_prep_time = main_prep_time if main_prep_time > 0 else chapter_prep_time
 
         # Add enrollment data to student with calculated totals
         student['enrollments'] = enrollments
