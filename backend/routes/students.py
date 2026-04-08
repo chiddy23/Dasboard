@@ -301,6 +301,31 @@ def get_student_details(student_id):
         # Count completed (status 2 or 3 - Absorb uses 3 for completed)
         formatted_student['completedEnrollments'] = sum(1 for e in enrollments if e.get('status') in [2, 3])
 
+        # Fetch practice-exam attempt history in parallel and attach to the
+        # matching enrollment records. This lets calculate_readiness count
+        # individual attempts (e.g. 4 attempts on "Texas Life + Health
+        # Practice Exam v2") instead of the single enrollment-level score,
+        # which is what Absorb's /enrollments endpoint returns.
+        practice_enrollments_with_ids = [
+            e for e in enrollments
+            if is_exam_prep_course(e.get('name') or e.get('Name') or e.get('courseName') or e.get('CourseName') or '')
+            and (e.get('courseId') or e.get('CourseId'))
+        ]
+        if practice_enrollments_with_ids:
+            from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _ac
+            def _fetch_attempts(enr):
+                cid = enr.get('courseId') or enr.get('CourseId')
+                return enr, client.get_practice_exam_attempts(student_id, cid)
+            with _TPE(max_workers=min(8, len(practice_enrollments_with_ids))) as _ex:
+                _futs = {_ex.submit(_fetch_attempts, e): e for e in practice_enrollments_with_ids}
+                for _f in _ac(_futs):
+                    try:
+                        enr, attempts = _f.result()
+                        if attempts:
+                            enr['attempts'] = attempts
+                    except Exception as _e:
+                        print(f"[STUDENT DETAIL] Attempt fetch failed: {_e}")
+
         # Calculate readiness from raw enrollments
         # course_type from query param (passed by frontend from exam sheet data)
         course_type = request.args.get('courseType', '')

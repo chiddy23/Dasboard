@@ -239,29 +239,70 @@ def calculate_readiness(enrollments, course_type=None, days_until_exam=None):
             prelicensing_courses.append(e)
 
     # --- Criterion 1: Practice Exams ---
-    # Sort by most recent date first
+    # Sort enrollments by most recent date first (used for display fallback)
     practice_exams.sort(key=lambda e: _get_enrollment_date(e), reverse=True)
 
-    # Use Score field (assessment result) for practice exams, falling back to Progress
-    practice_scores = [_get_enrollment_score(e) for e in practice_exams]
+    # Absorb's /enrollments endpoint only returns ONE score per practice-exam
+    # course (the latest attempt). The student may have taken the same practice
+    # exam multiple times — the real attempt history lives on
+    # /users/{uid}/enrollments/{cid}/lessons/{lid}/attempts and is attached to
+    # each practice-exam enrollment as `attempts` by routes/students.py before
+    # calculate_readiness() is called.
+    #
+    # Flatten every attempt across every practice-exam enrollment into a single
+    # chronological list (newest first), then count consecutive passing scores
+    # from the most recent. Fall back to the legacy enrollment-level score when
+    # no attempt history is available (keeps list-view readiness working and
+    # acts as a safety net if the lesson/attempt endpoint is unreachable).
+    flat_attempts = []  # list of {'score', 'date', 'status', 'source_name'}
+    any_history = False
+    for e in practice_exams:
+        ename = _get_enrollment_name(e)
+        attempts = e.get('attempts') or []
+        if attempts:
+            any_history = True
+            for a in attempts:
+                flat_attempts.append({
+                    'name': ename,
+                    'score': a.get('score'),
+                    'date': a.get('date') or '',
+                    'status': a.get('status') or '',
+                    'minutes': a.get('duration_minutes') or 0,
+                })
+        else:
+            # No attempt history — use enrollment-level score as one synthetic
+            # "attempt" so the student still appears in the list.
+            score = _get_enrollment_score(e)
+            flat_attempts.append({
+                'name': ename,
+                'score': score,
+                'date': _get_enrollment_date(e),
+                'status': _get_enrollment_status(e),
+                'minutes': round(_get_enrollment_minutes(e), 1),
+            })
+
+    flat_attempts.sort(key=lambda a: a.get('date') or '', reverse=True)
+
+    practice_scores = [a['score'] for a in flat_attempts if a.get('score') is not None]
     practice_total_minutes = sum(_get_enrollment_minutes(e) for e in practice_exams)
     practice_total_hours = practice_total_minutes / 60.0
 
-    # Build detail list per enrollment
-    practice_details = []
-    for e in practice_exams:
-        practice_details.append({
-            'name': _get_enrollment_name(e),
-            'score': _get_enrollment_score(e),
-            'progress': _get_enrollment_progress(e),
-            'minutes': round(_get_enrollment_minutes(e), 1),
-            'date': _get_enrollment_date(e),
-            'status': _get_enrollment_status(e)
-        })
+    # Detail list used by the frontend readiness card
+    practice_details = [
+        {
+            'name': a['name'],
+            'score': a['score'],
+            'progress': a['score'],
+            'minutes': a['minutes'],
+            'date': a['date'],
+            'status': a['status'],
+        }
+        for a in flat_attempts
+    ]
 
     consecutive_passing = 0
     for score in practice_scores:
-        if score >= 80:
+        if score is not None and score >= 80:
             consecutive_passing += 1
         else:
             break
@@ -344,8 +385,10 @@ def calculate_readiness(enrollments, course_type=None, days_until_exam=None):
                 'label': 'Practice Exams',
                 'requirement': '3 consecutive scores >= 80%',
                 'consecutivePassing': consecutive_passing,
-                'scores': practice_scores[:5],  # Show up to 5 most recent
-                'totalExams': len(practice_exams),
+                'scores': practice_scores[:5],  # Show up to 5 most recent attempts
+                'totalExams': len(practice_exams),  # # of practice-exam courses
+                'totalAttempts': len(flat_attempts),  # total attempt records
+                'hasAttemptHistory': any_history,
                 'hoursSpent': round(practice_total_hours, 1),
                 'details': practice_details[:10]  # Up to 10 most recent
             },

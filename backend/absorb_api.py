@@ -98,6 +98,19 @@ class AbsorbAPIClient:
             headers['Authorization'] = self._token
         return headers
 
+    def _get_headers_bearer(self) -> Dict[str, str]:
+        """Headers with 'Bearer' prefix — matches the pattern proven to work
+        across Apps Script and absorb-lms-tool reference clients for
+        lesson/attempt endpoints that may reject raw-token auth."""
+        headers = {
+            'x-api-key': self.api_key,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+        }
+        if self._token:
+            headers['Authorization'] = f'Bearer {self._token}'
+        return headers
+
     def authenticate_user(self, username: str, password: str) -> Dict[str, Any]:
         """Authenticate a user against Absorb API."""
         url = f"{self.base_url}/Authenticate"
@@ -470,6 +483,161 @@ class AbsorbAPIClient:
                 pass
 
         return []
+
+    def get_enrollment_lessons(self, user_id: str, course_id: str) -> List[Dict[str, Any]]:
+        """List lessons inside a user's enrollment on a specific course.
+
+        Uses the Absorb REST endpoint documented at
+        /users/{userId}/enrollments/{courseId}/lessons. Response is either a
+        list or a dict with a 'lessons' key. Parses defensively and uses the
+        Bearer auth pattern proven to work in reference scripts.
+        """
+        url = f"{self.base_url}/users/{user_id}/enrollments/{course_id}/lessons"
+        params = {"_limit": 200}
+        try:
+            response = self._session.get(
+                url,
+                params=params,
+                headers=self._get_headers_bearer(),
+                timeout=30,
+            )
+            if response.status_code == 401:
+                # Retry once with raw-token auth in case this tenant accepts it
+                response = self._session.get(
+                    url,
+                    params=params,
+                    headers=self._get_headers(),
+                    timeout=30,
+                )
+            if response.status_code != 200:
+                print(f"[API] get_enrollment_lessons {user_id}/{course_id} -> {response.status_code}: {response.text[:200]}")
+                return []
+            data = response.json()
+            if isinstance(data, list):
+                return data
+            if isinstance(data, dict):
+                return data.get('lessons') or data.get('Lessons') or []
+            return []
+        except Exception as e:
+            print(f"[API] get_enrollment_lessons {user_id}/{course_id} exception: {e}")
+            return []
+
+    def get_lesson_attempts(self, user_id: str, course_id: str, lesson_id: str) -> List[Dict[str, Any]]:
+        """List all attempts a user has made on a specific lesson.
+
+        Uses /users/{userId}/enrollments/{courseId}/lessons/{lessonId}/attempts.
+        Each attempt record is expected to carry at least a score and a date.
+        Field names handled with both camelCase and PascalCase (Absorb is
+        inconsistent across endpoints).
+        """
+        url = f"{self.base_url}/users/{user_id}/enrollments/{course_id}/lessons/{lesson_id}/attempts"
+        params = {"_limit": 100}
+        try:
+            response = self._session.get(
+                url,
+                params=params,
+                headers=self._get_headers_bearer(),
+                timeout=30,
+            )
+            if response.status_code == 401:
+                response = self._session.get(
+                    url,
+                    params=params,
+                    headers=self._get_headers(),
+                    timeout=30,
+                )
+            if response.status_code != 200:
+                # 404 here is normal — not every lesson has attempts
+                if response.status_code not in (404,):
+                    print(f"[API] get_lesson_attempts {user_id}/{course_id}/{lesson_id} -> {response.status_code}: {response.text[:200]}")
+                return []
+            data = response.json()
+            if isinstance(data, list):
+                return data
+            if isinstance(data, dict):
+                return data.get('attempts') or data.get('Attempts') or []
+            return []
+        except Exception as e:
+            print(f"[API] get_lesson_attempts {user_id}/{course_id}/{lesson_id} exception: {e}")
+            return []
+
+    def get_practice_exam_attempts(self, user_id: str, course_id: str) -> List[Dict[str, Any]]:
+        """Fetch all attempts across all lessons in a practice-exam enrollment.
+
+        Returns a flat list of normalized attempt dicts:
+            {
+                'score': float,           # 0-100
+                'date': str,              # ISO-ish date string (raw from Absorb)
+                'status': str,            # e.g. 'Complete', 'Failed', or raw status
+                'duration_minutes': int,  # if available
+                'lesson_id': str,         # source lesson
+            }
+        Attempts are sorted newest-first. Lessons with no attempts are skipped.
+        """
+        lessons = self.get_enrollment_lessons(user_id, course_id)
+        if not lessons:
+            return []
+
+        all_attempts: List[Dict[str, Any]] = []
+
+        def _fetch_for_lesson(lesson):
+            lesson_id = lesson.get('id') or lesson.get('Id')
+            if not lesson_id:
+                return []
+            raw = self.get_lesson_attempts(user_id, course_id, lesson_id)
+            normalized = []
+            for a in raw or []:
+                # Score field — multiple possible names across tenants
+                score = (
+                    a.get('score') if a.get('score') is not None else
+                    a.get('Score') if a.get('Score') is not None else
+                    a.get('result') if a.get('result') is not None else
+                    a.get('Result')
+                )
+                try:
+                    score_val = float(score) if score is not None else None
+                except (ValueError, TypeError):
+                    score_val = None
+                if score_val is None:
+                    # Skip attempts without a score — nothing to count
+                    continue
+                date = (
+                    a.get('dateAttempted') or a.get('DateAttempted') or
+                    a.get('dateCompleted') or a.get('DateCompleted') or
+                    a.get('dateStarted') or a.get('DateStarted') or
+                    a.get('dateCreated') or a.get('DateCreated') or
+                    ''
+                )
+                status = a.get('status') or a.get('Status') or ''
+                duration = (
+                    a.get('duration') or a.get('Duration') or
+                    a.get('timeSpent') or a.get('TimeSpent') or 0
+                )
+                try:
+                    duration_min = parse_time_to_minutes(duration) if isinstance(duration, str) else int(duration or 0)
+                except Exception:
+                    duration_min = 0
+                normalized.append({
+                    'score': round(score_val, 2),
+                    'date': date,
+                    'status': str(status),
+                    'duration_minutes': duration_min,
+                    'lesson_id': lesson_id,
+                })
+            return normalized
+
+        max_workers = min(10, max(1, len(lessons)))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(_fetch_for_lesson, l): l for l in lessons}
+            for fut in as_completed(futures):
+                try:
+                    all_attempts.extend(fut.result() or [])
+                except Exception as e:
+                    print(f"[API] get_practice_exam_attempts worker exception: {e}")
+
+        # Sort newest first by raw date string (ISO sorts lexicographically)
+        all_attempts.sort(key=lambda a: a.get('date') or '', reverse=True)
+        return all_attempts
 
     def _is_prelicensing_course(self, course_name: str) -> bool:
         """Check if a course is a Pre-Licensing/Pre-License course."""
