@@ -520,6 +520,8 @@ class AbsorbAPIClient:
             print(f"[API] lessons returned {len(lessons)} entries")
             if lessons:
                 print(f"[API] first lesson keys: {list(lessons[0].keys())[:20] if isinstance(lessons[0], dict) else 'not a dict'}")
+                # Dump full first lesson once per call so we can see field types/values
+                print(f"[API] first lesson full: {str(lessons[0])[:800]}")
             return lessons
         except Exception as e:
             print(f"[API] get_enrollment_lessons {course_id} exception: {e}")
@@ -588,10 +590,24 @@ class AbsorbAPIClient:
         all_attempts: List[Dict[str, Any]] = []
 
         def _fetch_for_lesson(lesson):
-            lesson_id = lesson.get('id') or lesson.get('Id')
-            if not lesson_id:
-                return []
-            raw = self.get_lesson_attempts(user_id, course_id, lesson_id)
+            # If the lesson object itself carries an inline attempts array,
+            # prefer that — saves the round trip entirely.
+            inline = lesson.get('attempts') or lesson.get('Attempts')
+            if isinstance(inline, list) and inline and isinstance(inline[0], dict):
+                print(f"[API] lesson has INLINE attempts array ({len(inline)} items) — using without separate fetch")
+                raw = inline
+            else:
+                # Per Absorb docs the URL wants the course-level LessonId,
+                # which lives under the 'lessonId' key on the lesson enrollment
+                # object. The bare 'id' field is the per-user lesson-enrollment
+                # record ID and returns 404 on the /attempts endpoint.
+                lesson_id = (
+                    lesson.get('lessonId') or lesson.get('LessonId') or
+                    lesson.get('id') or lesson.get('Id')
+                )
+                if not lesson_id:
+                    return []
+                raw = self.get_lesson_attempts(user_id, course_id, lesson_id)
             normalized = []
             for a in raw or []:
                 # Score field — multiple possible names across tenants
