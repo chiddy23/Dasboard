@@ -485,13 +485,7 @@ class AbsorbAPIClient:
         return []
 
     def get_enrollment_lessons(self, user_id: str, course_id: str) -> List[Dict[str, Any]]:
-        """List lessons inside a user's enrollment on a specific course.
-
-        Uses the Absorb REST endpoint documented at
-        /users/{userId}/enrollments/{courseId}/lessons. Response is either a
-        list or a dict with a 'lessons' key. Parses defensively and uses the
-        Bearer auth pattern proven to work in reference scripts.
-        """
+        """List lessons inside a user's enrollment on a specific course."""
         url = f"{self.base_url}/users/{user_id}/enrollments/{course_id}/lessons"
         params = {"_limit": 200}
         try:
@@ -501,35 +495,38 @@ class AbsorbAPIClient:
                 headers=self._get_headers_bearer(),
                 timeout=30,
             )
+            auth_mode = 'bearer'
             if response.status_code == 401:
-                # Retry once with raw-token auth in case this tenant accepts it
                 response = self._session.get(
                     url,
                     params=params,
                     headers=self._get_headers(),
                     timeout=30,
                 )
+                auth_mode = 'raw'
+            print(f"[API] get_enrollment_lessons {course_id} auth={auth_mode} status={response.status_code}")
             if response.status_code != 200:
-                print(f"[API] get_enrollment_lessons {user_id}/{course_id} -> {response.status_code}: {response.text[:200]}")
+                print(f"[API] lessons body: {response.text[:300]}")
                 return []
             data = response.json()
             if isinstance(data, list):
-                return data
-            if isinstance(data, dict):
-                return data.get('lessons') or data.get('Lessons') or []
-            return []
+                lessons = data
+            elif isinstance(data, dict):
+                lessons = data.get('lessons') or data.get('Lessons') or []
+                if not lessons:
+                    print(f"[API] lessons dict keys: {list(data.keys())[:10]}  sample: {str(data)[:300]}")
+            else:
+                lessons = []
+            print(f"[API] lessons returned {len(lessons)} entries")
+            if lessons:
+                print(f"[API] first lesson keys: {list(lessons[0].keys())[:20] if isinstance(lessons[0], dict) else 'not a dict'}")
+            return lessons
         except Exception as e:
-            print(f"[API] get_enrollment_lessons {user_id}/{course_id} exception: {e}")
+            print(f"[API] get_enrollment_lessons {course_id} exception: {e}")
             return []
 
     def get_lesson_attempts(self, user_id: str, course_id: str, lesson_id: str) -> List[Dict[str, Any]]:
-        """List all attempts a user has made on a specific lesson.
-
-        Uses /users/{userId}/enrollments/{courseId}/lessons/{lessonId}/attempts.
-        Each attempt record is expected to carry at least a score and a date.
-        Field names handled with both camelCase and PascalCase (Absorb is
-        inconsistent across endpoints).
-        """
+        """List all attempts a user has made on a specific lesson."""
         url = f"{self.base_url}/users/{user_id}/enrollments/{course_id}/lessons/{lesson_id}/attempts"
         params = {"_limit": 100}
         try:
@@ -539,6 +536,7 @@ class AbsorbAPIClient:
                 headers=self._get_headers_bearer(),
                 timeout=30,
             )
+            auth_mode = 'bearer'
             if response.status_code == 401:
                 response = self._session.get(
                     url,
@@ -546,19 +544,28 @@ class AbsorbAPIClient:
                     headers=self._get_headers(),
                     timeout=30,
                 )
+                auth_mode = 'raw'
+            print(f"[API] get_lesson_attempts lesson={lesson_id} auth={auth_mode} status={response.status_code}")
             if response.status_code != 200:
-                # 404 here is normal — not every lesson has attempts
                 if response.status_code not in (404,):
-                    print(f"[API] get_lesson_attempts {user_id}/{course_id}/{lesson_id} -> {response.status_code}: {response.text[:200]}")
+                    print(f"[API] attempts body: {response.text[:300]}")
                 return []
             data = response.json()
             if isinstance(data, list):
-                return data
-            if isinstance(data, dict):
-                return data.get('attempts') or data.get('Attempts') or []
-            return []
+                attempts = data
+            elif isinstance(data, dict):
+                attempts = data.get('attempts') or data.get('Attempts') or []
+                if not attempts:
+                    print(f"[API] attempts dict keys: {list(data.keys())[:10]}  sample: {str(data)[:300]}")
+            else:
+                attempts = []
+            print(f"[API] attempts returned {len(attempts)} for lesson {lesson_id}")
+            if attempts:
+                print(f"[API] first attempt keys: {list(attempts[0].keys())[:20] if isinstance(attempts[0], dict) else 'not a dict'}")
+                print(f"[API] first attempt sample: {str(attempts[0])[:400]}")
+            return attempts
         except Exception as e:
-            print(f"[API] get_lesson_attempts {user_id}/{course_id}/{lesson_id} exception: {e}")
+            print(f"[API] get_lesson_attempts lesson={lesson_id} exception: {e}")
             return []
 
     def get_practice_exam_attempts(self, user_id: str, course_id: str) -> List[Dict[str, Any]]:

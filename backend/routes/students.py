@@ -302,20 +302,29 @@ def get_student_details(student_id):
         formatted_student['completedEnrollments'] = sum(1 for e in enrollments if e.get('status') in [2, 3])
 
         # Fetch practice-exam attempt history in parallel and attach to the
-        # matching enrollment records. This lets calculate_readiness count
-        # individual attempts (e.g. 4 attempts on "Texas Life + Health
-        # Practice Exam v2") instead of the single enrollment-level score,
-        # which is what Absorb's /enrollments endpoint returns.
-        practice_enrollments_with_ids = [
+        # matching enrollment records.
+        practice_candidates = [
             e for e in enrollments
             if is_exam_prep_course(e.get('name') or e.get('Name') or e.get('courseName') or e.get('CourseName') or '')
-            and (e.get('courseId') or e.get('CourseId'))
         ]
+        print(f"[ATTEMPTS] Student {student_id}: {len(practice_candidates)} practice-exam enrollments found")
+        for _pc in practice_candidates:
+            _cname = _pc.get('name') or _pc.get('Name') or _pc.get('courseName') or _pc.get('CourseName') or ''
+            _cid = _pc.get('courseId') or _pc.get('CourseId') or _pc.get('course_id')
+            _eid = _pc.get('id') or _pc.get('Id')
+            print(f"[ATTEMPTS]   enrollment '{_cname}' id={_eid} courseId={_cid}")
+        practice_enrollments_with_ids = [
+            e for e in practice_candidates
+            if (e.get('courseId') or e.get('CourseId') or e.get('course_id'))
+        ]
+        print(f"[ATTEMPTS] {len(practice_enrollments_with_ids)} have a courseId — fetching attempts")
         if practice_enrollments_with_ids:
             from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _ac
             def _fetch_attempts(enr):
-                cid = enr.get('courseId') or enr.get('CourseId')
-                return enr, client.get_practice_exam_attempts(student_id, cid)
+                cid = enr.get('courseId') or enr.get('CourseId') or enr.get('course_id')
+                attempts = client.get_practice_exam_attempts(student_id, cid)
+                print(f"[ATTEMPTS]   courseId={cid} -> {len(attempts)} attempt(s) returned")
+                return enr, attempts
             with _TPE(max_workers=min(8, len(practice_enrollments_with_ids))) as _ex:
                 _futs = {_ex.submit(_fetch_attempts, e): e for e in practice_enrollments_with_ids}
                 for _f in _ac(_futs):
@@ -324,7 +333,7 @@ def get_student_details(student_id):
                         if attempts:
                             enr['attempts'] = attempts
                     except Exception as _e:
-                        print(f"[STUDENT DETAIL] Attempt fetch failed: {_e}")
+                        print(f"[ATTEMPTS] fetch failed: {_e}")
 
         # Calculate readiness from raw enrollments
         # course_type from query param (passed by frontend from exam sheet data)
