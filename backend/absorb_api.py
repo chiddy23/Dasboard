@@ -636,13 +636,15 @@ class AbsorbAPIClient:
             # Find primary enrollment (prioritizes Pre-Licensing course)
             primary, calculated_progress, total_time, course_name = self._find_primary_course(enrollments)
 
-            # Calculate exam prep time — main courses only. Absorb's main course
-            # timeSpent is an aggregated rollup of its chapters/modules, so
-            # summing both double-counts. Use main courses only; fall back to
-            # chapter sum only if no main reports non-zero time. Must stay in
-            # sync with the same calculation in routes/students.py.
+            # Calculate exam prep time — main bundle courses only. Per product
+            # convention, the main exam prep course name ends with "Exam Prep"
+            # (e.g., "Texas Life & Health Exam Prep"). Absorb's parent course
+            # timeSpent is an aggregated rollup of its sub-components (walkthrough
+            # videos, study guides, practice exams, flashcards, content outlines),
+            # which also match the broader is_exam_prep_course test — summing
+            # both double-counts. Must stay in sync with routes/students.py.
             _main_prep = 0
-            _chapter_prep = 0
+            _fallback_sum = 0
             for e in enrollments:
                 e_name = e.get('name') or e.get('Name') or e.get('courseName') or e.get('CourseName') or ''
                 if not self._is_exam_prep_course(e_name) or self._is_prelicensing_course(e_name):
@@ -655,11 +657,11 @@ class AbsorbAPIClient:
                         if parsed > 0:
                             _min = parsed
                             break
-                if self._is_module_or_chapter(e_name):
-                    _chapter_prep += _min
-                else:
+                _name_clean = e_name.lower().strip().rstrip('.').rstrip()
+                if _name_clean.endswith('exam prep'):
                     _main_prep += _min
-            exam_prep_time = _main_prep if _main_prep > 0 else _chapter_prep
+                _fallback_sum += _min
+            exam_prep_time = _main_prep if _main_prep > 0 else _fallback_sum
 
             # Build student data
             return {

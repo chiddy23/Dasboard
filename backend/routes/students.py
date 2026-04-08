@@ -251,13 +251,17 @@ def get_student_details(student_id):
         # Calculate totals across all pre-licensing courses
         total_time, avg_progress, course_name, primary_status = calculate_prelicensing_totals(enrollments)
 
-        # Calculate exam prep time — main courses only. Absorb reports the main
-        # course timeSpent as an aggregated rollup of its chapters/modules, so
-        # summing main + children double-counts. Use main courses only; fall
-        # back to chapter sum only if no main reports non-zero time (mirrors
-        # the calculate_prelicensing_totals pattern).
-        main_prep_time = 0
-        chapter_prep_time = 0
+        # Calculate exam prep time — main exam prep COURSES only (bundles).
+        # Per product convention, the main exam prep course is named ending
+        # with "Exam Prep" (e.g., "Texas Life & Health Exam Prep"). Absorb
+        # reports that parent bundle's timeSpent as an aggregated rollup of
+        # its sub-components (walkthrough videos, study guides, practice
+        # exams, flashcards, content outlines, etc.). Those sub-components
+        # match the broader is_exam_prep_course test (they contain 'prep',
+        # 'practice', or 'study') but their time is already inside the
+        # parent's rollup — summing both double-counts.
+        main_exam_prep_total = 0
+        fallback_sum = 0
         for e in enrollments:
             e_name = e.get('name') or e.get('Name') or e.get('courseName') or e.get('CourseName') or ''
             if not is_exam_prep_course(e_name) or is_prelicensing_course(e_name):
@@ -270,11 +274,15 @@ def get_student_details(student_id):
                     if parsed > 0:
                         _min = parsed
                         break
-            if is_chapter_or_module(e_name):
-                chapter_prep_time += _min
-            else:
-                main_prep_time += _min
-        exam_prep_time = main_prep_time if main_prep_time > 0 else chapter_prep_time
+            # Main bundle course: name ends with "exam prep" (ignoring case
+            # and incidental trailing punctuation/whitespace).
+            name_clean = e_name.lower().strip().rstrip('.').rstrip()
+            if name_clean.endswith('exam prep'):
+                main_exam_prep_total += _min
+            fallback_sum += _min
+        # Prefer the main-bundle total; fall back to the legacy sum if no
+        # bundle course is found (safety net for non-standard course names).
+        exam_prep_time = main_exam_prep_total if main_exam_prep_total > 0 else fallback_sum
 
         # Add enrollment data to student with calculated totals
         student['enrollments'] = enrollments
