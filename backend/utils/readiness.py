@@ -390,7 +390,7 @@ def calculate_readiness(enrollments, course_type=None, days_until_exam=None):
                 'totalAttempts': len(flat_attempts),  # total attempt records
                 'hasAttemptHistory': any_history,
                 'hoursSpent': round(practice_total_hours, 1),
-                'details': practice_details[:10]  # Up to 10 most recent
+                'details': practice_details[:20]  # Up to 20 most recent
             },
             'timeInCourse': {
                 'met': time_met,
