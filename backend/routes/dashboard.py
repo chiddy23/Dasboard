@@ -520,7 +520,9 @@ def export_data():
 @login_required
 def get_dept_prefs():
     """Get the logged-in user's saved extra departments."""
-    email = (g.user.get('emailAddress') or '').lower().strip()
+    email = (g.user.get('email') or g.user.get('emailAddress') or '').lower().strip()
+    if not email:
+        return jsonify({'success': False, 'error': 'No user email in session'}), 401
     dept_ids = get_user_dept_prefs(email)
     return jsonify({'success': True, 'departmentIds': dept_ids})
 
@@ -529,7 +531,9 @@ def get_dept_prefs():
 @login_required
 def save_dept_prefs():
     """Save the logged-in user's extra departments."""
-    email = (g.user.get('emailAddress') or '').lower().strip()
+    email = (g.user.get('email') or g.user.get('emailAddress') or '').lower().strip()
+    if not email:
+        return jsonify({'success': False, 'error': 'No user email in session'}), 401
     data = request.get_json() or {}
     dept_ids = data.get('departmentIds', [])
     valid = [d for d in dept_ids[:MAX_EXTRA_DEPTS] if isinstance(d, str) and GUID_RE.match(d)]
@@ -543,7 +547,9 @@ def save_dept_prefs():
 @login_required
 def get_hidden_students():
     """Get the logged-in user's hidden student emails."""
-    email = (g.user.get('emailAddress') or '').lower().strip()
+    email = (g.user.get('email') or g.user.get('emailAddress') or '').lower().strip()
+    if not email:
+        return jsonify({'success': False, 'error': 'No user email in session'}), 401
     hidden = get_user_hidden_students(email)
     return jsonify({'success': True, 'hiddenEmails': hidden})
 
@@ -552,7 +558,9 @@ def get_hidden_students():
 @login_required
 def save_hidden_students():
     """Save the logged-in user's hidden student emails."""
-    email = (g.user.get('emailAddress') or '').lower().strip()
+    email = (g.user.get('email') or g.user.get('emailAddress') or '').lower().strip()
+    if not email:
+        return jsonify({'success': False, 'error': 'No user email in session'}), 401
     data = request.get_json() or {}
     hidden = data.get('hiddenEmails', [])
     valid = [e for e in hidden[:200] if isinstance(e, str) and e.strip()]

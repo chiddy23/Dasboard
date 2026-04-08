@@ -193,7 +193,11 @@ def get_allowlist_count():
 
 def get_user_dept_prefs(email):
     """Get saved extra department IDs for a user."""
-    email = email.lower().strip()
+    email = (email or '').lower().strip()
+    if not email:
+        # Defensive: never read the legacy empty-string row (pre-fix bug)
+        print('[DEPT-PREFS] Rejecting empty email on read')
+        return []
     conn = _get_connection()
     row = conn.execute(
         'SELECT department_ids FROM user_department_prefs WHERE email = ?',
@@ -207,7 +211,11 @@ def get_user_dept_prefs(email):
 
 def save_user_dept_prefs(email, dept_ids):
     """Save extra department IDs for a user (upsert)."""
-    email = email.lower().strip()
+    email = (email or '').lower().strip()
+    if not email:
+        # Defensive: never write under empty email (would poison all users)
+        print('[DEPT-PREFS] Rejecting empty email on save')
+        return
     conn = _get_connection()
     now = datetime.utcnow().isoformat()
     conn.execute('''
@@ -226,7 +234,11 @@ MAX_HIDDEN_STUDENTS = 200
 
 def get_user_hidden_students(email):
     """Get list of hidden student emails for a user."""
-    email = email.lower().strip()
+    email = (email or '').lower().strip()
+    if not email:
+        # Defensive: never read the legacy empty-string row (pre-fix bug)
+        print('[HIDDEN-STUDENTS] Rejecting empty email on read')
+        return []
     conn = _get_connection()
     row = conn.execute(
         'SELECT hidden_emails FROM user_hidden_students WHERE email = ?',
@@ -240,7 +252,11 @@ def get_user_hidden_students(email):
 
 def save_user_hidden_students(email, hidden_emails):
     """Save hidden student emails for a user (upsert). Caps at MAX_HIDDEN_STUDENTS."""
-    email = email.lower().strip()
+    email = (email or '').lower().strip()
+    if not email:
+        # Defensive: never write under empty email (would poison all users)
+        print('[HIDDEN-STUDENTS] Rejecting empty email on save')
+        return
     cleaned = list(set(e.lower().strip() for e in hidden_emails if isinstance(e, str) and e.strip()))
     cleaned = cleaned[:MAX_HIDDEN_STUDENTS]
     conn = _get_connection()
