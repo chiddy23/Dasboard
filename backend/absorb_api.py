@@ -416,12 +416,21 @@ class AbsorbAPIClient:
         return all_users
 
     def get_department(self, department_id: str) -> Dict[str, Any]:
-        """Get department information."""
-        url = f"{self.base_url}/Departments/{department_id}"
-        response = self._session.get(url, headers=self._get_headers(), timeout=30)
+        """Get department information. Tries capitalized then lowercase path.
 
-        if response.status_code == 200:
-            return response.json()
+        Falls back silently to a placeholder on any failure so callers that
+        don't handle exceptions keep working, but logs the real failure so
+        the issue isn't invisible.
+        """
+        for variant in ('Departments', 'departments'):
+            url = f"{self.base_url}/{variant}/{department_id}"
+            try:
+                response = self._session.get(url, headers=self._get_headers(), timeout=30)
+                if response.status_code == 200:
+                    return response.json()
+                print(f"[API] get_department {variant}/{department_id} returned {response.status_code}: {response.text[:200]}")
+            except Exception as e:
+                print(f"[API] get_department {variant}/{department_id} exception: {e}")
         return {'id': department_id, 'name': 'Department', 'Name': 'Department'}
 
     def get_user_enrollments(self, user_id: str) -> List[Dict[str, Any]]:
@@ -649,6 +658,7 @@ class AbsorbAPIClient:
                 'username': user.get('username') or user.get('Username') or '',
                 'lastLoginDate': user.get('lastLoginDate') or user.get('LastLoginDate') or user.get('dateLastAccessed') or user.get('DateLastAccessed'),
                 'departmentId': user.get('departmentId') or user.get('DepartmentId') or '',
+                'departmentName': user.get('departmentName') or user.get('DepartmentName') or '',
                 'enrollments': enrollments,
                 'primaryEnrollment': primary,
                 'progress': calculated_progress,
@@ -681,6 +691,7 @@ class AbsorbAPIClient:
                 'username': user.get('username') or user.get('Username') or '',
                 'lastLoginDate': user.get('lastLoginDate') or user.get('LastLoginDate') or user.get('dateLastAccessed') or user.get('DateLastAccessed'),
                 'departmentId': user.get('departmentId') or user.get('DepartmentId') or '',
+                'departmentName': user.get('departmentName') or user.get('DepartmentName') or '',
                 'enrollments': [],
                 'primaryEnrollment': None,
                 'progress': 0,

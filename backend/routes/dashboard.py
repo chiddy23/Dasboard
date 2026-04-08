@@ -268,9 +268,22 @@ def _fetch_dept_students(dept_id, token):
     """Fetch and annotate students for a single department. Returns (dept_meta, formatted_list)."""
     client = AbsorbAPIClient()
     client.set_token(token)
-    dept_name = get_department_name(client, dept_id)
 
-    _, formatted = get_cached_students(dept_id, token)
+    raw, formatted = get_cached_students(dept_id, token)
+
+    # Prefer the departmentName already present on the raw Absorb user records
+    # (the /Departments/{id} endpoint is unreliable for depts the current token
+    # has limited access to, but the OData /users filter returns departmentName
+    # on each user). Falls back to the legacy endpoint only if no student carried
+    # a name.
+    dept_name = ''
+    for u in raw or []:
+        n = (u.get('departmentName') or '').strip()
+        if n:
+            dept_name = n
+            break
+    if not dept_name:
+        dept_name = get_department_name(client, dept_id)
 
     # Inject departmentName into each student
     for s in formatted:
