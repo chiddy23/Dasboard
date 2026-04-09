@@ -373,60 +373,249 @@ class AbsorbAPIClient:
         return found_users
 
     def get_users_by_department(self, department_id: str) -> List[Dict[str, Any]]:
-        """Get users in a specific department using OData filter (matches Apps Script pattern)."""
-        url = f"{self.base_url}/users"
-        all_users = []
-        offset = 0
-        limit = 500  # Match Apps Script batch size
+        """Get ALL users in a department, working around Absorb API limitations.
 
-        print(f"[API] Fetching users for department: {department_id} (OData filter)")
+        Absorb /users has two hard constraints that break naive pagination:
+          1. _limit cannot exceed 1000 (422 ErrorGeneric)
+          2. _offset past the first page on a filtered query silently returns
+             0 users (any _offset > 0 combined with _filter returns nothing,
+             regardless of _sort/_orderby variant)
 
-        while True:
-            # Use exact OData filter syntax from working Apps Script
-            params = {
-                "_filter": f"departmentId eq guid'{department_id}'",
-                "_limit": limit,
-                "_offset": offset
-            }
+        Strategy:
+          Phase 1: fetch with _limit=1000. If totalItems <= 1000 we're done
+                   (handles ~all depts in a single API call).
+          Phase 2: if totalItems > 1000, split by lastLoginDate year buckets
+                   plus a 'never logged in' bucket (eq null). Each bucket is
+                   a separate _filter query that starts fresh at offset 0,
+                   bypassing the broken pagination. Fetched in parallel.
+          Phase 3: if any single year bucket still hits the 1000 cap,
+                   recursively subdivide that year into quarters, then
+                   months if needed. Hard stops at month granularity.
+          Phase 4: deduplicate by user id and return.
 
-            response = self._session.get(url, params=params, headers=self._get_headers(), timeout=120)
+        Returns a list of raw Absorb user dicts — same shape as before.
+        """
+        print(f"[API] get_users_by_department: {department_id}")
 
-            if response.status_code == 401:
-                print(f"[API] Token expired - need to re-authenticate")
-                raise AbsorbAPIError("Session expired. Please log in again.", 401)
+        # ─── Phase 1: single-call fast path ───────────────────────────────
+        first_users, total_items = self._fetch_users_page(
+            filter_expr=f"departmentId eq guid'{department_id}'",
+            limit=1000,
+        )
 
-            if response.status_code != 200:
-                print(f"[API] Users fetch failed at offset {offset}: {response.status_code} - {response.text}")
-                break
+        if total_items is None:
+            # Older Absorb tenants may not return totalItems; fall back to
+            # trusting the single-page result.
+            print(f"[API] COMPLETE: single-call path, {len(first_users)} users "
+                  f"(no totalItems reported)")
+            return first_users
 
-            data = response.json()
+        if len(first_users) >= total_items:
+            print(f"[API] COMPLETE: single-call path, {len(first_users)}/{total_items} users")
+            return first_users
 
-            # Handle response format
-            if isinstance(data, dict) and 'users' in data:
-                users = data['users']
-            elif isinstance(data, list):
-                users = data
+        print(f"[API] Single-call returned {len(first_users)} of {total_items} total — "
+              f"splitting by lastLoginDate year buckets in parallel")
+
+        # ─── Phase 2: year-range buckets (parallel) ───────────────────────
+        all_by_id: Dict[str, Dict[str, Any]] = {}
+        for u in first_users:
+            uid = u.get('id') or u.get('Id')
+            if uid:
+                all_by_id[uid] = u
+
+        # Build the bucket list. Use yearly buckets from 2015 through current
+        # year + 1 (safety margin for future-dated records). Year ranges are
+        # expressed as half-open intervals [jan1 ... jan1 of next year), and
+        # we include a 'null' bucket for users who have never logged in.
+        current_year = datetime.utcnow().year
+        year_range_args = []
+        for year in range(2015, current_year + 2):
+            start = f"{year}-01-01T00:00:00"
+            end = f"{year + 1}-01-01T00:00:00"
+            year_range_args.append((year, start, end))
+
+        def fetch_year_bucket(year_tuple):
+            year, start, end = year_tuple
+            f = (f"departmentId eq guid'{department_id}' "
+                 f"and lastLoginDate gt datetime'{start}' "
+                 f"and lastLoginDate lt datetime'{end}'")
+            try:
+                users, sub_total = self._fetch_users_page(f, limit=1000)
+                return ('year', year, f, users, sub_total)
+            except Exception as e:
+                print(f"[API] Year bucket {year} failed: {e}")
+                return ('year', year, f, [], None)
+
+        def fetch_null_bucket():
+            f = f"departmentId eq guid'{department_id}' and lastLoginDate eq null"
+            try:
+                users, sub_total = self._fetch_users_page(f, limit=1000)
+                return ('null', None, f, users, sub_total)
+            except Exception as e:
+                print(f"[API] Null bucket failed: {e}")
+                return ('null', None, f, [], None)
+
+        bucket_results = []
+        with ThreadPoolExecutor(max_workers=min(12, len(year_range_args) + 1)) as ex:
+            futs = [ex.submit(fetch_year_bucket, yt) for yt in year_range_args]
+            futs.append(ex.submit(fetch_null_bucket))
+            for fut in as_completed(futs):
+                try:
+                    bucket_results.append(fut.result())
+                except Exception as e:
+                    print(f"[API] Year bucket worker exception: {e}")
+
+        # Merge the bucket users + identify any that hit the 1000 cap and
+        # need to be subdivided further.
+        overflow_buckets = []  # list of (bucket_kind, year, filter_expr, sub_total)
+        for kind, year, fexpr, users, sub_total in bucket_results:
+            for u in users:
+                uid = u.get('id') or u.get('Id')
+                if uid and uid not in all_by_id:
+                    all_by_id[uid] = u
+            if sub_total is not None and sub_total > 1000 and len(users) >= 1000:
+                print(f"[API] Bucket {kind}={year} has {sub_total} users, needs split")
+                overflow_buckets.append((kind, year, fexpr, sub_total))
             else:
-                print(f"[API] Unexpected response format")
-                break
+                print(f"[API] Bucket {kind}={year}: {len(users)} users (total reported: {sub_total})")
 
-            if not users:
-                print(f"[API] No more users found at offset {offset}")
-                break
+        # ─── Phase 3: recursive split for over-1000 year buckets ──────────
+        if overflow_buckets:
+            for kind, year, _, _ in overflow_buckets:
+                if kind != 'year' or year is None:
+                    continue
+                print(f"[API] Splitting year {year} into quarters...")
+                quarter_users = self._split_bucket_quarterly(department_id, year)
+                for u in quarter_users:
+                    uid = u.get('id') or u.get('Id')
+                    if uid and uid not in all_by_id:
+                        all_by_id[uid] = u
 
-            # Trust the OData filter - it returns users in this department AND sub-departments
-            all_users.extend(users)
-            print(f"[API] Fetched {len(users)} users (total: {len(all_users)})")
-
-            # Check if we've fetched all users
-            if len(users) < limit:
-                print(f"[API] Reached end of users list")
-                break
-
-            offset += limit
-
-        print(f"[API] COMPLETE: Found {len(all_users)} students in department {department_id}")
+        all_users = list(all_by_id.values())
+        print(f"[API] COMPLETE: multi-bucket path, {len(all_users)} unique users "
+              f"(reported total: {total_items})")
+        if len(all_users) < total_items:
+            print(f"[API] WARNING: missing {total_items - len(all_users)} users — "
+                  f"may indicate a bucket exceeded the cap without being detected")
         return all_users
+
+    def _fetch_users_page(self, filter_expr: str, limit: int = 1000):
+        """Execute a single /users query. Returns (users_list, total_items).
+
+        total_items may be None if the response shape doesn't include it.
+        Raises AbsorbAPIError on 401; returns ([], None) on other errors so
+        callers (bucket workers) don't explode the whole fetch.
+        """
+        url = f"{self.base_url}/users"
+        params = {"_filter": filter_expr, "_limit": limit, "_offset": 0}
+        response = self._session.get(
+            url, params=params, headers=self._get_headers(), timeout=120
+        )
+        if response.status_code == 401:
+            print(f"[API] Token expired - need to re-authenticate")
+            raise AbsorbAPIError("Session expired. Please log in again.", 401)
+        if response.status_code != 200:
+            print(f"[API] /users filter fetch failed: {response.status_code} - {response.text[:200]}")
+            return [], None
+        data = response.json()
+        if isinstance(data, dict):
+            users = data.get('users') or data.get('Users') or []
+            total = data.get('totalItems') or data.get('TotalItems')
+            return users, total
+        if isinstance(data, list):
+            return data, None
+        return [], None
+
+    def _split_bucket_quarterly(self, department_id: str, year: int) -> List[Dict[str, Any]]:
+        """Fetch users from a single year in 4 parallel quarter-range calls.
+
+        If any quarter still exceeds 1000, recursively split into months.
+        """
+        quarters = [
+            (1, f"{year}-01-01T00:00:00", f"{year}-04-01T00:00:00"),
+            (2, f"{year}-04-01T00:00:00", f"{year}-07-01T00:00:00"),
+            (3, f"{year}-07-01T00:00:00", f"{year}-10-01T00:00:00"),
+            (4, f"{year}-10-01T00:00:00", f"{year + 1}-01-01T00:00:00"),
+        ]
+
+        def fetch_quarter(q):
+            qnum, qstart, qend = q
+            f = (f"departmentId eq guid'{department_id}' "
+                 f"and lastLoginDate gt datetime'{qstart}' "
+                 f"and lastLoginDate lt datetime'{qend}'")
+            try:
+                users, sub_total = self._fetch_users_page(f, limit=1000)
+                return qnum, qstart, qend, users, sub_total
+            except Exception as e:
+                print(f"[API] Quarter {year}Q{qnum} failed: {e}")
+                return qnum, qstart, qend, [], None
+
+        merged: Dict[str, Dict[str, Any]] = {}
+        overflow_quarters = []
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            for fut in as_completed([ex.submit(fetch_quarter, q) for q in quarters]):
+                qnum, qstart, qend, users, sub_total = fut.result()
+                for u in users:
+                    uid = u.get('id') or u.get('Id')
+                    if uid and uid not in merged:
+                        merged[uid] = u
+                if sub_total is not None and sub_total > 1000 and len(users) >= 1000:
+                    print(f"[API] Quarter {year}Q{qnum} has {sub_total} users, splitting into months")
+                    overflow_quarters.append((qnum, qstart, qend))
+                else:
+                    print(f"[API] Quarter {year}Q{qnum}: {len(users)} users")
+
+        # Month-level fallback for quarters that still overflowed. A dept
+        # with > 1000 users logging in within a single quarter is extreme
+        # but we handle it with monthly buckets. No further recursion past
+        # months — if one month still has > 1000, we warn and return what
+        # we have (very unlikely for any real agency dept).
+        for qnum, qstart, qend in overflow_quarters:
+            # Build month ranges inside this quarter
+            # qstart/qend strings like '2026-01-01T00:00:00'
+            start_year = int(qstart[:4])
+            start_month = int(qstart[5:7])
+            month_ranges = []
+            for m_offset in range(3):
+                m = start_month + m_offset
+                y = start_year
+                next_m = m + 1
+                next_y = y
+                if next_m > 12:
+                    next_m = 1
+                    next_y = y + 1
+                m_start = f"{y:04d}-{m:02d}-01T00:00:00"
+                m_end = f"{next_y:04d}-{next_m:02d}-01T00:00:00"
+                month_ranges.append((y, m, m_start, m_end))
+
+            def fetch_month(mt):
+                my, mm, ms, me = mt
+                f = (f"departmentId eq guid'{department_id}' "
+                     f"and lastLoginDate gt datetime'{ms}' "
+                     f"and lastLoginDate lt datetime'{me}'")
+                try:
+                    users, sub_total = self._fetch_users_page(f, limit=1000)
+                    return my, mm, users, sub_total
+                except Exception as e:
+                    print(f"[API] Month {my}-{mm:02d} failed: {e}")
+                    return my, mm, [], None
+
+            with ThreadPoolExecutor(max_workers=3) as ex:
+                for fut in as_completed([ex.submit(fetch_month, mt) for mt in month_ranges]):
+                    my, mm, users, sub_total = fut.result()
+                    for u in users:
+                        uid = u.get('id') or u.get('Id')
+                        if uid and uid not in merged:
+                            merged[uid] = u
+                    if sub_total is not None and sub_total > 1000 and len(users) >= 1000:
+                        print(f"[API] WARNING: month {my}-{mm:02d} has {sub_total} users, "
+                              f"exceeds cap and month-level is our smallest split. "
+                              f"Missing {sub_total - len(users)} users from this bucket.")
+                    else:
+                        print(f"[API] Month {my}-{mm:02d}: {len(users)} users")
+
+        return list(merged.values())
 
     def get_department(self, department_id: str) -> Dict[str, Any]:
         """Get department information. Tries capitalized then lowercase path.
