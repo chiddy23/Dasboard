@@ -139,6 +139,60 @@ def _refresh_user_absorb_token():
     return True
 
 
+def _warmup_absorb_token():
+    """Make a tiny Absorb probe call to validate the current token BEFORE
+    firing heavier fetches.
+
+    Context: on the Add-Department path (/dashboard/students/multi), the
+    primary department is served from the 5-minute _student_cache so the
+    current token never actually touches Absorb. Meanwhile the token may
+    have gone cold server-side (observed empirically — tokens 2+ minutes
+    idle start returning 401 on the next call). The extras fetch then
+    trips on the cold token and fails.
+
+    Sync works around this by invalidating all caches and hitting Absorb
+    fresh for the primary, which "warms" the token. That costs ~6-8s
+    per request for a 244-student primary dept.
+
+    This helper achieves the same result cheaply with a single
+    /users?_limit=1 call (~150-300ms). If it returns 200, the token is
+    warm and the caller can proceed. If it returns 401, we refresh with
+    the stored credentials and retry the probe exactly once. On unrecoverable
+    failure, we return False and let the caller's existing retry logic
+    handle whatever comes next.
+    """
+    client = AbsorbAPIClient()
+    client.set_token(g.absorb_token)
+
+    def _probe():
+        try:
+            resp = client._session.get(
+                f"{client.base_url}/users",
+                params={"_limit": 1, "_offset": 0},
+                headers=client._get_headers(),
+                timeout=15,
+            )
+            return resp.status_code
+        except Exception as e:
+            print(f"[WARMUP] probe exception: {type(e).__name__}: {e}")
+            return None
+
+    status = _probe()
+    if status == 200:
+        return True
+    print(f"[WARMUP] probe returned {status}, attempting token refresh")
+    if not _refresh_user_absorb_token():
+        print("[WARMUP] token refresh failed, giving up")
+        return False
+    client.set_token(g.absorb_token)
+    status = _probe()
+    if status == 200:
+        print("[WARMUP] token refresh + retry succeeded")
+        return True
+    print(f"[WARMUP] token refresh + retry still returned {status}")
+    return False
+
+
 def _fetch_depts_collect(dept_ids, token):
     """Fetch several departments in parallel and collect (all_formatted, dept_meta).
 
@@ -456,6 +510,16 @@ def get_students_multi():
 
         # Always include user's own department
         all_dept_ids = [g.department_id] + valid_ids
+
+        # Warmup the Absorb token with a cheap probe before firing the
+        # heavier dept fetches. When the primary dept is served from the
+        # 5-min cache, the current token never touches Absorb on this
+        # request path, so a cold/idle token isn't discovered until the
+        # extras fetch — which then fails. A single /users?_limit=1 probe
+        # catches this upfront, refreshes transparently, and lets the
+        # normal fetch proceed on a warm token. Cost: ~150-300ms.
+        if len(valid_ids) > 0:
+            _warmup_absorb_token()
 
         # Fetch all departments in parallel (with transparent token refresh
         # + retry if the user's Absorb token has expired mid-session).
