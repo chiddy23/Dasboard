@@ -87,29 +87,31 @@ class AbsorbAPIClient:
         self._session = get_session()
 
     def _get_headers(self, include_auth: bool = True) -> Dict[str, str]:
-        """Get headers for API requests."""
+        """Get headers for API requests.
+
+        Uses 'Bearer <token>' on the Authorization header to match the
+        Absorb Apps Script reference and the lesson/attempt endpoints that
+        required Bearer prefix. Absorb historically accepted raw tokens on
+        some endpoints but that path is being deprecated and caused
+        intermittent 401s under parallel load on /users/{id}/enrollments
+        calls fanning out 50-at-a-time. Bearer is the standard and works
+        across every endpoint we've tested.
+        """
         headers = {
             'x-api-key': self.api_key,
             'Content-Type': 'application/json',
             'Accept': 'application/json'
         }
         if include_auth and self._token:
-            # Note: Absorb API accepts token directly without "Bearer" prefix
-            headers['Authorization'] = self._token
-        return headers
-
-    def _get_headers_bearer(self) -> Dict[str, str]:
-        """Headers with 'Bearer' prefix — matches the pattern proven to work
-        across Apps Script and absorb-lms-tool reference clients for
-        lesson/attempt endpoints that may reject raw-token auth."""
-        headers = {
-            'x-api-key': self.api_key,
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-        }
-        if self._token:
             headers['Authorization'] = f'Bearer {self._token}'
         return headers
+
+    # Kept for backwards-compat with call sites that explicitly asked for
+    # Bearer (e.g. get_enrollment_lessons, get_lesson_attempts). Both now
+    # return identical headers; method kept so we don't touch unrelated
+    # call sites in this fix.
+    def _get_headers_bearer(self) -> Dict[str, str]:
+        return self._get_headers()
 
     def authenticate_user(self, username: str, password: str) -> Dict[str, Any]:
         """Authenticate a user against Absorb API."""
