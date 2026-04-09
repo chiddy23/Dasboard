@@ -11,6 +11,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from absorb_api import AbsorbAPIClient, AbsorbAPIError
 from middleware import rate_limit, login_required, get_current_user
 from utils import validate_login_input, sanitize_string
+from utils.credential_store import encrypt_password
+from config import Config
 
 auth_bp = Blueprint('auth', __name__)
 
@@ -92,6 +94,14 @@ def login():
         # Step 4: Create session
         token_expires_at = datetime.utcnow() + timedelta(hours=4)
 
+        # Encrypt the user's password into their session so sync/multi
+        # endpoints can transparently re-auth with Absorb when the ~4-hour
+        # token TTL hits. The blob is Fernet-encrypted with SECRET_KEY and
+        # lives only in the filesystem session file (wiped on logout, on
+        # session expiry, and on every Render redeploy). The refreshed
+        # token belongs to the user themselves — tenant isolation preserved.
+        enc_pwd = encrypt_password(password, Config.SECRET_KEY)
+
         session['user'] = {
             'id': username,
             'username': username,
@@ -102,7 +112,10 @@ def login():
             'departmentName': dept_name,
             'token': auth_result['token'],
             'tokenExpiresAt': token_expires_at.isoformat(),
-            'loginTime': datetime.utcnow().isoformat()
+            'loginTime': datetime.utcnow().isoformat(),
+            # Encrypted password blob — decrypted only inside
+            # dashboard._refresh_user_absorb_token when a 401 is hit.
+            'absorbPasswordEnc': enc_pwd,
         }
 
         session.permanent = True

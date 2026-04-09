@@ -23,3 +23,6 @@ flask-compress==1.14
 # Google Sheets API (write pass/fail results back to sheet)
 gspread>=6.0.0
 google-auth>=2.27.0
+
+# Session-stored credential encryption (for transparent token refresh on expiry)
+cryptography>=42.0.0

@@ -11,9 +11,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from flask import session
 from absorb_api import AbsorbAPIClient, AbsorbAPIError
 from middleware import login_required
 from utils import format_student_for_response, get_status_from_last_login
+from utils.credential_store import decrypt_password
+from config import Config
 from routes.exam import invalidate_exam_absorb_cache, get_department_name
 from snapshot_db import get_user_dept_prefs, save_user_dept_prefs, get_user_hidden_students, save_user_hidden_students, get_user_ghl_settings, get_user_ghl_settings_masked, save_user_ghl_settings, get_user_bitrix_settings, get_user_bitrix_settings_masked, save_user_bitrix_settings, get_user_sheet_settings, get_user_sheet_settings_masked, save_user_sheet_settings
 from demo_data import (
@@ -79,6 +82,120 @@ def invalidate_cache(department_id):
     if department_id in _student_cache:
         del _student_cache[department_id]
         print(f"[CACHE] Invalidated cache for {department_id}")
+
+
+def _refresh_user_absorb_token():
+    """Transparently re-authenticate the current user with Absorb using
+    their own credentials stored (encrypted) in the Flask session at login.
+
+    Called when a route hits an Absorb 401 so the user doesn't have to log
+    out/back in every ~4 hours when the Absorb token TTL expires. The
+    refreshed token belongs to the user themselves (NOT an admin/service
+    account), so tenant isolation is preserved — they can still only see
+    departments they legitimately have permission to access on Absorb.
+
+    On success: updates session['user']['token'] + tokenExpiresAt, updates
+    g.absorb_token, returns True. Caller can then retry the failed call.
+    On failure (no stored password, wrong password now, Absorb down):
+    returns False and the caller should surface the current "please log in
+    again" message so the user re-enters credentials manually.
+    """
+    user_data = session.get('user') if session else None
+    if not user_data:
+        return False
+    enc_pwd = user_data.get('absorbPasswordEnc')
+    username = user_data.get('username') or user_data.get('email')
+    if not enc_pwd or not username:
+        print('[TOKEN REFRESH] No stored credentials in session — cannot refresh')
+        return False
+    password = decrypt_password(enc_pwd, Config.SECRET_KEY)
+    if not password:
+        return False
+    try:
+        client = AbsorbAPIClient()
+        auth_result = client.authenticate_user(username, password)
+    except Exception as e:
+        # Do not log the exception body — might echo back the request which
+        # could contain the password. Only log the exception type.
+        print(f'[TOKEN REFRESH] Absorb auth failed: {type(e).__name__}')
+        password = None
+        return False
+    finally:
+        # Best-effort wipe of the local password variable.
+        password = None
+    if not auth_result or not auth_result.get('success'):
+        return False
+    new_token = auth_result.get('token')
+    if not new_token:
+        return False
+    new_expiry = datetime.utcnow() + timedelta(hours=4)
+    # Mutate and reassign so Flask-Session writes the update to disk.
+    user_data['token'] = new_token
+    user_data['tokenExpiresAt'] = new_expiry.isoformat()
+    session['user'] = user_data
+    session.modified = True
+    g.absorb_token = new_token
+    print(f'[TOKEN REFRESH] Refreshed Absorb token for {username} via stored credentials')
+    return True
+
+
+def _fetch_depts_collect(dept_ids, token):
+    """Fetch several departments in parallel and collect (all_formatted, dept_meta).
+
+    Per-dept exceptions are swallowed into dept_meta entries with
+    status='error' so callers can scan for specific failures (e.g. an
+    expired Absorb token) and decide whether to retry.
+    """
+    all_formatted = []
+    dept_meta = []
+    if not dept_ids:
+        return all_formatted, dept_meta
+    if len(dept_ids) == 1:
+        # Single-dept fast path
+        dept_id = dept_ids[0]
+        try:
+            meta, students = _fetch_dept_students(dept_id, token)
+            dept_meta.append(meta)
+            all_formatted.extend(students)
+        except Exception as e:
+            print(f"[FETCH] Error fetching {dept_id}: {e}")
+            dept_meta.append({
+                'id': dept_id, 'name': None, 'studentCount': 0,
+                'status': 'error', 'error': str(e),
+            })
+        return all_formatted, dept_meta
+
+    with ThreadPoolExecutor(max_workers=min(10, len(dept_ids))) as executor:
+        future_to_dept = {
+            executor.submit(_fetch_dept_students, dept_id, token): dept_id
+            for dept_id in dept_ids
+        }
+        for future in as_completed(future_to_dept):
+            dept_id = future_to_dept[future]
+            try:
+                meta, students = future.result()
+                dept_meta.append(meta)
+                all_formatted.extend(students)
+            except Exception as e:
+                print(f"[FETCH] Error fetching {dept_id}: {e}")
+                dept_meta.append({
+                    'id': dept_id, 'name': None, 'studentCount': 0,
+                    'status': 'error', 'error': str(e),
+                })
+    return all_formatted, dept_meta
+
+
+def _expired_dept_ids(dept_meta):
+    """Return the list of dept IDs whose fetch failed with an Absorb
+    'Session expired' error — candidates for a post-token-refresh retry."""
+    out = []
+    for m in dept_meta or []:
+        if m.get('status') != 'error':
+            continue
+        err = (m.get('error') or '').lower()
+        if 'session expired' in err or '401' in err:
+            out.append(m.get('id'))
+    return [d for d in out if d]
 
 
 def get_quick_students(department_id, token):
@@ -318,28 +435,20 @@ def get_students_multi():
         # Always include user's own department
         all_dept_ids = [g.department_id] + valid_ids
 
-        # Fetch all departments in parallel
-        all_formatted = []
-        with ThreadPoolExecutor(max_workers=min(10, len(all_dept_ids))) as executor:
-            future_to_dept = {
-                executor.submit(_fetch_dept_students, dept_id, g.absorb_token): dept_id
-                for dept_id in all_dept_ids
-            }
-            for future in as_completed(future_to_dept):
-                dept_id = future_to_dept[future]
-                try:
-                    meta, students = future.result()
-                    dept_meta.append(meta)
-                    all_formatted.extend(students)
-                except Exception as e:
-                    print(f"[MULTI-DEPT] Error fetching {dept_id}: {e}")
-                    dept_meta.append({
-                        'id': dept_id,
-                        'name': None,
-                        'studentCount': 0,
-                        'status': 'error',
-                        'error': str(e),
-                    })
+        # Fetch all departments in parallel (with transparent token refresh
+        # + retry if the user's Absorb token has expired mid-session).
+        all_formatted, fetched_meta = _fetch_depts_collect(all_dept_ids, g.absorb_token)
+        dept_meta.extend(fetched_meta)
+
+        expired_ids = _expired_dept_ids(dept_meta)
+        if expired_ids and _refresh_user_absorb_token():
+            print(f"[MULTI-DEPT] Retrying {len(expired_ids)} dept(s) after token refresh")
+            for dept_id in expired_ids:
+                invalidate_cache(dept_id)
+            dept_meta = [m for m in dept_meta if m.get('id') not in expired_ids]
+            retry_formatted, retry_meta = _fetch_depts_collect(expired_ids, g.absorb_token)
+            all_formatted.extend(retry_formatted)
+            dept_meta.extend(retry_meta)
 
         # Sort merged list
         all_formatted.sort(
@@ -403,30 +512,22 @@ def sync_data():
         for dept_id in all_dept_ids:
             invalidate_cache(dept_id)
 
-        # Fetch all departments (parallel if multiple)
-        all_formatted = []
-        dept_meta = []
+        # Fetch all departments (parallel if multiple). Uses a helper so we
+        # can cheaply retry only the departments that hit an Absorb 401
+        # after transparently refreshing the user's token.
+        all_formatted, dept_meta = _fetch_depts_collect(all_dept_ids, g.absorb_token)
 
-        if len(all_dept_ids) == 1:
-            # Single department - original fast path
-            meta, formatted = _fetch_dept_students(g.department_id, g.absorb_token)
-            dept_meta.append(meta)
-            all_formatted = formatted
-        else:
-            with ThreadPoolExecutor(max_workers=min(10, len(all_dept_ids))) as executor:
-                future_to_dept = {
-                    executor.submit(_fetch_dept_students, dept_id, g.absorb_token): dept_id
-                    for dept_id in all_dept_ids
-                }
-                for future in as_completed(future_to_dept):
-                    dept_id = future_to_dept[future]
-                    try:
-                        meta, students = future.result()
-                        dept_meta.append(meta)
-                        all_formatted.extend(students)
-                    except Exception as e:
-                        print(f"[SYNC] Error fetching {dept_id}: {e}")
-                        dept_meta.append({'id': dept_id, 'name': None, 'studentCount': 0, 'status': 'error', 'error': str(e)})
+        expired_ids = _expired_dept_ids(dept_meta)
+        if expired_ids and _refresh_user_absorb_token():
+            print(f"[SYNC] Retrying {len(expired_ids)} dept(s) after token refresh")
+            # Invalidate any caches touched by the failed attempts
+            for dept_id in expired_ids:
+                invalidate_cache(dept_id)
+            # Drop the expired error entries, keep successful ones
+            dept_meta = [m for m in dept_meta if m.get('id') not in expired_ids]
+            retry_formatted, retry_meta = _fetch_depts_collect(expired_ids, g.absorb_token)
+            all_formatted.extend(retry_formatted)
+            dept_meta.extend(retry_meta)
 
         # Sort
         all_formatted.sort(
