@@ -198,6 +198,28 @@ def _expired_dept_ids(dept_meta):
     return [d for d in out if d]
 
 
+def _get_cached_students_with_retry(dept_id):
+    """Wrap get_cached_students with one-shot token refresh on 401.
+
+    Used by single-dept endpoints (/summary, /students) so the first
+    request after login doesn't hard-crash the frontend with a 401
+    when a stale Absorb token is floating around in Flask-Session
+    state across multiple gunicorn workers. Refreshes with the user's
+    own stored credentials (tenant isolation preserved), then retries
+    exactly once.
+    """
+    try:
+        return get_cached_students(dept_id, g.absorb_token)
+    except AbsorbAPIError as e:
+        if e.status_code != 401:
+            raise
+        if not _refresh_user_absorb_token():
+            raise
+        # One retry only. Clear any partial cache from the failed call.
+        invalidate_cache(dept_id)
+        return get_cached_students(dept_id, g.absorb_token)
+
+
 def get_quick_students(department_id, token):
     """Get basic student data quickly without enrollments."""
     # Check cache first
@@ -259,7 +281,7 @@ def get_summary():
     """
     try:
         # Get students from cache (formatted students have correct COMPLETE status)
-        students, formatted_students = get_cached_students(g.department_id, g.absorb_token)
+        students, formatted_students = _get_cached_students_with_retry(g.department_id)
 
         # Calculate KPIs from formatted students (which have progress-aware status)
         total_students = len(formatted_students)
@@ -333,7 +355,7 @@ def get_students():
     """
     try:
         # Get students from cache
-        _, formatted_students = get_cached_students(g.department_id, g.absorb_token)
+        _, formatted_students = _get_cached_students_with_retry(g.department_id)
 
         return jsonify({
             'success': True,
