@@ -243,30 +243,39 @@ def _refresh_user_absorb_token():
                     pass
 
 
-def _fetch_depts_collect(dept_ids, token):
-    """Fetch several departments in parallel and collect (all_formatted, dept_meta).
+def _fetch_depts_collect(dept_ids, token, sequential=False):
+    """Fetch several departments and collect (all_formatted, dept_meta).
 
     Per-dept exceptions are swallowed into dept_meta entries with
     status='error' so callers can scan for specific failures (e.g. an
     expired Absorb token) and decide whether to retry.
+
+    When sequential=True, depts are fetched one at a time instead of in
+    parallel. This is used on the retry-after-token-refresh path because
+    Absorb's single-session-per-account model needs a moment for the new
+    token to propagate across their backend nodes — firing 3+ depts with
+    parallel enrollment fan-outs immediately after a refresh can still
+    hit stale nodes and 401. Sequential retry lets each dept complete
+    fully before the next starts.
     """
     all_formatted = []
     dept_meta = []
     if not dept_ids:
         return all_formatted, dept_meta
-    if len(dept_ids) == 1:
-        # Single-dept fast path
-        dept_id = dept_ids[0]
-        try:
-            meta, students = _fetch_dept_students(dept_id, token)
-            dept_meta.append(meta)
-            all_formatted.extend(students)
-        except Exception as e:
-            print(f"[FETCH] Error fetching {dept_id}: {e}")
-            dept_meta.append({
-                'id': dept_id, 'name': None, 'studentCount': 0,
-                'status': 'error', 'error': str(e),
-            })
+
+    # Sequential mode OR single dept — same simple loop
+    if sequential or len(dept_ids) == 1:
+        for dept_id in dept_ids:
+            try:
+                meta, students = _fetch_dept_students(dept_id, token)
+                dept_meta.append(meta)
+                all_formatted.extend(students)
+            except Exception as e:
+                print(f"[FETCH] Error fetching {dept_id}: {e}")
+                dept_meta.append({
+                    'id': dept_id, 'name': None, 'studentCount': 0,
+                    'status': 'error', 'error': str(e),
+                })
         return all_formatted, dept_meta
 
     with ThreadPoolExecutor(max_workers=min(10, len(dept_ids))) as executor:
@@ -576,7 +585,7 @@ def get_students_multi():
             for dept_id in expired_ids:
                 invalidate_cache(dept_id)
             dept_meta = [m for m in dept_meta if m.get('id') not in expired_ids]
-            retry_formatted, retry_meta = _fetch_depts_collect(expired_ids, g.absorb_token)
+            retry_formatted, retry_meta = _fetch_depts_collect(expired_ids, g.absorb_token, sequential=True)
             all_formatted.extend(retry_formatted)
             dept_meta.extend(retry_meta)
 
@@ -655,7 +664,7 @@ def sync_data():
                 invalidate_cache(dept_id)
             # Drop the expired error entries, keep successful ones
             dept_meta = [m for m in dept_meta if m.get('id') not in expired_ids]
-            retry_formatted, retry_meta = _fetch_depts_collect(expired_ids, g.absorb_token)
+            retry_formatted, retry_meta = _fetch_depts_collect(expired_ids, g.absorb_token, sequential=True)
             all_formatted.extend(retry_formatted)
             dept_meta.extend(retry_meta)
 
