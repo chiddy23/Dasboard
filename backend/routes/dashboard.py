@@ -1,9 +1,13 @@
 """Dashboard routes for JustInsurance Student Dashboard."""
 
 from flask import Blueprint, jsonify, g, request
+from functools import wraps
 import re
 import sys
 import os
+import tempfile
+import threading
+import hashlib
 import requests as _requests
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -23,6 +27,21 @@ from demo_data import (
     is_demo_dept, DEMO_DEPT_ID, DEMO_DEPT_NAME,
     get_cached_demo_students
 )
+
+# Optional POSIX file-lock support for cross-process token-refresh
+# coordination. Gunicorn runs 4 worker processes, so an in-process
+# threading.Lock alone is not enough — two different gunicorn workers
+# could both try to re-auth concurrently, each invalidating the other's
+# token (Absorb uses single-session-per-account: calling /Authenticate
+# revokes all previous tokens for this user). fcntl.flock gives us a
+# real cross-process mutex on Linux (where Render runs). On Windows
+# dev boxes fcntl isn't available and we fall back to threading-lock
+# only — acceptable because local dev is single-worker.
+try:
+    import fcntl
+    _HAS_FCNTL = True
+except ImportError:
+    _HAS_FCNTL = False
 
 dashboard_bp = Blueprint('dashboard', __name__)
 
@@ -84,113 +103,177 @@ def invalidate_cache(department_id):
         print(f"[CACHE] Invalidated cache for {department_id}")
 
 
+# Per-process threading lock that serializes re-auth within a single
+# gunicorn worker. Guards against same-process double-refresh races.
+_refresh_lock = threading.Lock()
+
+
+def _refresh_lock_path(user_email: str) -> str:
+    """Return a per-user lockfile path for cross-process coordination.
+    Tied to SECRET_KEY so the path is non-guessable and stable across
+    a single Render deploy lifetime."""
+    if not user_email:
+        user_email = 'anon'
+    key_seed = f"{Config.SECRET_KEY or ''}:{user_email.lower().strip()}"
+    digest = hashlib.sha256(key_seed.encode('utf-8')).hexdigest()[:20]
+    return os.path.join(tempfile.gettempdir(), f"absorb_refresh_{digest}.lock")
+
+
 def _refresh_user_absorb_token():
     """Transparently re-authenticate the current user with Absorb using
     their own credentials stored (encrypted) in the Flask session at login.
 
-    Called when a route hits an Absorb 401 so the user doesn't have to log
-    out/back in every ~4 hours when the Absorb token TTL expires. The
-    refreshed token belongs to the user themselves (NOT an admin/service
-    account), so tenant isolation is preserved — they can still only see
-    departments they legitimately have permission to access on Absorb.
+    CONCURRENCY: Absorb uses a single-session-per-account model — calling
+    /Authenticate revokes the previous token for this user. If TWO threads
+    or TWO gunicorn workers call this function concurrently, each mints a
+    new token and each invalidates the other's, leaving at least one
+    request holding a dead token. This manifests as "Session expired"
+    errors mid-fetch after a successful refresh.
+
+    Protection strategy (two layers):
+
+      1. In-process threading.Lock — serializes refreshes within a single
+         gunicorn worker. Always applied.
+
+      2. Per-user file lock via fcntl.flock — serializes refreshes across
+         gunicorn worker PROCESSES on Linux (Render). Lock file path is
+         derived from SECRET_KEY + user email. On Windows (dev) fcntl
+         is unavailable and we fall back to threading-lock only, which is
+         acceptable because local dev is single-worker.
+
+    Compare-and-swap: once both locks are held we re-read the session to
+    see if a sibling refresh already produced a fresh token while we were
+    waiting. If yes we reuse it instead of minting another (avoiding the
+    clobber chain).
 
     On success: updates session['user']['token'] + tokenExpiresAt, updates
-    g.absorb_token, returns True. Caller can then retry the failed call.
-    On failure (no stored password, wrong password now, Absorb down):
-    returns False and the caller should surface the current "please log in
-    again" message so the user re-enters credentials manually.
+    g.absorb_token, returns True. Refreshed token belongs to the user
+    themselves — tenant isolation preserved.
+    On failure (no stored creds, wrong password, Absorb down): returns
+    False and the caller should surface the current "please log in again"
+    message.
     """
     user_data = session.get('user') if session else None
     if not user_data:
         return False
-    enc_pwd = user_data.get('absorbPasswordEnc')
+
+    # Remember the token we entered with so the CAS check (after we
+    # acquire the locks) can detect whether a sibling refresh happened
+    # while we waited.
+    entry_token = user_data.get('token')
     username = user_data.get('username') or user_data.get('email')
-    if not enc_pwd or not username:
-        print('[TOKEN REFRESH] No stored credentials in session — cannot refresh')
+    if not username:
+        print('[TOKEN REFRESH] No username in session — cannot refresh')
         return False
-    password = decrypt_password(enc_pwd, Config.SECRET_KEY)
-    if not password:
-        return False
-    try:
-        client = AbsorbAPIClient()
-        auth_result = client.authenticate_user(username, password)
-    except Exception as e:
-        # Do not log the exception body — might echo back the request which
-        # could contain the password. Only log the exception type.
-        print(f'[TOKEN REFRESH] Absorb auth failed: {type(e).__name__}')
-        password = None
-        return False
-    finally:
-        # Best-effort wipe of the local password variable.
-        password = None
-    if not auth_result or not auth_result.get('success'):
-        return False
-    new_token = auth_result.get('token')
-    if not new_token:
-        return False
-    new_expiry = datetime.utcnow() + timedelta(hours=4)
-    # Mutate and reassign so Flask-Session writes the update to disk.
-    user_data['token'] = new_token
-    user_data['tokenExpiresAt'] = new_expiry.isoformat()
-    session['user'] = user_data
-    session.modified = True
-    g.absorb_token = new_token
-    print(f'[TOKEN REFRESH] Refreshed Absorb token for {username} via stored credentials')
-    return True
 
+    lock_path = _refresh_lock_path(username)
+    lock_file = None
 
-def _warmup_absorb_token():
-    """Make a tiny Absorb probe call to validate the current token BEFORE
-    firing heavier fetches.
+    # Acquire in-process lock first (fast). This serializes threads within
+    # the same gunicorn worker.
+    with _refresh_lock:
+        # Then acquire the file lock (cross-process serialization on Linux).
+        if _HAS_FCNTL:
+            try:
+                lock_file = open(lock_path, 'w')
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            except Exception as e:
+                print(f'[TOKEN REFRESH] flock acquire failed ({type(e).__name__}), proceeding without cross-process lock')
+                if lock_file is not None:
+                    try:
+                        lock_file.close()
+                    except Exception:
+                        pass
+                lock_file = None
 
-    Context: on the Add-Department path (/dashboard/students/multi), the
-    primary department is served from the 5-minute _student_cache so the
-    current token never actually touches Absorb. Meanwhile the token may
-    have gone cold server-side (observed empirically — tokens 2+ minutes
-    idle start returning 401 on the next call). The extras fetch then
-    trips on the cold token and fails.
-
-    Sync works around this by invalidating all caches and hitting Absorb
-    fresh for the primary, which "warms" the token. That costs ~6-8s
-    per request for a 244-student primary dept.
-
-    This helper achieves the same result cheaply with a single
-    /users?_limit=1 call (~150-300ms). If it returns 200, the token is
-    warm and the caller can proceed. If it returns 401, we refresh with
-    the stored credentials and retry the probe exactly once. On unrecoverable
-    failure, we return False and let the caller's existing retry logic
-    handle whatever comes next.
-    """
-    client = AbsorbAPIClient()
-    client.set_token(g.absorb_token)
-
-    def _probe():
         try:
-            resp = client._session.get(
-                f"{client.base_url}/users",
-                params={"_limit": 1, "_offset": 0},
-                headers=client._get_headers(),
-                timeout=15,
-            )
-            return resp.status_code
-        except Exception as e:
-            print(f"[WARMUP] probe exception: {type(e).__name__}: {e}")
-            return None
+            # CAS: re-read the session inside the lock. If another worker
+            # already refreshed while we waited, the session token has
+            # changed — reuse it without minting another.
+            current_user_data = session.get('user') or {}
+            current_token = current_user_data.get('token')
+            if current_token and current_token != entry_token:
+                g.absorb_token = current_token
+                print(f'[TOKEN REFRESH] CAS hit — sibling refresh detected, reusing their token')
+                return True
 
-    status = _probe()
-    if status == 200:
-        return True
-    print(f"[WARMUP] probe returned {status}, attempting token refresh")
-    if not _refresh_user_absorb_token():
-        print("[WARMUP] token refresh failed, giving up")
-        return False
-    client.set_token(g.absorb_token)
-    status = _probe()
-    if status == 200:
-        print("[WARMUP] token refresh + retry succeeded")
-        return True
-    print(f"[WARMUP] token refresh + retry still returned {status}")
-    return False
+            # No sibling refresh — proceed with actual re-auth.
+            enc_pwd = current_user_data.get('absorbPasswordEnc')
+            if not enc_pwd:
+                print('[TOKEN REFRESH] No stored credentials in session — cannot refresh')
+                return False
+
+            password = decrypt_password(enc_pwd, Config.SECRET_KEY)
+            if not password:
+                return False
+
+            try:
+                client = AbsorbAPIClient()
+                auth_result = client.authenticate_user(username, password)
+            except Exception as e:
+                # Do NOT log the exception body — could echo back the
+                # request which may contain the password.
+                print(f'[TOKEN REFRESH] Absorb auth failed: {type(e).__name__}')
+                password = None
+                return False
+            finally:
+                password = None  # best-effort local wipe
+
+            if not auth_result or not auth_result.get('success'):
+                return False
+
+            new_token = auth_result.get('token')
+            if not new_token:
+                return False
+
+            new_expiry = datetime.utcnow() + timedelta(hours=4)
+            current_user_data['token'] = new_token
+            current_user_data['tokenExpiresAt'] = new_expiry.isoformat()
+            session['user'] = current_user_data
+            session.modified = True
+            g.absorb_token = new_token
+            print(f'[TOKEN REFRESH] Refreshed Absorb token for {username} (locked)')
+            return True
+        finally:
+            if lock_file is not None:
+                try:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                    lock_file.close()
+                except Exception:
+                    pass
+
+
+def absorb_retry_on_401(f):
+    """Decorator: if the wrapped route raises AbsorbAPIError with status 401,
+    refresh the user's Absorb token once (using the locked helper) and retry
+    the entire route handler. If the refresh fails or the retry also 401s,
+    the error propagates normally — the frontend will auto-logout.
+
+    Apply to any @login_required route that calls Absorb APIs so that idle
+    token expiry doesn't immediately kick the user to the login screen.
+    Instead, the refresh happens transparently and the request succeeds.
+
+    This decorator must be placed AFTER @login_required so that g.absorb_token
+    and g.user are populated before the route handler runs:
+
+        @route(...)
+        @login_required
+        @absorb_retry_on_401
+        def my_route():
+            ...
+    """
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        try:
+            return f(*args, **kwargs)
+        except AbsorbAPIError as e:
+            if e.status_code != 401:
+                raise
+            if not _refresh_user_absorb_token():
+                raise
+            # Retry once with the refreshed token
+            return f(*args, **kwargs)
+    return wrapper
 
 
 def _fetch_depts_collect(dept_ids, token):
@@ -511,18 +594,12 @@ def get_students_multi():
         # Always include user's own department
         all_dept_ids = [g.department_id] + valid_ids
 
-        # Warmup the Absorb token with a cheap probe before firing the
-        # heavier dept fetches. When the primary dept is served from the
-        # 5-min cache, the current token never touches Absorb on this
-        # request path, so a cold/idle token isn't discovered until the
-        # extras fetch — which then fails. A single /users?_limit=1 probe
-        # catches this upfront, refreshes transparently, and lets the
-        # normal fetch proceed on a warm token. Cost: ~150-300ms.
-        if len(valid_ids) > 0:
-            _warmup_absorb_token()
-
-        # Fetch all departments in parallel (with transparent token refresh
-        # + retry if the user's Absorb token has expired mid-session).
+        # Fetch all departments in parallel. The refresh path inside
+        # _fetch_depts_collect is now guarded by an in-process threading
+        # lock + cross-process fcntl file lock (see _refresh_user_absorb_token)
+        # so concurrent re-auths from parallel requests can't clobber each
+        # other's tokens. The previous warmup-probe approach was removed —
+        # it was a second refresh source that caused the clobber race.
         all_formatted, fetched_meta = _fetch_depts_collect(all_dept_ids, g.absorb_token)
         dept_meta.extend(fetched_meta)
 

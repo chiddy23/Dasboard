@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from absorb_api import AbsorbAPIClient, AbsorbAPIError
 from middleware import login_required
+from routes.dashboard import absorb_retry_on_401
 from utils import (
     format_student_for_response,
     format_progress,
@@ -147,6 +148,7 @@ def _demo_student_detail(student_id):
 
 @students_bp.route('/<student_id>', methods=['GET'])
 @login_required
+@absorb_retry_on_401
 def get_student_details(student_id):
     """
     Get detailed information for a specific student.
@@ -363,6 +365,7 @@ def get_student_details(student_id):
 
 @students_bp.route('/<student_id>', methods=['PUT'])
 @login_required
+@absorb_retry_on_401
 def update_student_contact(student_id):
     """Update contact info for a specific student."""
     try:
@@ -453,6 +456,7 @@ def update_student_contact(student_id):
 
 @students_bp.route('/<student_id>/enrollments', methods=['GET'])
 @login_required
+@absorb_retry_on_401
 def get_student_enrollments(student_id):
     """
     Get all enrollments for a specific student.

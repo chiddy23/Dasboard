@@ -80,6 +80,23 @@ function App() {
     }
   }
 
+  // Heartbeat: keep the Absorb token warm on the server by pinging
+  // /auth/heartbeat every 3 minutes while authenticated. This makes a
+  // single cheap Absorb call (~150ms) so the token stays alive on
+  // Absorb's side. If the token was stale, the backend refreshes it
+  // transparently. Without this, opening a student modal after 10-15
+  // minutes of idle browsing would 401 and kick the user to login.
+  useEffect(() => {
+    if (!isAuthenticated) return
+    const interval = setInterval(() => {
+      fetch(`${API_BASE}/auth/heartbeat`, {
+        method: 'POST',
+        credentials: 'include'
+      }).catch(() => {})
+    }, 3 * 60 * 1000) // every 3 minutes
+    return () => clearInterval(interval)
+  }, [isAuthenticated])
+
   const handleLogout = async () => {
     try {
       await fetch(`${API_BASE}/auth/logout`, {

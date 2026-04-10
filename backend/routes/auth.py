@@ -198,32 +198,40 @@ def get_session():
     })
 
 
-@auth_bp.route('/refresh', methods=['POST'])
+@auth_bp.route('/heartbeat', methods=['POST'])
 @login_required
-def refresh_token():
-    """
-    Refresh the Absorb API token.
+def heartbeat():
+    """Lightweight keepalive called by the frontend every 3 minutes.
 
-    Note: This requires the user's password which we don't store.
-    In practice, users will need to log in again when their token expires.
-
-    Returns:
-        JSON response with new expiration time
+    Makes a single cheap Absorb call (/users?_limit=1, ~150ms) to keep the
+    token warm on Absorb's server side. If the call returns 401 (token went
+    stale), refreshes transparently using the stored encrypted credentials
+    via the locked helper — so the next real Absorb call from any route uses
+    a fresh token. Returns the current session expiry so the frontend can
+    optionally display it.
     """
-    # Since we don't store passwords, we can't refresh the token
-    # The best we can do is inform the user of the remaining time
+    from routes.dashboard import _refresh_user_absorb_token
+
+    client = AbsorbAPIClient()
+    client.set_token(g.absorb_token)
+
+    try:
+        resp = client._session.get(
+            f"{client.base_url}/users",
+            params={"_limit": 1},
+            headers=client._get_headers(),
+            timeout=10,
+        )
+        if resp.status_code == 401:
+            print('[HEARTBEAT] Token stale, refreshing')
+            _refresh_user_absorb_token()
+    except Exception:
+        # Best-effort keepalive; don't fail the heartbeat itself
+        pass
+
     user = get_current_user()
-
-    if not user:
-        return jsonify({
-            'success': False,
-            'error': 'Not authenticated'
-        }), 401
-
-    expires_at = user.get('tokenExpiresAt')
-
     return jsonify({
         'success': True,
-        'message': 'Token refresh not supported. Please log in again when session expires.',
-        'expiresAt': expires_at
+        'status': 'alive',
+        'expiresAt': user.get('tokenExpiresAt') if user else None
     })

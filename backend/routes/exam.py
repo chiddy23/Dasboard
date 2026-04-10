@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from absorb_api import AbsorbAPIClient, AbsorbAPIError
 from middleware import login_required
+from routes.dashboard import absorb_retry_on_401
 from utils import format_student_for_response
 from google_sheets import fetch_exam_sheet, invalidate_sheet_cache, parse_exam_date_for_sort, update_sheet_passfail, update_sheet_exam_date, update_sheet_contact
 from utils.readiness import calculate_readiness
@@ -95,6 +96,7 @@ def invalidate_exam_absorb_cache():
 
 @exam_bp.route('/students', methods=['GET'])
 @login_required
+@absorb_retry_on_401
 def get_exam_students():
     """Get exam-scheduled students matched with their Absorb data."""
     try:
@@ -627,6 +629,7 @@ def verify_admin():
 
 @exam_bp.route('/update-result', methods=['POST'])
 @login_required
+@absorb_retry_on_401
 def update_exam_result():
     """Update pass/fail result for a student (in-memory override)."""
     if is_demo_dept(g.department_id):
@@ -701,6 +704,7 @@ def update_exam_result():
 
 @exam_bp.route('/update-date', methods=['POST'])
 @login_required
+@absorb_retry_on_401
 def update_exam_date():
     """Update exam date for a student (in-memory override)."""
     if is_demo_dept(g.department_id):
@@ -826,6 +830,7 @@ def update_exam_date():
 
 @exam_bp.route('/record-result', methods=['POST'])
 @login_required
+@absorb_retry_on_401
 def record_exam_result():
     """Record pass/fail with a point-in-time snapshot of student readiness."""
     data = request.get_json() or {}
@@ -905,6 +910,7 @@ def record_exam_result():
 
 @exam_bp.route('/update-contact', methods=['POST'])
 @login_required
+@absorb_retry_on_401
 def update_exam_contact():
     """Update student contact info (name, email, phone) in the Google Sheet. Admin only."""
     data = request.get_json() or {}
@@ -986,6 +992,7 @@ def get_result_snapshots(email):
 
 @exam_bp.route('/sync', methods=['POST'])
 @login_required
+@absorb_retry_on_401
 def sync_exam_data():
     """Force refresh exam data from data source (GHL, Bitrix, or Google Sheet) and Absorb lookups."""
     try:
