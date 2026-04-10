@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from absorb_api import AbsorbAPIClient, AbsorbAPIError
 from middleware import login_required
-from routes.dashboard import absorb_retry_on_401
+from utils.absorb_retry import absorb_retry_on_401
 from utils import format_student_for_response
 from google_sheets import fetch_exam_sheet, invalidate_sheet_cache, parse_exam_date_for_sort, update_sheet_passfail, update_sheet_exam_date, update_sheet_contact
 from utils.readiness import calculate_readiness

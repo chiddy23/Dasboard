@@ -243,39 +243,6 @@ def _refresh_user_absorb_token():
                     pass
 
 
-def absorb_retry_on_401(f):
-    """Decorator: if the wrapped route raises AbsorbAPIError with status 401,
-    refresh the user's Absorb token once (using the locked helper) and retry
-    the entire route handler. If the refresh fails or the retry also 401s,
-    the error propagates normally — the frontend will auto-logout.
-
-    Apply to any @login_required route that calls Absorb APIs so that idle
-    token expiry doesn't immediately kick the user to the login screen.
-    Instead, the refresh happens transparently and the request succeeds.
-
-    This decorator must be placed AFTER @login_required so that g.absorb_token
-    and g.user are populated before the route handler runs:
-
-        @route(...)
-        @login_required
-        @absorb_retry_on_401
-        def my_route():
-            ...
-    """
-    @wraps(f)
-    def wrapper(*args, **kwargs):
-        try:
-            return f(*args, **kwargs)
-        except AbsorbAPIError as e:
-            if e.status_code != 401:
-                raise
-            if not _refresh_user_absorb_token():
-                raise
-            # Retry once with the refreshed token
-            return f(*args, **kwargs)
-    return wrapper
-
-
 def _fetch_depts_collect(dept_ids, token):
     """Fetch several departments in parallel and collect (all_formatted, dept_meta).
 

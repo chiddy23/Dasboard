@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from absorb_api import AbsorbAPIClient, AbsorbAPIError
 from middleware import login_required
-from routes.dashboard import absorb_retry_on_401
+from utils.absorb_retry import absorb_retry_on_401
 from utils import (
     format_student_for_response,
     format_progress,
