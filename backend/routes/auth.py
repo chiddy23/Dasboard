@@ -201,34 +201,18 @@ def get_session():
 @auth_bp.route('/heartbeat', methods=['POST'])
 @login_required
 def heartbeat():
-    """Lightweight keepalive called by the frontend every 3 minutes.
+    """Lightweight session-only keepalive called by the frontend every 3 minutes.
 
-    Makes a single cheap Absorb call (/users?_limit=1, ~150ms) to keep the
-    token warm on Absorb's server side. If the call returns 401 (token went
-    stale), refreshes transparently using the stored encrypted credentials
-    via the locked helper — so the next real Absorb call from any route uses
-    a fresh token. Returns the current session expiry so the frontend can
-    optionally display it.
+    Does NOT touch Absorb. We previously hit /users?_limit=1 to keep the token
+    warm and triggered _refresh_user_absorb_token() on 401, but that turned
+    the heartbeat into an independent /Authenticate source. Absorb is
+    single-session-per-account, so heartbeat-driven refreshes raced with
+    the sync_scheduler and with user-initiated refreshes, revoking each
+    other's tokens mid-batch. The actual on-401 refresh still happens
+    inline inside the routes that hit Absorb (sync, multi, students,
+    exam) via _refresh_user_absorb_token + retry — heartbeat just reports
+    session expiry so the frontend can show countdowns.
     """
-    from routes.dashboard import _refresh_user_absorb_token
-
-    client = AbsorbAPIClient()
-    client.set_token(g.absorb_token)
-
-    try:
-        resp = client._session.get(
-            f"{client.base_url}/users",
-            params={"_limit": 1},
-            headers=client._get_headers(),
-            timeout=10,
-        )
-        if resp.status_code == 401:
-            print('[HEARTBEAT] Token stale, refreshing')
-            _refresh_user_absorb_token()
-    except Exception:
-        # Best-effort keepalive; don't fail the heartbeat itself
-        pass
-
     user = get_current_user()
     return jsonify({
         'success': True,
