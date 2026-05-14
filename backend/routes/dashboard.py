@@ -536,25 +536,6 @@ def _fetch_dept_students(dept_id, token):
             break
     if not dept_name:
         dept_name = get_department_name(client, dept_id)
-    # If we still don't have a real name (or got the literal 'Department'
-    # placeholder from absorb_api.get_department's 401-fallback), use the
-    # session-stored dept name for the user's own primary department.
-    # This avoids showing "Department" in the DEPT column when the user's
-    # token can't query /Departments/{id} but we already know the name
-    # from login.
-    if dept_name in ('', 'Department', 'Unknown'):
-        try:
-            session_user = g.user if hasattr(g, 'user') else None
-            session_primary_id = (session_user or {}).get('departmentId') or ''
-            session_primary_name = (session_user or {}).get('departmentName') or ''
-            if (
-                session_primary_name
-                and session_primary_id
-                and session_primary_id.lower() == (dept_id or '').lower()
-            ):
-                dept_name = session_primary_name
-        except Exception:
-            pass
 
     # Inject departmentName into each student
     for s in formatted:
