@@ -331,68 +331,27 @@ function Dashboard({ user, department, onLogout, initialData }) {
   }
 
   const handleAddDepartment = () => {
+    const id = deptInputValue.trim()
     const guidPattern = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
-    // Split on newlines, commas, or whitespace — supports paste-multiple
-    const tokens = deptInputValue.split(/[\s,]+/).map(t => t.trim()).filter(Boolean)
-
-    if (tokens.length === 0) {
-      setDeptError('Enter at least one Department ID')
+    if (!guidPattern.test(id)) {
+      setDeptError('Invalid Department ID format (must be a GUID like xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)')
       return
     }
-
-    const primary = department?.id?.toLowerCase()
-    const existing = new Set(extraDepartments.map(d => d.toLowerCase()))
-    const toAdd = []
-    const invalid = []
-    let duplicates = 0
-    let isPrimary = 0
-    let overflow = 0
-    const remainingSlots = 30 - extraDepartments.length
-
-    for (const t of tokens) {
-      if (!guidPattern.test(t)) {
-        invalid.push(t)
-        continue
-      }
-      const low = t.toLowerCase()
-      if (low === primary) {
-        isPrimary++
-        continue
-      }
-      if (existing.has(low) || toAdd.some(a => a.toLowerCase() === low)) {
-        duplicates++
-        continue
-      }
-      if (toAdd.length >= remainingSlots) {
-        overflow++
-        continue
-      }
-      toAdd.push(t)
-    }
-
-    if (toAdd.length === 0) {
-      const reasons = []
-      if (invalid.length) reasons.push(`${invalid.length} invalid`)
-      if (duplicates) reasons.push(`${duplicates} duplicate`)
-      if (isPrimary) reasons.push(`${isPrimary} primary`)
-      if (overflow) reasons.push(`${overflow} over limit (30 max)`)
-      setDeptError(`Nothing added — ${reasons.join(', ') || 'no valid IDs found'}`)
+    if (id.toLowerCase() === department?.id?.toLowerCase()) {
+      setDeptError('This is already your primary department')
       return
     }
-
-    const skipped = invalid.length + duplicates + isPrimary + overflow
-    if (skipped > 0) {
-      const reasons = []
-      if (invalid.length) reasons.push(`${invalid.length} invalid`)
-      if (duplicates) reasons.push(`${duplicates} duplicate`)
-      if (isPrimary) reasons.push(`${isPrimary} primary`)
-      if (overflow) reasons.push(`${overflow} over limit`)
-      setDeptError(`Added ${toAdd.length}. Skipped: ${reasons.join(', ')}`)
-    } else {
-      setDeptError('')
+    if (extraDepartments.some(d => d.toLowerCase() === id.toLowerCase())) {
+      setDeptError('Department already added')
+      return
     }
+    if (extraDepartments.length >= 30) {
+      setDeptError('Maximum 30 additional departments')
+      return
+    }
+    setDeptError('')
     setDeptInputValue('')
-    setExtraDepartments(prev => [...prev, ...toAdd])
+    setExtraDepartments(prev => [...prev, id])
   }
 
   const handleRemoveDepartment = (id) => {
@@ -1475,18 +1434,13 @@ function Dashboard({ user, department, onLogout, initialData }) {
               {showDeptManager && (
                 <div className="mt-3 flex gap-2 items-start">
                   <div className="flex-1">
-                    <textarea
-                      rows={2}
-                      placeholder="Paste one or more Department IDs (one per line, or separated by commas). Press Enter to add, Shift+Enter for a new line."
+                    <input
+                      type="text"
+                      placeholder="Paste Department ID (e.g. a1b2c3d4-e5f6-7890-abcd-ef1234567890)"
                       value={deptInputValue}
                       onChange={(e) => { setDeptInputValue(e.target.value); setDeptError('') }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && !e.shiftKey) {
-                          e.preventDefault()
-                          handleAddDepartment()
-                        }
-                      }}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-ji-blue-bright font-mono resize-y"
+                      onKeyDown={(e) => e.key === 'Enter' && handleAddDepartment()}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-ji-blue-bright"
                     />
                     {deptError && <p className="text-red-500 text-xs mt-1">{deptError}</p>}
                   </div>
