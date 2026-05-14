@@ -68,7 +68,7 @@ function Login({ onLogin, error: externalError }) {
               e.target.style.display = 'none'
             }}
           />
-          <h1 className="text-2xl font-bold text-white">Licensed to Launch Dashboard</h1>
+          <h1 className="text-2xl font-bold text-white">Student Progress Dashboard</h1>
           <p className="text-ji-blue-light mt-2">Track your students' pre-licensing progress</p>
         </div>
 
