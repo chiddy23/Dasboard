@@ -1,6 +1,6 @@
 """Authentication routes for JustInsurance Student Dashboard."""
 
-from flask import Blueprint, request, jsonify, session, g
+from flask import Blueprint, request, jsonify, session
 from datetime import datetime, timedelta
 import sys
 import os
