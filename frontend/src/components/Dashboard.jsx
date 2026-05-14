@@ -1244,7 +1244,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
                 onError={(e) => { e.target.style.display = 'none' }}
               />
               <div>
-                <h1 className="text-xl font-bold text-white">Student Dashboard</h1>
+                <h1 className="text-xl font-bold text-white">Licensed to Launch Dashboard</h1>
                 <p className="text-sm text-ji-blue-light">{department?.name}</p>
               </div>
             </div>
