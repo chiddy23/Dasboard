@@ -621,7 +621,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
     }
   }
 
-  const fetchDashboardData = useCallback(async () => {
+  const fetchDashboardData = useCallback(async (isRetry = false) => {
     setLoading(true)
     setError(null)
 
@@ -635,6 +635,13 @@ function Dashboard({ user, department, onLogout, initialData }) {
       if (!summaryRes.ok || !studentsRes.ok) {
         if (summaryRes.status === 401 || studentsRes.status === 401) {
           if (await isSessionDead()) { onLogout(); return }
+          // Parallel summary+students fetch likely raced on Absorb token
+          // refresh. Wait briefly so the backend's refresh settles, then
+          // retry once. Avoids surfacing the race to the user.
+          if (!isRetry) {
+            await new Promise(r => setTimeout(r, 1500))
+            return fetchDashboardData(true)
+          }
           setError('Could not load dashboard. Try refreshing the page.')
           return
         }
