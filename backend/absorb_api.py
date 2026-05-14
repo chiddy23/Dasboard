@@ -89,13 +89,14 @@ class AbsorbAPIClient:
     def _get_headers(self, include_auth: bool = True) -> Dict[str, str]:
         """Get headers for API requests.
 
-        Uses 'Bearer <token>' on the Authorization header to match the
-        Absorb Apps Script reference and the lesson/attempt endpoints that
-        required Bearer prefix. Absorb historically accepted raw tokens on
-        some endpoints but that path is being deprecated and caused
-        intermittent 401s under parallel load on /users/{id}/enrollments
-        calls fanning out 50-at-a-time. Bearer is the standard and works
-        across every endpoint we've tested.
+        Sends the bare token on Authorization (no 'Bearer ' prefix). Empirical
+        testing on the HMG dashboard showed the Bearer prefix throttles to
+        ~2 req/s while bare token pulls ~16 req/s on the same tenant — an
+        8x throughput difference. The Bearer-prefix path also amplifies
+        cascading 401s under parallel fan-out (single-session-per-account
+        model). The earlier-commit comment claiming Bearer "works across
+        every endpoint we've tested" turned out to be wrong under
+        production load with max_workers=50.
         """
         headers = {
             'x-api-key': self.api_key,
@@ -103,7 +104,7 @@ class AbsorbAPIClient:
             'Accept': 'application/json'
         }
         if include_auth and self._token:
-            headers['Authorization'] = f'Bearer {self._token}'
+            headers['Authorization'] = self._token
         return headers
 
     # Kept for backwards-compat with call sites that explicitly asked for
