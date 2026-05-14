@@ -227,20 +227,6 @@ function Dashboard({ user, department, onLogout, initialData }) {
     }
   }, [activeTab])
 
-  // Distinguish a real Flask-session expiry from a transient Absorb-token 401.
-  // Pinging /auth/session is cheap (SQLite-only, ~5ms) and tells us whether
-  // the user's login is actually gone vs. just their Absorb token went stale.
-  // Returns true only when the Flask session itself is gone — caller should
-  // logout in that case. Otherwise it's an Absorb hiccup; stay logged in.
-  const isSessionDead = async () => {
-    try {
-      const r = await fetch(`${API_BASE}/auth/session`, { credentials: 'include' })
-      return r.status === 401
-    } catch {
-      return false
-    }
-  }
-
   const fetchExamData = async (overrideAdminKey) => {
     setExamLoading(true)
     try {
@@ -254,8 +240,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
       const res = await fetch(url, { credentials: 'include' })
       if (!res.ok) {
         if (res.status === 401) {
-          if (await isSessionDead()) { onLogout(); return }
-          setError('Could not load exam data. Try again in a moment.')
+          onLogout()
           return
         }
         throw new Error('Failed to fetch exam data')
@@ -321,11 +306,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
         { credentials: 'include' }
       )
       if (!res.ok) {
-        if (res.status === 401) {
-          if (await isSessionDead()) { onLogout(); return }
-          setError('Could not load department data. Try again in a moment.')
-          return
-        }
+        if (res.status === 401) { onLogout(); return }
         throw new Error('Failed to fetch multi-department data')
       }
       const data = await res.json()
@@ -634,8 +615,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
 
       if (!summaryRes.ok || !studentsRes.ok) {
         if (summaryRes.status === 401 || studentsRes.status === 401) {
-          if (await isSessionDead()) { onLogout(); return }
-          setError('Could not load dashboard. Try refreshing the page.')
+          onLogout()
           return
         }
         throw new Error('Failed to fetch data')
@@ -679,8 +659,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
 
       if (!response.ok) {
         if (response.status === 401) {
-          if (await isSessionDead()) { onLogout(); return }
-          setError('Sync could not complete. Try again in a moment.')
+          onLogout()
           return
         }
         const errData = await response.json().catch(() => null)

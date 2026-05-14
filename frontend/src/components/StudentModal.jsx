@@ -251,18 +251,7 @@ function StudentModal({ studentId, examInfo, onClose, onSessionExpired, onUpdate
 
       if (!response.ok) {
         if (response.status === 401) {
-          // Don't auto-logout on transient Absorb-token 401s.
-          // Verify Flask session is actually dead first.
-          try {
-            const sess = await fetch(`${API_BASE}/auth/session`, { credentials: 'include' })
-            if (sess.status === 401) {
-              onSessionExpired()
-              return
-            }
-          } catch {}
-          // Flask session alive — just show inline error, stay logged in.
-          setError('Could not load student data. Try again in a moment.')
-          setLoading(false)
+          onSessionExpired()
           return
         }
         throw new Error('Failed to fetch student details')
