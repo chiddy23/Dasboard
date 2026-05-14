@@ -579,9 +579,23 @@ def get_students_multi():
         all_formatted, fetched_meta = _fetch_depts_collect(all_dept_ids, g.absorb_token)
         dept_meta.extend(fetched_meta)
 
-        expired_ids = _expired_dept_ids(dept_meta)
-        if expired_ids and _refresh_user_absorb_token():
-            print(f"[MULTI-DEPT] Retrying {len(expired_ids)} dept(s) after token refresh")
+        # Loop the refresh+retry up to MAX_REFRESH_RETRIES times. Absorb's
+        # single-session-per-account model means a parallel fan-out can
+        # revoke the token mid-fetch (one of the parallel enrollment calls
+        # races with a backend node that still holds the prior session).
+        # When that happens during a sequential retry, the second half of
+        # the retry batch fails. Re-refreshing + retrying the still-failed
+        # depts recovers them. Capped at 3 attempts to avoid pathological
+        # loops if Absorb is genuinely down.
+        MAX_REFRESH_RETRIES = 3
+        for attempt in range(1, MAX_REFRESH_RETRIES + 1):
+            expired_ids = _expired_dept_ids(dept_meta)
+            if not expired_ids:
+                break
+            if not _refresh_user_absorb_token():
+                # Refresh itself failed — no point retrying further
+                break
+            print(f"[MULTI-DEPT] Retry attempt {attempt}: {len(expired_ids)} dept(s) after token refresh")
             for dept_id in expired_ids:
                 invalidate_cache(dept_id)
             dept_meta = [m for m in dept_meta if m.get('id') not in expired_ids]
@@ -653,16 +667,22 @@ def sync_data():
 
         # Fetch all departments (parallel if multiple). Uses a helper so we
         # can cheaply retry only the departments that hit an Absorb 401
-        # after transparently refreshing the user's token.
+        # after transparently refreshing the user's token. Loops the
+        # refresh+retry up to MAX_REFRESH_RETRIES times because a single
+        # retry can itself revoke the token mid-batch (see /students/multi
+        # for the same pattern).
         all_formatted, dept_meta = _fetch_depts_collect(all_dept_ids, g.absorb_token)
 
-        expired_ids = _expired_dept_ids(dept_meta)
-        if expired_ids and _refresh_user_absorb_token():
-            print(f"[SYNC] Retrying {len(expired_ids)} dept(s) after token refresh")
-            # Invalidate any caches touched by the failed attempts
+        MAX_REFRESH_RETRIES = 3
+        for attempt in range(1, MAX_REFRESH_RETRIES + 1):
+            expired_ids = _expired_dept_ids(dept_meta)
+            if not expired_ids:
+                break
+            if not _refresh_user_absorb_token():
+                break
+            print(f"[SYNC] Retry attempt {attempt}: {len(expired_ids)} dept(s) after token refresh")
             for dept_id in expired_ids:
                 invalidate_cache(dept_id)
-            # Drop the expired error entries, keep successful ones
             dept_meta = [m for m in dept_meta if m.get('id') not in expired_ids]
             retry_formatted, retry_meta = _fetch_depts_collect(expired_ids, g.absorb_token, sequential=True)
             all_formatted.extend(retry_formatted)
