@@ -1024,14 +1024,33 @@ class AbsorbAPIClient:
         return primary, progress, time_spent, display_name
 
     def _process_single_user(self, user: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Process a single user and return student data with enrollments."""
+        """Process a single user and return student data with enrollments.
+
+        Per-thread 401 tolerance (HMG pattern): under heavy parallel fan-out
+        (max_workers=50), Absorb's load balancer can return 401 for an
+        individual call even with a valid token. Retry that single call
+        once before giving up. If retry also fails, return None so the
+        batch keeps going instead of one bad call killing every other
+        student's data.
+        """
         try:
             user_id = user.get('id') or user.get('Id')
             if not user_id:
                 return None
 
-            # Get enrollments
-            enrollments = self.get_user_enrollments(user_id)
+            # Get enrollments, with one inline retry on 401 to absorb
+            # transient parallel-fan-out hiccups from Absorb's load balancer.
+            try:
+                enrollments = self.get_user_enrollments(user_id)
+            except AbsorbAPIError as _e:
+                if _e.status_code == 401:
+                    try:
+                        enrollments = self.get_user_enrollments(user_id)
+                    except AbsorbAPIError:
+                        # Still 401 — skip this user, don't kill the batch
+                        return None
+                else:
+                    raise
 
             # Find primary enrollment (prioritizes Pre-Licensing course)
             primary, calculated_progress, total_time, course_name = self._find_primary_course(enrollments)
@@ -1081,8 +1100,12 @@ class AbsorbAPIClient:
                 'courseName': course_name,
                 'enrollmentStatus': (primary.get('status') or primary.get('Status') or 0) if primary else 0
             }
-        except AbsorbAPIError:
-            raise  # Propagate auth errors (401)
+        except AbsorbAPIError as e:
+            # 401 from any deeper call (post-retry) — skip this user, keep batch alive.
+            # Non-401 Absorb errors still propagate (caller handles them at the dept level).
+            if e.status_code == 401:
+                return None
+            raise
         except Exception as e:
             print(f"[API] Error processing user: {e}")
             return None
@@ -1131,9 +1154,21 @@ class AbsorbAPIClient:
             future_to_user = {executor.submit(self._process_single_user, user): user for user in users}
 
             completed = 0
+            failures = 0
             for future in as_completed(future_to_user):
                 completed += 1
-                result = future.result()
+                try:
+                    result = future.result()
+                except AbsorbAPIError as e:
+                    # Don't let one failed user kill the whole dept fetch.
+                    failures += 1
+                    if e.status_code != 401:
+                        print(f"[API] Non-401 error on a user fetch: {e}")
+                    result = None
+                except Exception as e:
+                    failures += 1
+                    print(f"[API] Unexpected error on a user fetch: {e}")
+                    result = None
                 if result:
                     students_data.append(result)
 
@@ -1141,5 +1176,8 @@ class AbsorbAPIClient:
                 if completed % 10 == 0 or completed == total:
                     print(f"[API] Processed {completed}/{total} students...")
 
-        print(f"[API] COMPLETE: {len(students_data)} students with enrollment data")
+        if failures > 0:
+            print(f"[API] COMPLETE: {len(students_data)} students with enrollment data ({failures} skipped due to errors)")
+        else:
+            print(f"[API] COMPLETE: {len(students_data)} students with enrollment data")
         return students_data
