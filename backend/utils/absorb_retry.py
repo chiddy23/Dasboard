@@ -5,23 +5,34 @@ routes/students.py, and routes/exam.py (dashboard imports from exam,
 exam/students would import from dashboard = circular).
 
 The decorator catches AbsorbAPIError(401), refreshes the token via the
-locked helper, and retries the route handler once. The actual refresh
-helper is imported lazily inside the decorator to break the import cycle.
+locked helper, and retries the route handler. The actual refresh helper
+is imported lazily inside the decorator to break the import cycle.
 """
 
+import time
 from functools import wraps
+
+# A route can make several sequential Absorb calls (the student-detail modal
+# does get_users_by_department -> get_user_enrollments -> lesson/attempt
+# fetches). Under Absorb's single-session-per-account model the token can be
+# revoked again mid-route (e.g. another tab/deployment re-authed, or a fresh
+# token hasn't propagated across Absorb's backend nodes yet). One retry isn't
+# always enough, so retry a few times with a short backoff between attempts.
+_MAX_401_RETRIES = 3
+_RETRY_BACKOFF_SECONDS = 0.6
 
 
 def absorb_retry_on_401(f):
-    """Decorator: if the wrapped route raises AbsorbAPIError with status 401,
-    refresh the user's Absorb token once (using the locked helper) and retry
-    the entire route handler. If the refresh fails or the retry also 401s,
-    the error propagates normally.
+    """Decorator: if the wrapped route raises AbsorbAPIError(401), refresh the
+    user's Absorb token (locked helper) and retry the whole route — up to
+    _MAX_401_RETRIES times. If the refresh fails or all retries 401, the error
+    propagates.
 
-    Apply to any @login_required route that calls Absorb APIs so that idle
-    token expiry doesn't immediately kick the user to the login screen.
+    Apply to any @login_required route that calls Absorb APIs so that token
+    expiry (or a transient revocation) doesn't immediately kick the user to
+    the login screen.
 
-    This decorator must be placed AFTER @login_required:
+    Must be placed AFTER @login_required:
 
         @route(...)
         @login_required
@@ -31,17 +42,27 @@ def absorb_retry_on_401(f):
     """
     @wraps(f)
     def wrapper(*args, **kwargs):
-        # Lazy import to break circular dependency
+        # Lazy imports to break circular dependency
         from absorb_api import AbsorbAPIError
-        try:
-            return f(*args, **kwargs)
-        except AbsorbAPIError as e:
-            if e.status_code != 401:
-                raise
-            # Lazy import of the refresh helper
-            from routes.dashboard import _refresh_user_absorb_token
-            if not _refresh_user_absorb_token():
-                raise
-            # Retry once with the refreshed token
-            return f(*args, **kwargs)
+        from routes.dashboard import _refresh_user_absorb_token
+
+        attempt = 0
+        while True:
+            try:
+                return f(*args, **kwargs)
+            except AbsorbAPIError as e:
+                if e.status_code != 401:
+                    raise
+                attempt += 1
+                if attempt > _MAX_401_RETRIES:
+                    # Exhausted retries — let it propagate.
+                    raise
+                if not _refresh_user_absorb_token():
+                    # Can't refresh (no stored creds / refresh failed) — give up.
+                    raise
+                # Brief backoff so the freshly-minted token has time to
+                # propagate across Absorb's backend before we retry.
+                if _RETRY_BACKOFF_SECONDS:
+                    time.sleep(_RETRY_BACKOFF_SECONDS)
+                # loop and retry the whole route
     return wrapper

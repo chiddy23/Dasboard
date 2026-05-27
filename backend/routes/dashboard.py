@@ -311,26 +311,34 @@ def _expired_dept_ids(dept_meta):
     return [d for d in out if d]
 
 
-def _get_cached_students_with_retry(dept_id):
-    """Wrap get_cached_students with one-shot token refresh on 401.
+def _get_cached_students_with_retry(dept_id, max_retries=3):
+    """Wrap get_cached_students with token refresh + retry on 401.
 
     Used by single-dept endpoints (/summary, /students) so the first
-    request after login doesn't hard-crash the frontend with a 401
-    when a stale Absorb token is floating around in Flask-Session
-    state across multiple gunicorn workers. Refreshes with the user's
-    own stored credentials (tenant isolation preserved), then retries
-    exactly once.
+    request after login doesn't hard-crash the frontend with a 401 when a
+    stale/just-revoked Absorb token is in play. Refreshes with the user's
+    own stored credentials (tenant isolation preserved) and retries up to
+    max_retries times with a short backoff — a freshly-minted token can be
+    revoked again (another tab/deployment) or not yet propagated across
+    Absorb's backend, so one retry isn't always enough.
     """
-    try:
-        return get_cached_students(dept_id, g.absorb_token)
-    except AbsorbAPIError as e:
-        if e.status_code != 401:
-            raise
-        if not _refresh_user_absorb_token():
-            raise
-        # One retry only. Clear any partial cache from the failed call.
-        invalidate_cache(dept_id)
-        return get_cached_students(dept_id, g.absorb_token)
+    import time as _time
+    attempt = 0
+    while True:
+        try:
+            return get_cached_students(dept_id, g.absorb_token)
+        except AbsorbAPIError as e:
+            if e.status_code != 401:
+                raise
+            attempt += 1
+            if attempt > max_retries:
+                raise
+            if not _refresh_user_absorb_token():
+                raise
+            # Clear any partial/empty cache from the failed call so the retry
+            # re-fetches instead of serving a cached empty list.
+            invalidate_cache(dept_id)
+            _time.sleep(0.6)
 
 
 def get_quick_students(department_id, token):
