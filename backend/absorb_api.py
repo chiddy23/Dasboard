@@ -1103,11 +1103,19 @@ class AbsorbAPIClient:
         except AbsorbAPIError as e:
             # 401 from any deeper call (post-retry) — skip this user, keep batch alive.
             # Non-401 Absorb errors still propagate (caller handles them at the dept level).
+            _dbg_email = (user.get('emailAddress') or user.get('EmailAddress') or '?')
+            _dbg_id = (user.get('id') or user.get('Id') or '?')
             if e.status_code == 401:
+                print(f"[DROP] Student SKIPPED (401 after retry): {_dbg_email} id={_dbg_id}")
                 return None
+            print(f"[DROP] Student SKIPPED (AbsorbAPIError {e.status_code}): {_dbg_email} id={_dbg_id} — {e}")
             raise
         except Exception as e:
-            print(f"[API] Error processing user: {e}")
+            import traceback
+            _dbg_email = (user.get('emailAddress') or user.get('EmailAddress') or '?')
+            _dbg_id = (user.get('id') or user.get('Id') or '?')
+            print(f"[DROP] Student SKIPPED (exception): {_dbg_email} id={_dbg_id} — {type(e).__name__}: {e}")
+            traceback.print_exc()
             return None
 
     def get_students_basic(self, department_id: str) -> List[Dict[str, Any]]:
@@ -1142,6 +1150,17 @@ class AbsorbAPIClient:
         """Get all students in a department with their course progress."""
         users = self.get_users_by_department(department_id)
         total = len(users)
+
+        # STAGING DIAGNOSTIC: watch for a specific student to see if they're
+        # even in the raw user list (vs dropped during enrollment processing).
+        import os as _os
+        _watch = (_os.getenv('DEBUG_WATCH_EMAIL') or '').lower().strip()
+        if _watch:
+            _emails = [(u.get('emailAddress') or u.get('EmailAddress') or '').lower() for u in users]
+            if _watch in _emails:
+                print(f"[WATCH] {_watch} IS present in raw user list for dept {department_id} ({total} users)")
+            else:
+                print(f"[WATCH] {_watch} NOT in raw user list for dept {department_id} ({total} users) — pagination/membership issue, not enrollment processing")
 
         print(f"[API] Processing {total} students for enrollment data (parallel)...")
 
