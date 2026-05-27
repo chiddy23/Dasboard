@@ -92,24 +92,35 @@ def calculate_prelicensing_totals(enrollments):
             return time_val, progress, e.get('name') or e.get('Name') or e.get('courseName') or 'No Course', e.get('status', 0)
         return 0, 0, 'No Course', 0
 
-    # Get the main course's time and progress (not chapters/modules)
+    # Sum time and average progress across ALL main pre-license courses.
+    # States like Michigan have SEPARATE Life and Health pre-license courses;
+    # a student enrolled in both has two main courses. Absorb reports each
+    # main course's timeSpent as a rollup of its OWN chapters, so summing the
+    # two mains is correct (no double-count between Life and Health). Using a
+    # single main (the old behavior) undercounted dual-enrolled students.
     main_course_time = 0
     main_course_progress = None
+    _main_progress_values = []
 
     for e in prelicensing_enrollments:
         name = e.get('name') or e.get('Name') or e.get('courseName') or e.get('CourseName') or ''
         if is_prelicensing_course(name) and not is_chapter_or_module(name):
-            # Use the main prelicensing course's time directly
+            # Add this main course's time to the running total
             for _tf in ('timeSpent', 'TimeSpent', 'ActiveTime', 'activeTime'):
                 _tv = e.get(_tf)
                 if _tv:
                     parsed = parse_time_spent_to_minutes(_tv)
                     if parsed > 0:
-                        main_course_time = parsed
+                        main_course_time += parsed
                         break
             progress = e.get('progress', 0)
             if isinstance(progress, (int, float)):
-                main_course_progress = progress
+                _main_progress_values.append(progress)
+
+    # Average progress across the main course(s) — for a single-course student
+    # this is just that course's progress; for dual Life+Health it's the mean.
+    if _main_progress_values:
+        main_course_progress = sum(_main_progress_values) / len(_main_progress_values)
 
     # If no main course found, fall back to summing all chapters
     if main_course_time == 0:

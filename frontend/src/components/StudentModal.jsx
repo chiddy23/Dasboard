@@ -173,6 +173,37 @@ function CourseGroup({ title, icon, color, enrollments, defaultExpanded = true }
   )
 }
 
+// Detect whether a pre-licensing enrollment is the MAIN course (not a chapter/module).
+function isMainPrelicense(e) {
+  const name = (e.courseName || '')
+  return isPreLicensingCourse(name) && !isChapterOrModule(name)
+}
+
+// For states with SEPARATE Life and Health pre-license courses (e.g. Michigan),
+// a student can be enrolled in both. Split the pre-licensing bucket into Life
+// and Health groups so both courses show with their own progress — only when
+// BOTH a Life main and a Health main course are present. Health items are
+// reliably labeled "Health"; Life-side chapters are often generic, so the rule
+// is: "health" in name → Health, everything else → Life.
+// Returns { life: [...], health: [...] } or null when it's not a dual-line student.
+function splitPreLicensingByLine(preLicensing) {
+  const mains = preLicensing.filter(isMainPrelicense)
+  const hasLifeMain = mains.some(e => (e.courseName || '').toLowerCase().includes('life'))
+  const hasHealthMain = mains.some(e => (e.courseName || '').toLowerCase().includes('health'))
+  if (!(hasLifeMain && hasHealthMain)) return null
+
+  const life = []
+  const health = []
+  for (const e of preLicensing) {
+    if ((e.courseName || '').toLowerCase().includes('health')) {
+      health.push(e)
+    } else {
+      life.push(e)
+    }
+  }
+  return { life, health }
+}
+
 // Main Enrollment Groups Component
 function EnrollmentGroups({ enrollments }) {
   const { preLicensing, examPrep, other } = useMemo(
@@ -180,16 +211,38 @@ function EnrollmentGroups({ enrollments }) {
     [enrollments]
   )
 
+  const split = useMemo(() => splitPreLicensingByLine(preLicensing), [preLicensing])
+
   return (
     <div className="space-y-4">
-      {/* Pre-Licensing Bundle */}
-      <CourseGroup
-        title="Pre-Licensing Course"
-        icon="📚"
-        color="border-blue-200 bg-blue-50/50"
-        enrollments={preLicensing}
-        defaultExpanded={true}
-      />
+      {/* Pre-Licensing — split into Life + Health when the student is enrolled
+          in both separate courses (e.g. Michigan); otherwise one group. */}
+      {split ? (
+        <>
+          <CourseGroup
+            title="Life Pre-Licensing Course"
+            icon="📚"
+            color="border-blue-200 bg-blue-50/50"
+            enrollments={split.life}
+            defaultExpanded={true}
+          />
+          <CourseGroup
+            title="Health Pre-Licensing Course"
+            icon="🩺"
+            color="border-teal-200 bg-teal-50/50"
+            enrollments={split.health}
+            defaultExpanded={true}
+          />
+        </>
+      ) : (
+        <CourseGroup
+          title="Pre-Licensing Course"
+          icon="📚"
+          color="border-blue-200 bg-blue-50/50"
+          enrollments={preLicensing}
+          defaultExpanded={true}
+        />
+      )}
 
       {/* Exam Prep Bundle */}
       <CourseGroup
