@@ -222,19 +222,35 @@ def get_student_details(student_id):
         # Get all enrollments for this student
         enrollments = client.get_user_enrollments(student_id)
 
-        # STAGING DIAGNOSTIC: dump enrollment names for the watched student so
-        # we can design the Life/Health course split for dual-enrolled students.
+        # STAGING DIAGNOSTIC: dump enrollment names + raw time fields + video
+        # classification for the watched student so we can see whether video
+        # time lives at the enrollment level (rollup) or only at the lesson
+        # level (like practice-exam attempts).
         import os as _os
         _watch = (_os.getenv('DEBUG_WATCH_EMAIL') or '').lower().strip()
         if _watch:
             _semail = (student.get('emailAddress') or student.get('EmailAddress') or '').lower().strip()
             if _semail == _watch:
+                from utils.readiness import (
+                    _is_video_course as _ivc,
+                    _is_life_video as _ilv,
+                    _is_health_video as _ihv,
+                    _get_enrollment_minutes as _gem,
+                )
                 print(f"[WATCH-ENROLL] {_semail} has {len(enrollments)} enrollments:")
                 for _e in enrollments:
                     _n = _e.get('name') or _e.get('Name') or _e.get('courseName') or _e.get('CourseName') or '?'
                     _p = _e.get('progress') or _e.get('Progress') or 0
                     _st = _e.get('status') or _e.get('Status') or 0
-                    print(f"[WATCH-ENROLL]   name={_n!r} progress={_p} status={_st}")
+                    # raw time fields exactly as Absorb returned them
+                    _raw = {_tf: _e.get(_tf) for _tf in ('timeSpent', 'TimeSpent', 'ActiveTime', 'activeTime') if _e.get(_tf) is not None}
+                    _mins = round(_gem(_e), 1)
+                    _vid = _ivc(_n)
+                    _lvid = _ilv(_n)
+                    _hvid = _ihv(_n)
+                    _cid = _e.get('courseId') or _e.get('CourseId') or _e.get('course_id')
+                    print(f"[WATCH-ENROLL]   name={_n!r} progress={_p} status={_st} "
+                          f"mins={_mins} raw_time={_raw} video={_vid} life_vid={_lvid} health_vid={_hvid} courseId={_cid}")
 
         # Format enrollments (Absorb API field names)
         formatted_enrollments = []
