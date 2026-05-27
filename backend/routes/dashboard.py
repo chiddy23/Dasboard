@@ -50,6 +50,44 @@ dashboard_bp = Blueprint('dashboard', __name__)
 _student_cache = {}
 CACHE_TTL_MINUTES = 5  # Cache data for 5 minutes
 
+# Per-department FETCH lock. Absorb uses a single-session-per-account token, so
+# only ONE /Authenticate may be "live" at a time. On a cold cache, /students and
+# /summary (and any extra tabs) BOTH fall through to a fresh fetch at the same
+# instant; on a large dept each fans out into many parallel /users calls and the
+# two concurrent fetches re-authenticate + revoke each other's token mid-flight.
+# That's exactly the "bucket failed: Session expired" storm and the "N skipped
+# due to errors" / "missing 295 users" we see on big departments. Serialize the
+# FETCH per dept: the first caller fetches + caches, the rest wait then read the
+# warm cache. Only the fetch is guarded — warm-cache reads stay lock-free, so
+# the common case (data already cached) is unaffected.
+_fetch_locks = {}
+_fetch_locks_guard = threading.Lock()
+
+
+def _get_fetch_lock(department_id):
+    """Return (creating on first use) the per-department fetch lock."""
+    with _fetch_locks_guard:
+        lk = _fetch_locks.get(department_id)
+        if lk is None:
+            lk = threading.Lock()
+            _fetch_locks[department_id] = lk
+        return lk
+
+
+def _read_fresh_cache(department_id, by_sibling=False):
+    """Return (data, formatted) if a non-expired cache entry exists, else None."""
+    entry = _student_cache.get(department_id)
+    if not entry:
+        return None
+    age = datetime.utcnow() - entry['timestamp']
+    if age < timedelta(minutes=CACHE_TTL_MINUTES):
+        if by_sibling:
+            print(f"[CACHE] Using cached data for {department_id} (filled by concurrent fetch)")
+        else:
+            print(f"[CACHE] Using cached data for {department_id} (age: {age.seconds}s)")
+        return entry['data'], entry['formatted']
+    return None
+
 
 def get_cached_students(department_id, token):
     """Get students from cache or fetch fresh data."""
@@ -60,40 +98,51 @@ def get_cached_students(department_id, token):
         formatted.sort(key=lambda s: (s['status']['priority'], -s['progress']['value']))
         return cached, formatted
 
-    now = datetime.utcnow()
+    # Fast path: a valid cache entry needs no lock (keep concurrent reads cheap).
+    cached = _read_fresh_cache(department_id)
+    if cached is not None:
+        return cached
 
-    # Check if we have valid cached data
-    if department_id in _student_cache:
-        cache_entry = _student_cache[department_id]
-        cache_age = now - cache_entry['timestamp']
+    # Cold/expired cache: serialize the fetch per dept so concurrent callers
+    # don't each launch a full parallel dept fetch and revoke each other's
+    # single-session Absorb token. Use a generous acquire timeout so a single
+    # slow fetch can't wedge the worker — if we can't get the lock in time we
+    # fall through and fetch anyway (degraded, never deadlocked).
+    lock = _get_fetch_lock(department_id)
+    acquired = lock.acquire(timeout=110)
+    try:
+        if acquired:
+            # A sibling fetch may have populated the cache while we waited.
+            cached = _read_fresh_cache(department_id, by_sibling=True)
+            if cached is not None:
+                return cached
 
-        if cache_age < timedelta(minutes=CACHE_TTL_MINUTES):
-            print(f"[CACHE] Using cached data for {department_id} (age: {cache_age.seconds}s)")
-            return cache_entry['data'], cache_entry['formatted']
+        # Fetch fresh data (holding the per-dept lock — no sibling races).
+        print(f"[CACHE] Fetching fresh data for {department_id}")
+        client = AbsorbAPIClient()
+        client.set_token(token)
+        students = client.get_students_with_progress(department_id)
 
-    # Fetch fresh data
-    print(f"[CACHE] Fetching fresh data for {department_id}")
-    client = AbsorbAPIClient()
-    client.set_token(token)
-    students = client.get_students_with_progress(department_id)
+        # Format students
+        formatted_students = [format_student_for_response(student) for student in students]
 
-    # Format students
-    formatted_students = [format_student_for_response(student) for student in students]
+        # Sort by status priority (re-engage first), then by progress
+        formatted_students.sort(
+            key=lambda s: (s['status']['priority'], -s['progress']['value']),
+            reverse=False
+        )
 
-    # Sort by status priority (re-engage first), then by progress
-    formatted_students.sort(
-        key=lambda s: (s['status']['priority'], -s['progress']['value']),
-        reverse=False
-    )
+        # Store in cache
+        _student_cache[department_id] = {
+            'data': students,
+            'formatted': formatted_students,
+            'timestamp': datetime.utcnow()
+        }
 
-    # Store in cache
-    _student_cache[department_id] = {
-        'data': students,
-        'formatted': formatted_students,
-        'timestamp': now
-    }
-
-    return students, formatted_students
+        return students, formatted_students
+    finally:
+        if acquired:
+            lock.release()
 
 
 def invalidate_cache(department_id):
