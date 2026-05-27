@@ -947,7 +947,8 @@ class AbsorbAPIClient:
 
         # Categorize enrollments
         prelicensing_main = None
-        prelicensing_main_names = []  # all main pre-license course names (dual Life+Health states)
+        prelicensing_mains = []  # all main pre-license course enrollments (dual Life+Health states)
+        prelicensing_main_names = []  # all main pre-license course names
         prelicensing_chapters = []
         exam_prep_courses = []
         other_in_progress = None
@@ -960,6 +961,7 @@ class AbsorbAPIClient:
                 if not self._is_module_or_chapter(course_name):
                     # This is the main Pre-Licensing course (e.g., "Alabama Life & Health Pre-license Course")
                     prelicensing_main = e
+                    prelicensing_mains.append(e)
                     if course_name:
                         prelicensing_main_names.append(course_name)
                 else:
@@ -982,12 +984,20 @@ class AbsorbAPIClient:
             # Only fall back to averaging chapters if no main course exists
             primary = prelicensing_main or all_prelicensing[0]
 
-            if prelicensing_main:
-                prog = prelicensing_main.get('progress') or prelicensing_main.get('Progress') or 0
-                try:
-                    avg_progress = float(prog) if prog else 0
-                except (ValueError, TypeError):
-                    avg_progress = 0
+            if prelicensing_mains:
+                # Average progress across ALL main pre-license courses. For a
+                # single-course student this is just that course's progress;
+                # for dual Life+Health (e.g. Michigan) it's the mean of both,
+                # so a student 100% done Health + 20% into Life shows ~60%
+                # instead of only one line's progress.
+                _prog_values = []
+                for m in prelicensing_mains:
+                    prog = m.get('progress') or m.get('Progress') or 0
+                    try:
+                        _prog_values.append(float(prog) if prog else 0)
+                    except (ValueError, TypeError):
+                        pass
+                avg_progress = sum(_prog_values) / len(_prog_values) if _prog_values else 0
             else:
                 # No main course found, average chapter progress as fallback
                 valid_progress = []
@@ -999,17 +1009,22 @@ class AbsorbAPIClient:
                     except (ValueError, TypeError):
                         pass
                 avg_progress = sum(valid_progress) / len(valid_progress) if valid_progress else 0
-            # Try each time field, use first non-zero (avoids truthy "00:00:00" short-circuiting)
-            main_time = 0
-            for _tf in ('timeSpent', 'TimeSpent', 'ActiveTime', 'activeTime'):
-                _tv = primary.get(_tf)
-                if _tv:
-                    parsed = parse_time_to_minutes(_tv)
-                    if parsed > 0:
-                        main_time = parsed
-                        break
 
-            # If main course reports 0 time, sum chapter times as fallback
+            # Sum time across ALL main pre-license courses. Absorb reports each
+            # main course's timeSpent as a rollup of its own chapters, so summing
+            # the mains is correct (no double-count between Life and Health) and
+            # captures total study time for dual-enrolled students.
+            main_time = 0
+            for m in prelicensing_mains:
+                for _tf in ('timeSpent', 'TimeSpent', 'ActiveTime', 'activeTime'):
+                    _tv = m.get(_tf)
+                    if _tv:
+                        parsed = parse_time_to_minutes(_tv)
+                        if parsed > 0:
+                            main_time += parsed
+                            break
+
+            # If the main course(s) reported 0 time, sum chapter times as fallback
             # (same logic as calculate_prelicensing_totals in student detail modal)
             if main_time == 0 and len(all_prelicensing) > 1:
                 for e in all_prelicensing:
