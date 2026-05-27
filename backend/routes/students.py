@@ -201,6 +201,20 @@ def get_student_details(student_id):
         # Get all enrollments for this student
         enrollments = client.get_user_enrollments(student_id)
 
+        # STAGING DIAGNOSTIC: dump enrollment names for the watched student so
+        # we can design the Life/Health course split for dual-enrolled students.
+        import os as _os
+        _watch = (_os.getenv('DEBUG_WATCH_EMAIL') or '').lower().strip()
+        if _watch:
+            _semail = (student.get('emailAddress') or student.get('EmailAddress') or '').lower().strip()
+            if _semail == _watch:
+                print(f"[WATCH-ENROLL] {_semail} has {len(enrollments)} enrollments:")
+                for _e in enrollments:
+                    _n = _e.get('name') or _e.get('Name') or _e.get('courseName') or _e.get('CourseName') or '?'
+                    _p = _e.get('progress') or _e.get('Progress') or 0
+                    _st = _e.get('status') or _e.get('Status') or 0
+                    print(f"[WATCH-ENROLL]   name={_n!r} progress={_p} status={_st}")
+
         # Format enrollments (Absorb API field names)
         formatted_enrollments = []
         for enrollment in enrollments:
