@@ -1095,23 +1095,34 @@ class AbsorbAPIClient:
             if not user_id:
                 return None
 
-            # Get enrollments, with one inline retry on 401 to absorb
-            # transient parallel-fan-out hiccups from Absorb's load balancer.
-            try:
-                enrollments = self.get_user_enrollments(user_id)
-            except AbsorbAPIError as _e:
-                if _e.status_code == 401:
-                    try:
-                        enrollments = self.get_user_enrollments(user_id)
-                    except AbsorbAPIError:
-                        # Still 401 after retry — re-raise so the orchestrator
-                        # (get_students_with_progress) can count auth failures
-                        # and tell a transient single-call hiccup apart from a
-                        # total token failure (which must NOT be cached as an
-                        # empty student list).
+            # Get enrollments, with a few inline retries on 401 to absorb the
+            # transient per-call 401s Absorb's load balancer throws under heavy
+            # parallel fan-out. A short backoff between tries lets an overloaded
+            # node recover. We deliberately do NOT refresh the token here:
+            # worker threads run outside the Flask request context (no g /
+            # session), so a real token refresh can't happen here — a genuine
+            # total token failure is surfaced by re-raising, and the route-level
+            # retry wrapper refreshes + refetches.
+            import time as _t
+            enrollments = None
+            _last_exc = None
+            for _attempt in range(3):  # 1 initial + 2 retries
+                try:
+                    enrollments = self.get_user_enrollments(user_id)
+                    _last_exc = None
+                    break
+                except AbsorbAPIError as _e:
+                    if _e.status_code != 401:
                         raise
-                else:
-                    raise
+                    _last_exc = _e
+                    if _attempt < 2:
+                        _t.sleep(0.4)
+            if _last_exc is not None:
+                # Still 401 after retries — re-raise so the orchestrator can
+                # count auth failures and tell a transient single-call hiccup
+                # apart from a total token failure (which must NOT be cached as
+                # an empty student list).
+                raise _last_exc
 
             # Find primary enrollment (prioritizes Pre-Licensing course)
             primary, calculated_progress, total_time, course_name = self._find_primary_course(enrollments)
@@ -1222,8 +1233,17 @@ class AbsorbAPIClient:
         print(f"[API] Processing {total} students for enrollment data (parallel)...")
 
         students_data = []
-        # Use ThreadPoolExecutor for parallel API calls (max 50 concurrent for I/O-bound operations)
-        max_workers = min(50, total) if total > 0 else 1
+        # Parallel enrollment fetch. 50-way fan-out overwhelms Absorb's load
+        # balancer, which then 401s individual calls even with a valid token
+        # (we saw ~540/1000 skipped on a large dept). A gentler concurrency
+        # trades a little speed for completeness. Env-tunable so we can dial it
+        # in on Render without a redeploy: ABSORB_FETCH_WORKERS (default 16).
+        try:
+            _cap = int(_os.getenv('ABSORB_FETCH_WORKERS', '16'))
+        except (ValueError, TypeError):
+            _cap = 16
+        _cap = max(1, min(_cap, 50))
+        max_workers = min(_cap, total) if total > 0 else 1
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Submit all tasks
