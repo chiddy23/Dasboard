@@ -1104,8 +1104,12 @@ class AbsorbAPIClient:
                     try:
                         enrollments = self.get_user_enrollments(user_id)
                     except AbsorbAPIError:
-                        # Still 401 — skip this user, don't kill the batch
-                        return None
+                        # Still 401 after retry — re-raise so the orchestrator
+                        # (get_students_with_progress) can count auth failures
+                        # and tell a transient single-call hiccup apart from a
+                        # total token failure (which must NOT be cached as an
+                        # empty student list).
+                        raise
                 else:
                     raise
 
@@ -1157,15 +1161,11 @@ class AbsorbAPIClient:
                 'courseName': course_name,
                 'enrollmentStatus': (primary.get('status') or primary.get('Status') or 0) if primary else 0
             }
-        except AbsorbAPIError as e:
-            # 401 from any deeper call (post-retry) — skip this user, keep batch alive.
-            # Non-401 Absorb errors still propagate (caller handles them at the dept level).
-            _dbg_email = (user.get('emailAddress') or user.get('EmailAddress') or '?')
-            _dbg_id = (user.get('id') or user.get('Id') or '?')
-            if e.status_code == 401:
-                print(f"[DROP] Student SKIPPED (401 after retry): {_dbg_email} id={_dbg_id}")
-                return None
-            print(f"[DROP] Student SKIPPED (AbsorbAPIError {e.status_code}): {_dbg_email} id={_dbg_id} — {e}")
+        except AbsorbAPIError:
+            # Propagate Absorb errors (incl. 401) to the orchestrator, which
+            # decides: a few 401s among many students = transient, skip them;
+            # ALL students 401 = total token failure, raise so the caller
+            # refreshes + retries instead of caching an empty list.
             raise
         except Exception as e:
             import traceback
@@ -1230,19 +1230,22 @@ class AbsorbAPIClient:
             future_to_user = {executor.submit(self._process_single_user, user): user for user in users}
 
             completed = 0
-            failures = 0
+            auth_failures = 0   # 401s — token trouble
+            other_failures = 0  # non-401 errors
             for future in as_completed(future_to_user):
                 completed += 1
                 try:
                     result = future.result()
                 except AbsorbAPIError as e:
                     # Don't let one failed user kill the whole dept fetch.
-                    failures += 1
-                    if e.status_code != 401:
+                    if e.status_code == 401:
+                        auth_failures += 1
+                    else:
+                        other_failures += 1
                         print(f"[API] Non-401 error on a user fetch: {e}")
                     result = None
                 except Exception as e:
-                    failures += 1
+                    other_failures += 1
                     print(f"[API] Unexpected error on a user fetch: {e}")
                     result = None
                 if result:
@@ -1251,6 +1254,18 @@ class AbsorbAPIClient:
                 # Progress update every 10 students
                 if completed % 10 == 0 or completed == total:
                     print(f"[API] Processed {completed}/{total} students...")
+
+        failures = auth_failures + other_failures
+
+        # If EVERY student fetch failed with 401, this is a total token failure,
+        # not a real empty department. Raise so the caller refreshes + retries
+        # instead of returning [] — which get_cached_students would cache and
+        # then serve as "no students" for the full 5-min TTL even after the
+        # token recovers. (Partial failures still return the students we got.)
+        if total > 0 and len(students_data) == 0 and auth_failures > 0:
+            raise AbsorbAPIError(
+                f"All {total} student fetches failed with 401 - token expired", 401
+            )
 
         if failures > 0:
             print(f"[API] COMPLETE: {len(students_data)} students with enrollment data ({failures} skipped due to errors)")
