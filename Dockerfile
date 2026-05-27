@@ -35,8 +35,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy backend code
 COPY backend/ ./
 
-# Copy built frontend
-COPY --from=frontend-build /app/frontend/dist ./static
+# Copy built frontend to the path Flask actually serves from.
+# app.py computes FRONTEND_DIST = dirname(dirname(__file__))/frontend/dist.
+# Since backend/ is copied to /app (so app.py is /app/app.py), that resolves
+# to /frontend/dist — NOT /app/static. Copy there so the SPA is served.
+COPY --from=frontend-build /app/frontend/dist /frontend/dist
 
 # Create session directory
 RUN mkdir -p flask_session
