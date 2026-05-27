@@ -187,6 +187,11 @@ def get_student_details(student_id):
                 student = client.get_user_by_id(student_id)
                 print(f"[STUDENT DETAIL] Successfully fetched cross-department student: {student.get('emailAddress', 'unknown')}")
             except AbsorbAPIError as e:
+                # A 401 here is a stale token, not a missing student — re-raise
+                # so the @absorb_retry_on_401 decorator refreshes + retries the
+                # whole route instead of us returning a misleading 404.
+                if e.status_code == 401:
+                    raise
                 print(f"[STUDENT DETAIL] Direct fetch failed: {e}")
                 return jsonify({
                     'success': False,
@@ -351,6 +356,14 @@ def get_student_details(student_id):
         })
 
     except AbsorbAPIError as e:
+        # A 401 means the Absorb token went stale. Re-raise so the
+        # @absorb_retry_on_401 decorator transparently refreshes the token
+        # and retries the whole route. Without this, the route returns 401
+        # to the frontend, which auto-logs-the-user-out — making a routine
+        # token expiry look like the modal "crashing". Non-401 errors still
+        # surface normally.
+        if e.status_code == 401:
+            raise
         return jsonify({
             'success': False,
             'error': str(e.message)
