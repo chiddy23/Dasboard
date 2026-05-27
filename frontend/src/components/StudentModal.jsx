@@ -294,25 +294,40 @@ function StudentModal({ studentId, examInfo, onClose, onSessionExpired, onUpdate
     setLoading(true)
     setError(null)
 
-    try {
-      const params = new URLSearchParams()
-      if (examInfo?.examCourse) params.set('courseType', examInfo.examCourse)
-      const qs = params.toString() ? `?${params.toString()}` : ''
-      const response = await fetch(`${API_BASE}/students/${studentId}${qs}`, {
-        credentials: 'include'
-      })
+    // Absorb is single-session-per-account: when the same account is active
+    // from more than one place (multiple staff, multiple tabs, staging+prod),
+    // its token gets revoked underneath us, so the FIRST request after a quiet
+    // period can 500 while the backend's token refresh storms. A retry with a
+    // warm token reliably succeeds (the user used to fix this by re-opening the
+    // modal). Auto-retry transparently a few times before surfacing an error so
+    // the user never has to re-open it themselves. A genuine 401 (backend gave
+    // up after its own retries) still logs out immediately — no point retrying.
+    const maxAttempts = 3
+    const retryDelayMs = 800
 
-      if (!response.ok) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const params = new URLSearchParams()
+        if (examInfo?.examCourse) params.set('courseType', examInfo.examCourse)
+        const qs = params.toString() ? `?${params.toString()}` : ''
+        const response = await fetch(`${API_BASE}/students/${studentId}${qs}`, {
+          credentials: 'include'
+        })
+
         if (response.status === 401) {
           onSessionExpired()
+          setLoading(false)
           return
         }
-        throw new Error('Failed to fetch student details')
-      }
+        if (!response.ok) {
+          throw new Error('Failed to fetch student details')
+        }
 
-      const data = await response.json()
+        const data = await response.json()
+        if (!data.success) {
+          throw new Error(data.error || 'Failed to load student')
+        }
 
-      if (data.success) {
         setStudent(data.student)
         // Fetch study snapshots in background
         if (data.student?.email) {
@@ -321,13 +336,18 @@ function StudentModal({ studentId, examInfo, onClose, onSessionExpired, onUpdate
             .then(d => { if (d?.success) setSnapshots(d.snapshots || []) })
             .catch(() => {})
         }
-      } else {
-        throw new Error(data.error || 'Failed to load student')
+        setLoading(false)
+        return
+      } catch (err) {
+        // Keep the spinner up and retry — the token is likely warm now.
+        if (attempt < maxAttempts) {
+          await new Promise(resolve => setTimeout(resolve, retryDelayMs))
+          continue
+        }
+        setError(err.message)
+        setLoading(false)
+        return
       }
-    } catch (err) {
-      setError(err.message)
-    } finally {
-      setLoading(false)
     }
   }
 
