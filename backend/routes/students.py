@@ -65,6 +65,7 @@ def calculate_prelicensing_totals(enrollments):
     """
     prelicensing_enrollments = []
     main_course_name = "Pre-License Course"
+    main_course_names = []  # all main pre-license course names (dual Life+Health states)
     primary_status = 0
 
     for e in enrollments:
@@ -74,6 +75,8 @@ def calculate_prelicensing_totals(enrollments):
             # Track main course name (not a module/chapter)
             if is_prelicensing_course(name) and not is_chapter_or_module(name):
                 main_course_name = name
+                if name:
+                    main_course_names.append(name)
                 primary_status = e.get('status', 0)
 
     if not prelicensing_enrollments:
@@ -143,6 +146,13 @@ def calculate_prelicensing_totals(enrollments):
             if isinstance(progress, (int, float)):
                 progress_values.append(progress)
         final_progress = sum(progress_values) / len(progress_values) if progress_values else 0
+
+    # Dual Life+Health (separate-course states): show a combined name so the
+    # modal header reflects the combined enrollment rather than one line.
+    from absorb_api import combined_prelicense_name
+    _combined = combined_prelicense_name(main_course_names)
+    if _combined:
+        main_course_name = _combined
 
     return main_course_time, final_progress, main_course_name, primary_status
 

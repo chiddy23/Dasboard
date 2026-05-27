@@ -42,6 +42,37 @@ def get_session():
     return _session
 
 
+def combined_prelicense_name(main_names):
+    """Build a combined display name when a student has BOTH a Life main and a
+    Health main pre-license course (separate-course states like Michigan).
+
+    e.g. ['Michigan Life Pre-license Course', 'Michigan Health Pre-license Course']
+         -> 'Michigan Life & Health Pre-license Course'
+
+    Returns None when it's not a dual Life+Health situation (caller keeps the
+    single course name). Single-combined-course states (a course literally named
+    'X Life & Health Pre-license Course') already contain both words and are
+    left alone.
+    """
+    import re
+    names = [n for n in (main_names or []) if n]
+    if len(names) < 2:
+        return None
+    has_life = any('life' in n.lower() for n in names)
+    has_health = any('health' in n.lower() for n in names)
+    if not (has_life and has_health):
+        return None
+    # If any single course already says "Life & Health"/"Life and Health", reuse it.
+    for n in names:
+        low = n.lower()
+        if 'life & health' in low or 'life and health' in low:
+            return n
+    # Otherwise synthesize from one name by expanding the line word.
+    base = names[0]
+    combined = re.sub(r'\b(Life|Health)\b', 'Life & Health', base, count=1)
+    return combined if combined != base else 'Life & Health Pre-license Course'
+
+
 def parse_time_to_minutes(time_value) -> int:
     """Parse time value to minutes. Handles .NET TimeSpan format: [d.]HH:MM:SS[.fffffff]
 
@@ -916,6 +947,7 @@ class AbsorbAPIClient:
 
         # Categorize enrollments
         prelicensing_main = None
+        prelicensing_main_names = []  # all main pre-license course names (dual Life+Health states)
         prelicensing_chapters = []
         exam_prep_courses = []
         other_in_progress = None
@@ -928,6 +960,8 @@ class AbsorbAPIClient:
                 if not self._is_module_or_chapter(course_name):
                     # This is the main Pre-Licensing course (e.g., "Alabama Life & Health Pre-license Course")
                     prelicensing_main = e
+                    if course_name:
+                        prelicensing_main_names.append(course_name)
                 else:
                     # This is a chapter/module of the pre-licensing course
                     prelicensing_chapters.append(e)
@@ -992,6 +1026,14 @@ class AbsorbAPIClient:
                 display_name = prelicensing_main.get('name') or prelicensing_main.get('Name') or prelicensing_main.get('courseName') or prelicensing_main.get('CourseName') or 'Pre-License Course'
             else:
                 display_name = 'Pre-License Course'
+
+            # If the student is enrolled in BOTH a Life and a Health main
+            # pre-license course (separate-course states like Michigan), show a
+            # combined name so the list view makes the dual enrollment obvious
+            # instead of showing just one line.
+            _combined = combined_prelicense_name(prelicensing_main_names)
+            if _combined:
+                display_name = _combined
 
             return primary, avg_progress, main_time, display_name
 
