@@ -55,5 +55,8 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/health')" || exit 1
 
-# Run with gunicorn
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "4", "--threads", "2", "app:app"]
+# Run with gunicorn. ONE worker to match prod's effective WEB_CONCURRENCY=1.
+# Multiple workers each hold their own Absorb token and revoke each other
+# (single-session-per-account), causing flaky "no students". Threads give
+# concurrency within the single worker without the token war.
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "8", "--timeout", "120", "app:app"]
