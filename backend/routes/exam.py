@@ -14,7 +14,7 @@ from middleware import login_required
 from utils.absorb_retry import absorb_retry_on_401
 from utils import format_student_for_response
 from google_sheets import fetch_exam_sheet, invalidate_sheet_cache, parse_exam_date_for_sort, update_sheet_passfail, update_sheet_exam_date, update_sheet_contact
-from utils.readiness import calculate_readiness
+from utils.readiness import calculate_readiness, detect_course_type
 from utils.gap_metrics import calculate_gap_metrics
 from demo_data import is_demo_dept, DEMO_DEPT_NAME, get_demo_email_lookup
 
@@ -404,13 +404,19 @@ def get_exam_students():
 
 def _build_exam_entry(formatted, sheet_student, dept_name, matched, raw_enrollments=None):
     """Build an exam entry from formatted Absorb data + sheet data."""
+    # Course type comes from Absorb enrollments (single source of truth), NOT
+    # the sheet. The sheet only supplies exam date + student identity. Fall
+    # back to the sheet's course only if Absorb has no detectable line.
+    absorb_course = detect_course_type(raw_enrollments) if raw_enrollments else None
+    exam_course = absorb_course or (sheet_student.get('course') or 'Unknown')
+
     entry = {
         **formatted,
         'examDate': sheet_student['examDateFormatted'],
         'examDateRaw': sheet_student['examDate'],
         'examTime': sheet_student['examTime'],
         'examState': sheet_student['state'],
-        'examCourse': sheet_student['course'],
+        'examCourse': exam_course,
         'agencyOwner': sheet_student['agencyOwner'],
         'passFail': sheet_student['passFail'],
         'finalOutcome': sheet_student['finalOutcome'],
@@ -430,9 +436,9 @@ def _build_exam_entry(formatted, sheet_student, dept_name, matched, raw_enrollme
                     days_until = delta.days
             except Exception:
                 pass
+        # course_type left to Absorb auto-detection inside calculate_readiness
         entry['readiness'] = calculate_readiness(
             raw_enrollments,
-            course_type=sheet_student.get('course', ''),
             days_until_exam=days_until
         )
         entry['gapMetrics'] = calculate_gap_metrics(raw_enrollments)
@@ -470,7 +476,10 @@ def _build_unmatched_entry(sheet_student):
         'examDateRaw': sheet_student['examDate'],
         'examTime': sheet_student['examTime'],
         'examState': sheet_student['state'],
-        'examCourse': sheet_student['course'],
+        # Not in Absorb → no enrollment data → course type can't be derived
+        # from Absorb. Per the rule that course never comes from the sheet,
+        # show Unknown rather than the sheet's course column.
+        'examCourse': 'Unknown',
         'agencyOwner': sheet_student['agencyOwner'],
         'passFail': sheet_student['passFail'],
         'finalOutcome': sheet_student['finalOutcome'],
@@ -869,7 +878,9 @@ def record_exam_result():
             user_id = student.get('id') or student.get('Id')
             if user_id:
                 enrollments = client.get_user_enrollments(user_id)
-                readiness_snapshot = calculate_readiness(enrollments, course_type=exam_course)
+                # Course type derived from Absorb inside calculate_readiness,
+                # not the request/sheet-provided exam_course.
+                readiness_snapshot = calculate_readiness(enrollments)
     except Exception as e:
         print(f"[EXAM] Could not build readiness snapshot for {email}: {e}")
 

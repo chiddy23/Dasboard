@@ -377,12 +377,10 @@ def get_student_details(student_id):
                     except Exception as _e:
                         print(f"[ATTEMPTS] fetch failed: {_e}")
 
-        # Calculate readiness from raw enrollments
-        # course_type from query param (passed by frontend from exam sheet data)
-        course_type = request.args.get('courseType', '')
-        formatted_student['readiness'] = calculate_readiness(
-            enrollments, course_type=course_type
-        )
+        # Calculate readiness from raw enrollments. Course type is derived from
+        # Absorb inside calculate_readiness (single source of truth) — we no
+        # longer pass the sheet-derived courseType query param.
+        formatted_student['readiness'] = calculate_readiness(enrollments)
         formatted_student['gapMetrics'] = calculate_gap_metrics(enrollments)
 
         return jsonify({

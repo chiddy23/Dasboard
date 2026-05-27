@@ -166,24 +166,43 @@ def _is_prelicensing(name):
     return not _is_module_or_chapter(name)
 
 
-def _detect_course_type(enrollments):
-    """Auto-detect course type (Life, Health, or Life & Health) from enrollment names.
+def detect_course_type(enrollments):
+    """Auto-detect course type (Life, Health, or Life & Health) from Absorb
+    enrollments. This is the SINGLE source of truth for a student's line —
+    course type always comes from Absorb, never from the Google Sheet (the
+    sheet only supplies exam dates + student identity).
 
-    Scans all enrollment names for 'life' and 'health' keywords.
+    Precision: prefer the MAIN pre-license courses' life/health signal (a
+    student enrolled in both 'X Life Pre-license Course' and 'X Health
+    Pre-license Course' is Life & Health). Only if no main pre-license
+    course is found do we fall back to scanning all enrollment names — this
+    avoids a stray 'health'/'life' keyword in some ancillary course
+    mis-classifying a single-line student.
+
     Returns 'Life & Health', 'Life', 'Health', or None if undetectable.
     """
-    has_life = False
-    has_health = False
+    main_life = main_health = False
+    any_life = any_health = False
+    found_main = False
     for e in enrollments:
-        name = (_get_enrollment_name(e) or '').lower()
-        if not name:
-            name = (e.get('name') or e.get('Name') or '').lower()
-        if not name:
+        name = (_get_enrollment_name(e) or '') or (e.get('name') or e.get('Name') or '')
+        low = name.lower()
+        if not low:
             continue
-        if 'life' in name:
-            has_life = True
-        if 'health' in name:
-            has_health = True
+        if 'life' in low:
+            any_life = True
+        if 'health' in low:
+            any_health = True
+        if _is_prelicensing(name):  # main pre-license course (excludes modules/chapters)
+            found_main = True
+            if 'life' in low:
+                main_life = True
+            if 'health' in low:
+                main_health = True
+    if found_main:
+        has_life, has_health = main_life, main_health
+    else:
+        has_life, has_health = any_life, any_health
     if has_life and has_health:
         return 'Life & Health'
     elif has_life:
@@ -191,6 +210,10 @@ def _detect_course_type(enrollments):
     elif has_health:
         return 'Health'
     return None
+
+
+# Backwards-compat alias (internal callers used the underscore name).
+_detect_course_type = detect_course_type
 
 
 def _course_type_needs_life(course_type):
@@ -312,10 +335,14 @@ def calculate_readiness(enrollments, course_type=None, days_until_exam=None):
     total_course_minutes = sum(_get_enrollment_minutes(e) for e in prelicensing_courses)
     total_course_hours = total_course_minutes / 60.0
 
-    # Auto-detect course type from enrollment names if not provided
+    # Course type ALWAYS comes from Absorb enrollments, never the sheet.
+    # Detect from the student's actual main pre-license course(s). The passed
+    # `course_type` (historically the sheet's "Course" column) is only a
+    # last-resort fallback when Absorb has no detectable line (e.g. a student
+    # with no main pre-license course enrolled yet).
     original_course_type = course_type
-    if not course_type:
-        course_type = _detect_course_type(enrollments)
+    detected = detect_course_type(enrollments)
+    course_type = detected or course_type
 
     needs_life = _course_type_needs_life(course_type)
     needs_health = _course_type_needs_health(course_type)
