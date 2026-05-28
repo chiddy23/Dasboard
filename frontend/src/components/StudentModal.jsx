@@ -296,7 +296,11 @@ function StudentModal({ studentId, examInfo, onClose, onSessionExpired, onUpdate
     return () => controller.abort()
   }, [studentId])
 
-  const fetchStudentDetails = async (signal) => {
+  const fetchStudentDetails = async (rawSignal) => {
+    // Only honor a real AbortSignal. Some callers (e.g. the "Try Again" button's
+    // onClick) hand us a click event; passing a non-AbortSignal to fetch throws
+    // "Failed to convert value to 'AbortSignal'", so normalize defensively.
+    const reqSignal = (typeof AbortSignal !== 'undefined' && rawSignal instanceof AbortSignal) ? rawSignal : undefined
     setLoading(true)
     setError(null)
 
@@ -318,7 +322,7 @@ function StudentModal({ studentId, examInfo, onClose, onSessionExpired, onUpdate
         const qs = params.toString() ? `?${params.toString()}` : ''
         const response = await fetch(`${API_BASE}/students/${studentId}${qs}`, {
           credentials: 'include',
-          signal
+          signal: reqSignal
         })
 
         if (response.status === 401) {
@@ -338,7 +342,7 @@ function StudentModal({ studentId, examInfo, onClose, onSessionExpired, onUpdate
         setStudent(data.student)
         // Fetch study snapshots in background
         if (data.student?.email) {
-          fetch(`${API_BASE}/exam/snapshots/${encodeURIComponent(data.student.email)}`, { credentials: 'include', signal })
+          fetch(`${API_BASE}/exam/snapshots/${encodeURIComponent(data.student.email)}`, { credentials: 'include', signal: reqSignal })
             .then(r => r.ok ? r.json() : null)
             .then(d => { if (d?.success) setSnapshots(d.snapshots || []) })
             .catch(() => {})
@@ -348,13 +352,13 @@ function StudentModal({ studentId, examInfo, onClose, onSessionExpired, onUpdate
       } catch (err) {
         // Request was aborted (user switched students or closed the modal) —
         // stop silently; a newer request is now in charge of the UI state.
-        if (err.name === 'AbortError' || signal?.aborted) {
+        if (err.name === 'AbortError' || reqSignal?.aborted) {
           return
         }
         // Keep the spinner up and retry — the token is likely warm now.
         if (attempt < maxAttempts) {
           await new Promise(resolve => setTimeout(resolve, retryDelayMs))
-          if (signal?.aborted) return
+          if (reqSignal?.aborted) return
           continue
         }
         setError(err.message)
@@ -451,7 +455,7 @@ function StudentModal({ studentId, examInfo, onClose, onSessionExpired, onUpdate
               </svg>
               <p className="text-red-600">{error}</p>
               <button
-                onClick={fetchStudentDetails}
+                onClick={() => fetchStudentDetails()}
                 className="mt-4 btn btn-secondary"
               >
                 Try Again
