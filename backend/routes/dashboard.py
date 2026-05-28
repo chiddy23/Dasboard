@@ -156,6 +156,18 @@ def invalidate_cache(department_id):
 # gunicorn worker. Guards against same-process double-refresh races.
 _refresh_lock = threading.Lock()
 
+# Process-global "latest known token" per user. CRITICAL for the CAS in
+# _refresh_user_absorb_token: Flask-Session is request-scoped (each request
+# loads its OWN snapshot of the session from the filesystem store), so the
+# session-based CAS can't see a refresh a CONCURRENT request just performed.
+# Without this, two simultaneous requests (e.g. the dashboard's /summary +
+# /students on a cold load) each re-authenticate, and since Absorb is
+# single-session-per-account, each re-auth revokes the other's token -> an
+# endless refresh/401 ping-pong (the app waging a token war with ITSELF). This
+# in-memory map is shared across all threads in the worker, so a sibling's
+# fresh token is visible immediately. Accessed only under _refresh_lock.
+_latest_user_tokens = {}
+
 
 def _refresh_lock_path(user_email: str) -> str:
     """Return a per-user lockfile path for cross-process coordination.
@@ -246,6 +258,22 @@ def _refresh_user_absorb_token():
                 print(f'[TOKEN REFRESH] CAS hit — sibling refresh detected, reusing their token')
                 return True
 
+            # Cross-request CAS: the session read above is THIS request's own
+            # snapshot and won't reflect a refresh a concurrent request just
+            # did (filesystem sessions are request-scoped). Check the
+            # process-global token too — if a sibling already minted a newer
+            # token, reuse it instead of re-authing (which would revoke theirs
+            # and kick off the refresh/401 ping-pong).
+            uname_key = (username or '').lower().strip()
+            shared_token = _latest_user_tokens.get(uname_key)
+            if shared_token and shared_token != entry_token:
+                g.absorb_token = shared_token
+                current_user_data['token'] = shared_token
+                session['user'] = current_user_data
+                session.modified = True
+                print('[TOKEN REFRESH] CAS hit (shared in-memory token) — reusing concurrent refresh')
+                return True
+
             # No sibling refresh — proceed with actual re-auth.
             enc_pwd = current_user_data.get('absorbPasswordEnc')
             if not enc_pwd:
@@ -286,6 +314,9 @@ def _refresh_user_absorb_token():
             session['user'] = current_user_data
             session.modified = True
             g.absorb_token = new_token
+            # Publish to the process-global store so concurrent requests in this
+            # worker reuse this token instead of re-authing (see _latest_user_tokens).
+            _latest_user_tokens[(username or '').lower().strip()] = new_token
             print(f'[TOKEN REFRESH] Refreshed Absorb token for {username} (locked)')
             return True
         finally:
