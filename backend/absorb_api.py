@@ -118,20 +118,16 @@ class AbsorbAPIClient:
         self._session = get_session()
 
     def _get_headers(self, include_auth: bool = True) -> Dict[str, str]:
-        """Get headers for API requests — BARE token on Authorization.
+        """Get headers for API requests — 'Bearer <token>' on Authorization.
 
-        STAGING EXPERIMENT (2026-05-28): send the raw token without a 'Bearer '
-        prefix, matching the HMG dashboard's client. HMG measured ~16 req/s
-        bare vs ~2 req/s with Bearer (and pulls 1,800 users in ~25s with only
-        20 workers). Our earlier bare-token attempt 401-cascaded, but that was
-        the concurrency bugs (dueling /students+/summary fetch, 50-way fan-out,
-        no retry/backoff) which are now fixed — so bare should be safe AND
-        ~2x faster on the bulk dashboard fan-out.
-
-        The lesson/attempt endpoints (modal) keep the Bearer prefix via
-        _get_headers_bearer() — they're low-volume and known-good, so we don't
-        change them in the same experiment. Revert this method to
-        f'Bearer {self._token}' if 401 cascades return.
+        KEEP BEARER — do not re-litigate. Bare token (HMG-style) was tested on
+        staging TWICE and dropped students both times:
+          - first attempt 401-cascaded;
+          - re-tested 2026-05-28 AFTER all the concurrency fixes (fetch lock,
+            fan-out 28, retry/backoff) and STILL only loaded ~700 of 1,298.
+        Whatever lets HMG run bare (different tenant/account config), JI's
+        account 401s individual calls under parallel load without the Bearer
+        prefix. Bearer is the proven-complete path here.
         """
         headers = {
             'x-api-key': self.api_key,
@@ -139,18 +135,14 @@ class AbsorbAPIClient:
             'Accept': 'application/json'
         }
         if include_auth and self._token:
-            headers['Authorization'] = self._token
-        return headers
-
-    # Lesson/attempt endpoints (get_enrollment_lessons, get_lesson_attempts)
-    # keep the explicit 'Bearer <token>' prefix — they're known-good and
-    # low-volume (modal only), so they're held constant while we test bare
-    # token on the high-volume bulk path via _get_headers().
-    def _get_headers_bearer(self) -> Dict[str, str]:
-        headers = self._get_headers()
-        if self._token:
             headers['Authorization'] = f'Bearer {self._token}'
         return headers
+
+    # Kept for call sites that explicitly asked for Bearer (get_enrollment_lessons,
+    # get_lesson_attempts). Returns identical headers now that _get_headers is
+    # Bearer again.
+    def _get_headers_bearer(self) -> Dict[str, str]:
+        return self._get_headers()
 
     def authenticate_user(self, username: str, password: str) -> Dict[str, Any]:
         """Authenticate a user against Absorb API."""
