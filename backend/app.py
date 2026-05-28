@@ -32,11 +32,40 @@ def create_app():
     config = get_config()
     app.config.from_object(config)
 
-    # Additional session configuration
+    # Session storage. 'filesystem' keeps sessions SERVER-SIDE, which is
+    # REQUIRED here: _refresh_user_absorb_token coordinates concurrent token
+    # refreshes via a lock + compare-and-swap that reads shared server-side
+    # session state. Moving sessions into the cookie would give each request its
+    # own private copy, break that CAS, and reignite the single-session token war.
+    #
+    # CRITICAL: the session dir MUST live on a PERSISTENT disk. Render's
+    # container filesystem is ephemeral — storing sessions under the app dir
+    # means every deploy/restart wipes them and logs out every active user
+    # ("No user in session" → modal "crash"). Resolution order:
+    #   1. explicit SESSION_FILE_DIR env var
+    #   2. a mounted Render disk at /var/data  (persists across restarts)
+    #   3. local app dir (dev / no disk — NOT restart-safe)
+    _session_dir = os.getenv('SESSION_FILE_DIR')
+    if not _session_dir:
+        if os.path.isdir('/var/data'):
+            _session_dir = '/var/data/flask_session'
+        else:
+            _session_dir = os.path.join(os.path.dirname(__file__), 'flask_session')
+    os.makedirs(_session_dir, exist_ok=True)
+    print(f"[SESSION] filesystem store at {_session_dir} "
+          f"({'PERSISTENT' if _session_dir.startswith('/var/data') or os.getenv('SESSION_FILE_DIR') else 'EPHEMERAL — add a Render disk!'})")
+
     app.config['SESSION_TYPE'] = 'filesystem'
-    app.config['SESSION_FILE_DIR'] = os.path.join(os.path.dirname(__file__), 'flask_session')
+    app.config['SESSION_FILE_DIR'] = _session_dir
     app.config['SESSION_PERMANENT'] = True
-    app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=4)
+    # Session lifetime is decoupled from the 4h Absorb token (the token refreshes
+    # on demand via @absorb_retry_on_401), so the login session can safely
+    # outlive it. Default 7 days = far fewer idle logouts; override via env.
+    try:
+        _session_days = int(os.getenv('SESSION_LIFETIME_DAYS', '7'))
+    except (ValueError, TypeError):
+        _session_days = 7
+    app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=_session_days)
 
     # Initialize session
     Session(app)
