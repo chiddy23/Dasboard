@@ -359,9 +359,20 @@ def get_student_details(student_id):
 
         # Fetch practice-exam attempt history in parallel and attach to the
         # matching enrollment records.
+        #
+        # Only ACTUAL practice-exam courses ('practice' in the name) — that is
+        # the one thing readiness scores (3 consecutive >=80%) and the only
+        # attempt history the modal displays. The old filter matched every
+        # exam-prep course (study guides, walkthroughs, videos, AI tools, and
+        # exam-prep bundles that 404 on /lessons), each costing a wasted
+        # get_enrollment_lessons round trip per modal open. Matching readiness's
+        # own 'practice'-in-name rule keeps the result identical while cutting
+        # ~5 needless calls.
+        def _is_practice_exam_name(nm):
+            return 'practice' in (nm or '').lower()
         practice_candidates = [
             e for e in enrollments
-            if is_exam_prep_course(e.get('name') or e.get('Name') or e.get('courseName') or e.get('CourseName') or '')
+            if _is_practice_exam_name(e.get('name') or e.get('Name') or e.get('courseName') or e.get('CourseName') or '')
         ]
         print(f"[ATTEMPTS] Student {student_id}: {len(practice_candidates)} practice-exam enrollments found")
         for _pc in practice_candidates:
