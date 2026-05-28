@@ -1,10 +1,13 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useEffect } from 'react'
 import StatusBadge from './StatusBadge'
 import ProgressBar from './ProgressBar'
+
+const PAGE_SIZE = 100
 
 function StudentTable({ students, onViewStudent, showDepartment = false, onHideStudent, showHidden = false }) {
   const [sortField, setSortField] = useState('status')
   const [sortDirection, setSortDirection] = useState('asc')
+  const [page, setPage] = useState(1)
 
   const handleSort = (field) => {
     if (sortField === field) {
@@ -54,6 +57,19 @@ function StudentTable({ students, onViewStudent, showDepartment = false, onHideS
     if (aValue > bValue) return sortDirection === 'asc' ? 1 : -1
     return 0
   }), [students, sortField, sortDirection])
+
+  // Only render a page of rows at a time. A big department (1,000+ students)
+  // rendered all at once is thousands of DOM nodes (progress bars, SVGs) that
+  // bog the browser/PC. Paginate so the DOM stays small and responsive. Small
+  // depts (<= PAGE_SIZE) render fully with no controls.
+  const totalPages = Math.max(1, Math.ceil(sortedStudents.length / PAGE_SIZE))
+  const paginate = sortedStudents.length > PAGE_SIZE
+  // Reset to page 1 whenever the data, sort, or filter changes.
+  useEffect(() => { setPage(1) }, [students, sortField, sortDirection])
+  const safePage = Math.min(page, totalPages)
+  const pageStudents = paginate
+    ? sortedStudents.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
+    : sortedStudents
 
   const SortIcon = ({ field }) => {
     if (sortField !== field) {
@@ -152,7 +168,7 @@ function StudentTable({ students, onViewStudent, showDepartment = false, onHideS
             </tr>
           </thead>
           <tbody>
-            {sortedStudents.map((student, index) => (
+            {pageStudents.map((student, index) => (
               <tr
                 key={student.id || `${student.email}-${index}`}
               >
@@ -229,6 +245,30 @@ function StudentTable({ students, onViewStudent, showDepartment = false, onHideS
           </tbody>
         </table>
       </div>
+      {paginate && (
+        <div className="flex items-center justify-between px-4 py-3 border-t border-gray-100 text-sm">
+          <span className="text-gray-600">
+            Showing {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, sortedStudents.length)} of {sortedStudents.length}
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={safePage <= 1}
+              className="btn btn-secondary text-sm py-1 px-3 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Prev
+            </button>
+            <span className="text-gray-600">Page {safePage} of {totalPages}</span>
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={safePage >= totalPages}
+              className="btn btn-secondary text-sm py-1 px-3 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
