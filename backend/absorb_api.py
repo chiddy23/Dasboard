@@ -537,14 +537,33 @@ class AbsorbAPIClient:
         """Execute a single /users query. Returns (users_list, total_items).
 
         total_items may be None if the response shape doesn't include it.
-        Raises AbsorbAPIError on 401; returns ([], None) on other errors so
-        callers (bucket workers) don't explode the whole fetch.
+        Raises AbsorbAPIError on 401 (after a few backoff retries); returns
+        ([], None) on other errors so callers (bucket workers) don't explode
+        the whole fetch.
+
+        The year-bucket fan-out issues ~13 of these in parallel, and Absorb's
+        load balancer throws transient 401s on individual calls under that load
+        even with a valid token. Without a retry the bucket worker just returns
+        [] and silently drops those users (this is the "missing 295" on a 1,295-
+        user dept). Retry the SAME-token call a few times with a short backoff
+        so an overloaded node can recover. We don't refresh here — a genuine
+        total token failure surfaces by raising so the route-level retry
+        wrapper refreshes + refetches.
         """
+        import time as _t
         url = f"{self.base_url}/users"
         params = {"_filter": filter_expr, "_limit": limit, "_offset": 0}
-        response = self._session.get(
-            url, params=params, headers=self._get_headers(), timeout=120
-        )
+
+        response = None
+        for _attempt in range(3):  # 1 initial + 2 retries
+            response = self._session.get(
+                url, params=params, headers=self._get_headers(), timeout=120
+            )
+            if response.status_code == 401 and _attempt < 2:
+                _t.sleep(0.4)
+                continue
+            break
+
         if response.status_code == 401:
             print(f"[API] Token expired - need to re-authenticate")
             raise AbsorbAPIError("Session expired. Please log in again.", 401)
