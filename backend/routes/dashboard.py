@@ -254,6 +254,8 @@ def _refresh_user_absorb_token():
 
             password = decrypt_password(enc_pwd, Config.SECRET_KEY)
             if not password:
+                print('[TOKEN REFRESH] Could not decrypt stored password '
+                      '(SECRET_KEY changed since login?) — cannot refresh')
                 return False
 
             try:
@@ -269,10 +271,13 @@ def _refresh_user_absorb_token():
                 password = None  # best-effort local wipe
 
             if not auth_result or not auth_result.get('success'):
+                print(f'[TOKEN REFRESH] Re-auth returned no success for {username} '
+                      '(Absorb rejected or throttled the re-auth)')
                 return False
 
             new_token = auth_result.get('token')
             if not new_token:
+                print(f'[TOKEN REFRESH] Re-auth succeeded but returned empty token for {username}')
                 return False
 
             new_expiry = datetime.utcnow() + timedelta(hours=4)
