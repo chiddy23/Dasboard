@@ -120,6 +120,18 @@ def login():
 
         session.permanent = True
 
+        # Sync the fresh token into the process-global store used by the
+        # cross-request CAS in _refresh_user_absorb_token. Login just minted a
+        # new token (which revoked any previous one), so without this the global
+        # still holds the OLD/revoked token — and the CAS would "reuse" that
+        # stale token on the first post-login 401, poisoning the session and
+        # collapsing the first dashboard load. Keep global == the live token.
+        try:
+            from routes.dashboard import _latest_user_tokens
+            _latest_user_tokens[(username or '').lower().strip()] = auth_result['token']
+        except Exception:
+            pass
+
         return jsonify({
             'success': True,
             'user': {
