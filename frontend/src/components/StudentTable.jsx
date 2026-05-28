@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useMemo } from 'react'
 import StatusBadge from './StatusBadge'
 import ProgressBar from './ProgressBar'
 
@@ -15,7 +15,9 @@ function StudentTable({ students, onViewStudent, showDepartment = false, onHideS
     }
   }
 
-  const sortedStudents = [...students].sort((a, b) => {
+  // Memoize so we don't re-sort the whole (possibly 1,000+ row) list on every
+  // parent re-render — only when the data or sort changes.
+  const sortedStudents = useMemo(() => [...students].sort((a, b) => {
     let aValue, bValue
 
     switch (sortField) {
@@ -51,7 +53,7 @@ function StudentTable({ students, onViewStudent, showDepartment = false, onHideS
     if (aValue < bValue) return sortDirection === 'asc' ? -1 : 1
     if (aValue > bValue) return sortDirection === 'asc' ? 1 : -1
     return 0
-  })
+  }), [students, sortField, sortDirection])
 
   const SortIcon = ({ field }) => {
     if (sortField !== field) {
@@ -153,8 +155,6 @@ function StudentTable({ students, onViewStudent, showDepartment = false, onHideS
             {sortedStudents.map((student, index) => (
               <tr
                 key={student.id || `${student.email}-${index}`}
-                className="animate-fadeIn"
-                style={{ animationDelay: `${index * 20}ms` }}
               >
                 <td>
                   <div>
