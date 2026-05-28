@@ -1306,14 +1306,22 @@ class AbsorbAPIClient:
 
         failures = auth_failures + other_failures
 
-        # If EVERY student fetch failed with 401, this is a total token failure,
-        # not a real empty department. Raise so the caller refreshes + retries
-        # instead of returning [] — which get_cached_students would cache and
-        # then serve as "no students" for the full 5-min TTL even after the
-        # token recovers. (Partial failures still return the students we got.)
-        if total > 0 and len(students_data) == 0 and auth_failures > 0:
+        # Token-failure guard. If the token was revoked mid-fan-out (e.g. a
+        # concurrent same-account load on another tab/dept), a MAJORITY of the
+        # per-student fetches 401 and we end up with a catastrophically partial
+        # result — seen in the wild: 12 of 246 because the token died partway.
+        # Returning that partial gets it CACHED for 5 min, so the user sees "12
+        # students" until they manually Sync. Raise instead so the caller
+        # refreshes the token + retries the whole fetch (which recovers the full
+        # set, exactly like the Sync button does). A SMALL number of 401s among
+        # many is still tolerated (transient per-call load-balancer hiccups) so
+        # we don't needlessly retry a basically-complete load.
+        if total > 0 and auth_failures > 0 and (
+            len(students_data) == 0 or auth_failures >= total * 0.5
+        ):
             raise AbsorbAPIError(
-                f"All {total} student fetches failed with 401 - token expired", 401
+                f"{auth_failures}/{total} student fetches failed with 401 — "
+                f"token revoked mid-fetch (not caching this partial)", 401
             )
 
         if failures > 0:
