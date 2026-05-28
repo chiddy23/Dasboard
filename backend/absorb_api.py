@@ -831,13 +831,23 @@ class AbsorbAPIClient:
         all_attempts: List[Dict[str, Any]] = []
 
         def _fetch_for_lesson(lesson):
-            # If the lesson object itself carries an inline attempts array,
-            # prefer that — saves the round trip entirely.
-            inline = lesson.get('attempts') or lesson.get('Attempts')
+            # The lesson's 'attempts' field is either an inline ARRAY of attempt
+            # dicts (rare) or an integer COUNT of attempts (common).
+            inline = lesson.get('attempts')
+            if inline is None:
+                inline = lesson.get('Attempts')
+
             if isinstance(inline, list) and inline and isinstance(inline[0], dict):
-                print(f"[API] lesson has INLINE attempts array ({len(inline)} items) — using without separate fetch")
+                # Inline attempts array — use it, no round trip.
                 raw = inline
             else:
+                # SKIP the per-lesson /attempts call when the count is 0. Most
+                # lessons have zero attempts, and fetching each one just to get
+                # back an empty list is the bulk of the modal's API calls (and
+                # the lag the user feels). The lessons response already gives us
+                # the count, so a 0 means "nothing to fetch."
+                if isinstance(inline, (int, float)) and inline == 0:
+                    return []
                 # Per Absorb docs the URL wants the course-level LessonId,
                 # which lives under the 'lessonId' key on the lesson enrollment
                 # object. The bare 'id' field is the per-user lesson-enrollment
