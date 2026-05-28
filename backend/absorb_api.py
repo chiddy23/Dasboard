@@ -1258,9 +1258,9 @@ class AbsorbAPIClient:
         # trades a little speed for completeness. Env-tunable so we can dial it
         # in on Render without a redeploy: ABSORB_FETCH_WORKERS (default 16).
         try:
-            _cap = int(_os.getenv('ABSORB_FETCH_WORKERS', '16'))
+            _cap = int(_os.getenv('ABSORB_FETCH_WORKERS', '28'))
         except (ValueError, TypeError):
-            _cap = 16
+            _cap = 28
         _cap = max(1, min(_cap, 50))
         max_workers = min(_cap, total) if total > 0 else 1
 
