@@ -189,33 +189,35 @@ def get_student_details(student_id):
         client = AbsorbAPIClient()
         client.set_token(g.absorb_token)
 
-        # Fetch the student DIRECTLY by ID — one lightweight /users/{id} call.
-        # Previously this fetched the ENTIRE department user list
-        # (get_users_by_department) just to locate one student. On a large dept
-        # (1,000+ users) that re-ran the whole lastLoginDate bucket-split fetch
-        # on every modal open: slow (~10s, "freezes") and fragile (it 401'd
-        # under token churn and failed the modal entirely). The student's GUID
-        # already comes from the dashboard list the user loaded, so a single
-        # by-id fetch is all we need — and on a 401 the retry decorator only has
-        # to refresh + replay one light call, not a 14-bucket fan-out.
-        try:
-            student = client.get_user_by_id(student_id)
-        except AbsorbAPIError as e:
-            # A 401 is a stale token, not a missing student — re-raise so the
-            # @absorb_retry_on_401 decorator refreshes + retries instead of
-            # returning a misleading 404.
-            if e.status_code == 401:
-                raise
-            print(f"[STUDENT DETAIL] Direct fetch failed for {student_id}: {e}")
-            return jsonify({
-                'success': False,
-                'error': 'Student not found'
-            }), 404
+        # Get users in department to verify student belongs to this department
+        users = client.get_users_by_department(g.department_id)
+
+        # Find the student (case-insensitive comparison)
+        student = None
+        student_id_lower = student_id.lower()
+        for user in users:
+            user_id = (user.get('id') or user.get('Id') or '').lower()
+            if user_id == student_id_lower:
+                student = user
+                break
+
+        # If not found in department, try direct fetch by ID (works for admin users across departments)
         if not student:
-            return jsonify({
-                'success': False,
-                'error': 'Student not found'
-            }), 404
+            print(f"[STUDENT DETAIL] Student {student_id} not in department {g.department_id}, trying direct fetch...")
+            try:
+                student = client.get_user_by_id(student_id)
+                print(f"[STUDENT DETAIL] Successfully fetched cross-department student: {student.get('emailAddress', 'unknown')}")
+            except AbsorbAPIError as e:
+                # A 401 here is a stale token, not a missing student — re-raise
+                # so the @absorb_retry_on_401 decorator refreshes + retries the
+                # whole route instead of us returning a misleading 404.
+                if e.status_code == 401:
+                    raise
+                print(f"[STUDENT DETAIL] Direct fetch failed: {e}")
+                return jsonify({
+                    'success': False,
+                    'error': 'Student not found'
+                }), 404
 
         # Get all enrollments for this student
         enrollments = client.get_user_enrollments(student_id)
