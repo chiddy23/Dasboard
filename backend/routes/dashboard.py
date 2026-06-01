@@ -168,6 +168,16 @@ _refresh_lock = threading.Lock()
 # fresh token is visible immediately. Accessed only under _refresh_lock.
 _latest_user_tokens = {}
 
+# Process-global set of currently-logged-in users. Updated by login (add) and
+# logout (remove). Read by _refresh_user_absorb_token — if a user has logged
+# out, their in-flight requests (which Flask doesn't abort on client
+# disconnect) must NOT re-Authenticate, because that would mint a fresh chad
+# token that revokes the NEXT login's token. That's the "first login boots me,
+# second works 10s later" pattern — the zombie retry loop from attempt 1 wars
+# with attempt 2's fresh token. Bailing out of refresh kills the zombie.
+_active_user_logins = set()
+_active_logins_lock = threading.Lock()
+
 
 def _refresh_lock_path(user_email: str) -> str:
     """Return a per-user lockfile path for cross-process coordination.
@@ -225,6 +235,21 @@ def _refresh_user_absorb_token():
     username = user_data.get('username') or user_data.get('email')
     if not username:
         print('[TOKEN REFRESH] No username in session — cannot refresh')
+        return False
+
+    # Zombie-request guard. Flask doesn't abort in-flight requests when the
+    # browser disconnects, so an /students request that 401-stormed during
+    # attempt 1 can still be cycling through its retry loop AFTER the user
+    # has clicked logout AND logged in again. If we /Authenticate from that
+    # zombie now, we mint a fresh chad token that REVOKES the next login's
+    # token, causing attempt 2 to also fail. Check the process-global active-
+    # logins set: if this user is NO LONGER logged in (logout cleared them),
+    # the request is a zombie — bail without re-Auth-ing.
+    uname_key_check = (username or '').lower().strip()
+    with _active_logins_lock:
+        still_active = uname_key_check in _active_user_logins
+    if not still_active:
+        print(f'[TOKEN REFRESH] Skipping refresh — user {uname_key_check} is no longer logged in (zombie request)')
         return False
 
     lock_path = _refresh_lock_path(username)

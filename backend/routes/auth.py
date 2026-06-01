@@ -132,6 +132,18 @@ def login():
         except Exception:
             pass
 
+        # Register this user as actively logged in. Any zombie /students or
+        # /summary retry loop still alive on the server from a prior session
+        # will check this set before re-Auth-ing; a logged-out user is a
+        # zombie and won't /Authenticate, so it can't revoke this fresh
+        # login's chad token. See _refresh_user_absorb_token guard.
+        try:
+            from routes.dashboard import _active_user_logins, _active_logins_lock
+            with _active_logins_lock:
+                _active_user_logins.add((username or '').lower().strip())
+        except Exception:
+            pass
+
         return jsonify({
             'success': True,
             'user': {
@@ -169,7 +181,22 @@ def logout():
     Returns:
         JSON response confirming logout
     """
+    # Capture username BEFORE clearing the session so we can deregister this
+    # user from the active-logins set. Any in-flight /students or /summary
+    # request from this session will keep running on the server (Flask doesn't
+    # abort on browser disconnect) and will hit the retry loop. Removing the
+    # user here makes _refresh_user_absorb_token bail instead of minting a
+    # zombie /Authenticate that would revoke the user's NEXT login token.
+    user_data = session.get('user') or {}
+    uname = (user_data.get('username') or user_data.get('email') or '').lower().strip()
     session.clear()
+    if uname:
+        try:
+            from routes.dashboard import _active_user_logins, _active_logins_lock
+            with _active_logins_lock:
+                _active_user_logins.discard(uname)
+        except Exception:
+            pass
     return jsonify({
         'success': True,
         'message': 'Logged out successfully'
