@@ -1271,6 +1271,22 @@ function Dashboard({ user, department, onLogout, initialData }) {
     )
   }
 
+  // Resolved primary department name. The `department` prop comes from the
+  // login response; if login's get_department call 401'd on Absorb, the
+  // session stores the literal 'Department' placeholder and that's what
+  // shows in the header. Once a multi-dept fetch completes, departmentMeta
+  // carries the real name resolved from user records — prefer that when
+  // available. Plain prop fallback otherwise.
+  const primaryDeptName = (
+    departmentMeta.find(
+      d => d.id === department?.id
+        && d.status === 'ok'
+        && d.name
+        && d.name !== 'Department'
+        && d.name !== 'Unknown'
+    )?.name
+  ) || department?.name
+
   return (
     <div className="min-h-screen bg-gray-100">
       {/* Header */}
@@ -1286,7 +1302,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
               />
               <div>
                 <h1 className="text-xl font-bold text-white">Licensed to Launch Dashboard</h1>
-                <p className="text-sm text-ji-blue-light">{department?.name}</p>
+                <p className="text-sm text-ji-blue-light">{primaryDeptName}</p>
               </div>
             </div>
 
@@ -1423,7 +1439,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
                     Departments ({1 + extraDepartments.length})
                   </span>
                   <span className="px-2 py-0.5 bg-ji-blue-bright/10 text-ji-blue-bright text-xs rounded-full font-medium">
-                    {department?.name || 'Primary'}
+                    {primaryDeptName || 'Primary'}
                   </span>
                   {departmentMeta
                     .filter(d => d.status === 'ok' && d.id !== department?.id)
