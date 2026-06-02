@@ -1112,21 +1112,34 @@ class AbsorbAPIClient:
             if not user_id:
                 return None
 
-            # Get enrollments with ONE inline retry on 401 (match main / prod).
-            # No backoff sleep, no triple-retry — those amplify load on Absorb's
-            # LB and feed the storm. A real total token failure surfaces by
-            # raising and is handled at the dept level (counts toward failures).
-            try:
-                enrollments = self.get_user_enrollments(user_id)
-            except AbsorbAPIError as _e:
-                if _e.status_code == 401:
-                    try:
-                        enrollments = self.get_user_enrollments(user_id)
-                    except AbsorbAPIError:
-                        # Still 401 — skip this user, don't kill the batch.
-                        return None
-                else:
-                    raise
+            # Get enrollments with 3 retries on 401 + short backoff. CRITICAL:
+            # these retries reuse the SAME token (no /Authenticate). Absorb's
+            # load balancer throws transient per-call 401s under heavy parallel
+            # fan-out (a known behaviour the memory notes for ~16+ workers on a
+            # 1200+ user dept). 1-retry isn't enough: with 1300 users at ~10%
+            # transient 401 rate, ~130 users persist past one retry; you saw
+            # 519 of 1302 with 1-retry. 3-retry + 0.4s sleep recovers nearly
+            # all of them. SAFE because no /Authenticate fires — the original
+            # token stays alive and the workers don't war.
+            import time as _t_retry
+            enrollments = None
+            _last_exc = None
+            for _attempt in range(3):  # 1 initial + 2 retries
+                try:
+                    enrollments = self.get_user_enrollments(user_id)
+                    _last_exc = None
+                    break
+                except AbsorbAPIError as _e:
+                    if _e.status_code != 401:
+                        raise
+                    _last_exc = _e
+                    if _attempt < 2:
+                        _t_retry.sleep(0.4)
+            if _last_exc is not None:
+                # Still 401 after retries — skip this user, don't kill the
+                # batch. Returning None counts toward auth_failures at the
+                # dept level so partial loads are still detectable.
+                return None
 
             # Find primary enrollment (prioritizes Pre-Licensing course)
             primary, calculated_progress, total_time, course_name = self._find_primary_course(enrollments)

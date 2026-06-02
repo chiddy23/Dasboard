@@ -12,28 +12,37 @@ is imported lazily inside the decorator to break the import cycle.
 import time
 from functools import wraps
 
-# A route can make several sequential Absorb calls (the student-detail modal
-# does get_users_by_department -> get_user_enrollments -> lesson/attempt
-# fetches). Under Absorb's single-session-per-account model the token can be
-# revoked again mid-route (e.g. another tab/deployment re-authed, or a fresh
-# token hasn't propagated across Absorb's backend nodes yet). One retry isn't
-# always enough, so retry a few times with a short backoff between attempts.
-_MAX_401_RETRIES = 3
-_RETRY_BACKOFF_SECONDS = 0.6
+# Tiered retry to avoid the cross-request token war.
+#
+# Old design: any 401 → /Authenticate(chad) → mint a fresh token → retry.
+# Problem: if a big dept fetch is currently fanning out 28 enrollment workers
+# elsewhere in the process, that /Authenticate REVOKES their token. They all
+# 401, return None, and the dept comes back partial — e.g. Spencer 519/1302.
+#
+# New design: first try inline-retry with the SAME token (handles Absorb's
+# transient per-call LB 401s without touching the auth state at all). Only
+# escalate to a real refresh if the token genuinely seems dead.
+_INLINE_RETRIES = 2          # cheap retries with same token
+_INLINE_BACKOFF_SECONDS = 0.4
+_REFRESH_RETRIES = 1         # final escalation: refresh + retry
+_REFRESH_BACKOFF_SECONDS = 0.6
 
 
 def absorb_retry_on_401(f):
-    """Decorator: if the wrapped route raises AbsorbAPIError(401), refresh the
-    user's Absorb token (locked helper) and retry the whole route — up to
-    _MAX_401_RETRIES times. If the refresh fails or all retries 401, the error
-    propagates.
+    """Decorator: tolerate 401s on routes that hit Absorb.
 
-    Apply to any @login_required route that calls Absorb APIs so that token
-    expiry (or a transient revocation) doesn't immediately kick the user to
-    the login screen.
+    Strategy:
+      1. Run the route.
+      2. On 401, retry inline up to _INLINE_RETRIES times with the same
+         token. Absorb's load balancer throws transient per-call 401s under
+         load — sleeping briefly and retrying recovers most of these without
+         minting a new token.
+      3. If still failing, escalate ONCE: refresh the token and retry. This
+         minting can revoke other in-flight requests' tokens, so we only do
+         it when inline-retry has clearly failed (token genuinely dead).
+      4. Otherwise propagate.
 
-    Must be placed AFTER @login_required:
-
+    Apply AFTER @login_required:
         @route(...)
         @login_required
         @absorb_retry_on_401
@@ -42,27 +51,36 @@ def absorb_retry_on_401(f):
     """
     @wraps(f)
     def wrapper(*args, **kwargs):
-        # Lazy imports to break circular dependency
         from absorb_api import AbsorbAPIError
         from routes.dashboard import _refresh_user_absorb_token
 
-        attempt = 0
-        while True:
+        # Phase 1: inline retries with same token (no /Authenticate).
+        for _attempt in range(1 + _INLINE_RETRIES):
             try:
                 return f(*args, **kwargs)
             except AbsorbAPIError as e:
                 if e.status_code != 401:
                     raise
-                attempt += 1
-                if attempt > _MAX_401_RETRIES:
-                    # Exhausted retries — let it propagate.
+                if _attempt < _INLINE_RETRIES:
+                    if _INLINE_BACKOFF_SECONDS:
+                        time.sleep(_INLINE_BACKOFF_SECONDS)
+                    continue
+
+        # Phase 2: escalate to real refresh. Last resort because the new
+        # token revokes everyone else's chad session in this process.
+        for _attempt in range(_REFRESH_RETRIES):
+            if not _refresh_user_absorb_token():
+                # Refresh failed (no creds / zombie) — give up.
+                raise AbsorbAPIError("Session expired. Please log in again.", 401)
+            if _REFRESH_BACKOFF_SECONDS:
+                time.sleep(_REFRESH_BACKOFF_SECONDS)
+            try:
+                return f(*args, **kwargs)
+            except AbsorbAPIError as e:
+                if e.status_code != 401:
                     raise
-                if not _refresh_user_absorb_token():
-                    # Can't refresh (no stored creds / refresh failed) — give up.
-                    raise
-                # Brief backoff so the freshly-minted token has time to
-                # propagate across Absorb's backend before we retry.
-                if _RETRY_BACKOFF_SECONDS:
-                    time.sleep(_RETRY_BACKOFF_SECONDS)
-                # loop and retry the whole route
+                # try refresh again on the next loop iteration
+
+        # Out of escalation attempts.
+        raise AbsorbAPIError("Session expired. Please log in again.", 401)
     return wrapper
