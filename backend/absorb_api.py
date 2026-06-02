@@ -1288,9 +1288,14 @@ class AbsorbAPIClient:
                 if result:
                     students_data.append(result)
 
-                # Progress update every 10 students
+                # Progress update every 10 students — gated on VERBOSE_SYNC so
+                # Spencer's 130+ progress lines don't eat the 100-line Render
+                # free-tier log buffer and crowd out the actual diagnostic
+                # lines we need when something fails. Final summary line below
+                # always prints.
                 if completed % 10 == 0 or completed == total:
-                    print(f"[API] Processed {completed}/{total} students...")
+                    if _os.getenv('VERBOSE_SYNC') == '1':
+                        print(f"[API] Processed {completed}/{total} students...")
 
         failures = auth_failures + other_failures
         # Majority-401 guard removed — it was the trigger for the cascade

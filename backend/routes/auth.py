@@ -197,6 +197,15 @@ def logout():
                 _active_user_logins.discard(uname)
         except Exception:
             pass
+        # Clear the refresh-debounce stamp so a fresh login isn't held back by
+        # a stale prior session's mint time. The next login mints a fresh token
+        # which Absorb will revoke any prior with; debouncing against a token
+        # we don't even have anymore would just defer the new mint pointlessly.
+        try:
+            from routes.dashboard import _last_mint_at
+            _last_mint_at.pop(uname, None)
+        except Exception:
+            pass
     return jsonify({
         'success': True,
         'message': 'Logged out successfully'

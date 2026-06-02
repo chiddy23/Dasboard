@@ -178,6 +178,20 @@ _latest_user_tokens = {}
 _active_user_logins = set()
 _active_logins_lock = threading.Lock()
 
+# Process-global wall-clock of the most recent successful /Authenticate per
+# user. Used by _refresh_user_absorb_token to debounce sequential refresh
+# requests that the existing CAS arms miss. The two existing CAS checks only
+# fire when entry_token differs from the cached token — but when a sequence
+# of route calls each enters refresh AFTER the prior one finished (so session
+# already has the freshly-minted token), entry_token equals the cached token
+# and both CAS arms miss. Each then mints again, revoking the prior. The
+# debounce closes this hole by skipping the mint when ANY mint happened
+# within _MIN_MINT_INTERVAL_SEC. Uses time.monotonic() — wall-clock immune
+# to NTP jumps. Cleared in the logout handler so a fresh login isn't
+# debounced against a stale prior session.
+_last_mint_at = {}
+_MIN_MINT_INTERVAL_SEC = 5.0
+
 
 def _refresh_lock_path(user_email: str) -> str:
     """Return a per-user lockfile path for cross-process coordination.
@@ -299,6 +313,32 @@ def _refresh_user_absorb_token():
                 print('[TOKEN REFRESH] CAS hit (shared in-memory token) — reusing concurrent refresh')
                 return True
 
+            # Time-debounce arm. The two CAS checks above only fire when
+            # entry_token != cached. Sequential refreshes from independent
+            # route calls (one finishes, next starts) see entry_token ==
+            # cached (both updated by the prior mint) → both CAS arms miss →
+            # each route mints again, revoking the prior. That's the 5
+            # back-to-back [TOKEN REFRESH] events the 2026-06-02 12:26 log
+            # showed. If ANY mint happened in the last _MIN_MINT_INTERVAL_SEC
+            # AND we have a cached token AND it differs from entry_token,
+            # reuse it without re-Auth-ing. Strict superset of CAS — same
+            # lock, same invariants. The shared_token != entry_token check
+            # prevents over-debouncing past a genuine token expiry: if the
+            # cached token IS what we entered with and it's failing, we DO
+            # need a fresh mint.
+            import time as _t_dbnc
+            _now_mono = _t_dbnc.monotonic()
+            _last_mint = _last_mint_at.get(uname_key, 0.0)
+            if (_now_mono - _last_mint < _MIN_MINT_INTERVAL_SEC
+                    and shared_token
+                    and shared_token != entry_token):
+                g.absorb_token = shared_token
+                current_user_data['token'] = shared_token
+                session['user'] = current_user_data
+                session.modified = True
+                print(f'[TOKEN REFRESH] Debounce hit ({_now_mono - _last_mint:.1f}s since last mint) — reusing cached token')
+                return True
+
             # No sibling refresh — proceed with actual re-auth.
             enc_pwd = current_user_data.get('absorbPasswordEnc')
             if not enc_pwd:
@@ -342,6 +382,9 @@ def _refresh_user_absorb_token():
             # Publish to the process-global store so concurrent requests in this
             # worker reuse this token instead of re-authing (see _latest_user_tokens).
             _latest_user_tokens[(username or '').lower().strip()] = new_token
+            # Stamp the mint time for the debounce arm above. Use monotonic so
+            # NTP jumps can't accidentally suppress refreshes.
+            _last_mint_at[(username or '').lower().strip()] = _t_dbnc.monotonic()
             print(f'[TOKEN REFRESH] Refreshed Absorb token for {username} (locked)')
             return True
         finally:

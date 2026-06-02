@@ -296,7 +296,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
     }
   }
 
-  const fetchMultiDeptStudents = async () => {
+  const fetchMultiDeptStudents = async (_isRetry = false) => {
     setLoading(true)
     setError(null)
     try {
@@ -311,13 +311,29 @@ function Dashboard({ user, department, onLogout, initialData }) {
       }
       const data = await res.json()
       if (data.success) {
+        // Silent auto-retry on PARTIAL failures only — at least one dept
+        // succeeded AND at least one failed with a token-expired error AND
+        // we haven't already retried. NOT triggered when everything failed
+        // (count==0) — that's a legitimate "no data" state and re-running
+        // would just hammer Absorb. The backend's refresh-debounce + the
+        // 5-back-to-back-mints fix should make this rare; this is the
+        // safety net for the residual cases.
+        const failed = (data.departments || []).filter(d => d.status === 'error')
+        const okCount = (data.departments || []).filter(d => d.status === 'ok').length
+        const expiredCount = failed.filter(d => /session expired|authoriz/i.test(d.error || '')).length
+        const isPartial = okCount > 0 && failed.length > 0
+        if (!_isRetry && isPartial && expiredCount > 0) {
+          console.log('[DASHBOARD] Multi-dept partial — silent auto-retry in 1.5s')
+          setTimeout(() => { fetchMultiDeptStudents(true) }, 1500)
+          return
+        }
         setStudents(data.students)
         setSummary(data.summary)
         setDepartmentMeta(data.departments || [])
         setLastSynced(new Date())
 
-        // Warn about failed departments
-        const failed = (data.departments || []).filter(d => d.status === 'error')
+        // Warn about failed departments (only after the retry path; first-pass
+        // partials get a silent retry instead of a banner).
         if (failed.length > 0) {
           setDeptError(`Could not load ${failed.length} department(s): ${failed.map(d => d.error || d.id).join(', ')}`)
         }
@@ -641,7 +657,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
     }
   }, [onLogout])
 
-  const handleSync = async () => {
+  const handleSync = async (_isRetry = false) => {
     setSyncing(true)
     setError(null)
 
@@ -669,6 +685,18 @@ function Dashboard({ user, department, onLogout, initialData }) {
       const data = await response.json()
 
       if (data.success) {
+        // Silent auto-retry on PARTIAL failures only — see fetchMultiDeptStudents.
+        // Same gate: at least one dept ok AND at least one expired-error AND
+        // we haven't retried. NOT on count==0 (legitimate empty).
+        const _failed = (data.departments || []).filter(d => d.status === 'error')
+        const _okCount = (data.departments || []).filter(d => d.status === 'ok').length
+        const _expiredCount = _failed.filter(d => /session expired|authoriz/i.test(d.error || '')).length
+        const _isPartial = _okCount > 0 && _failed.length > 0
+        if (!_isRetry && _isPartial && _expiredCount > 0) {
+          console.log('[SYNC] Partial — silent auto-retry in 1.5s')
+          setTimeout(() => { handleSync(true) }, 1500)
+          return
+        }
         setSummary(data.summary)
         setStudents(data.students)
         if (data.departments) setDepartmentMeta(data.departments)
