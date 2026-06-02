@@ -536,33 +536,21 @@ class AbsorbAPIClient:
     def _fetch_users_page(self, filter_expr: str, limit: int = 1000):
         """Execute a single /users query. Returns (users_list, total_items).
 
-        total_items may be None if the response shape doesn't include it.
-        Raises AbsorbAPIError on 401 (after a few backoff retries); returns
-        ([], None) on other errors so callers (bucket workers) don't explode
-        the whole fetch.
+        Single-shot — no 401 retry. Match prod (main) behavior.
+        The previous 3-retry loop with sleep(0.4) hammered Absorb under
+        bucket-split fan-out and contributed to the chad token-storm we
+        chased on staging. Prod's main has no inner retry and loads
+        Spencer's 1302-user bucket-split fine.
 
-        The year-bucket fan-out issues ~13 of these in parallel, and Absorb's
-        load balancer throws transient 401s on individual calls under that load
-        even with a valid token. Without a retry the bucket worker just returns
-        [] and silently drops those users (this is the "missing 295" on a 1,295-
-        user dept). Retry the SAME-token call a few times with a short backoff
-        so an overloaded node can recover. We don't refresh here — a genuine
-        total token failure surfaces by raising so the route-level retry
-        wrapper refreshes + refetches.
+        Raises AbsorbAPIError on 401; returns ([], None) on other errors
+        so bucket workers don't explode the whole fetch.
         """
-        import time as _t
         url = f"{self.base_url}/users"
         params = {"_filter": filter_expr, "_limit": limit, "_offset": 0}
 
-        response = None
-        for _attempt in range(3):  # 1 initial + 2 retries
-            response = self._session.get(
-                url, params=params, headers=self._get_headers(), timeout=120
-            )
-            if response.status_code == 401 and _attempt < 2:
-                _t.sleep(0.4)
-                continue
-            break
+        response = self._session.get(
+            url, params=params, headers=self._get_headers(), timeout=120
+        )
 
         if response.status_code == 401:
             print(f"[API] Token expired - need to re-authenticate")
@@ -1124,34 +1112,21 @@ class AbsorbAPIClient:
             if not user_id:
                 return None
 
-            # Get enrollments, with a few inline retries on 401 to absorb the
-            # transient per-call 401s Absorb's load balancer throws under heavy
-            # parallel fan-out. A short backoff between tries lets an overloaded
-            # node recover. We deliberately do NOT refresh the token here:
-            # worker threads run outside the Flask request context (no g /
-            # session), so a real token refresh can't happen here — a genuine
-            # total token failure is surfaced by re-raising, and the route-level
-            # retry wrapper refreshes + refetches.
-            import time as _t
-            enrollments = None
-            _last_exc = None
-            for _attempt in range(3):  # 1 initial + 2 retries
-                try:
-                    enrollments = self.get_user_enrollments(user_id)
-                    _last_exc = None
-                    break
-                except AbsorbAPIError as _e:
-                    if _e.status_code != 401:
-                        raise
-                    _last_exc = _e
-                    if _attempt < 2:
-                        _t.sleep(0.4)
-            if _last_exc is not None:
-                # Still 401 after retries — re-raise so the orchestrator can
-                # count auth failures and tell a transient single-call hiccup
-                # apart from a total token failure (which must NOT be cached as
-                # an empty student list).
-                raise _last_exc
+            # Get enrollments with ONE inline retry on 401 (match main / prod).
+            # No backoff sleep, no triple-retry — those amplify load on Absorb's
+            # LB and feed the storm. A real total token failure surfaces by
+            # raising and is handled at the dept level (counts toward failures).
+            try:
+                enrollments = self.get_user_enrollments(user_id)
+            except AbsorbAPIError as _e:
+                if _e.status_code == 401:
+                    try:
+                        enrollments = self.get_user_enrollments(user_id)
+                    except AbsorbAPIError:
+                        # Still 401 — skip this user, don't kill the batch.
+                        return None
+                else:
+                    raise
 
             # Find primary enrollment (prioritizes Pre-Licensing course)
             primary, calculated_progress, total_time, course_name = self._find_primary_course(enrollments)
@@ -1305,24 +1280,13 @@ class AbsorbAPIClient:
                     print(f"[API] Processed {completed}/{total} students...")
 
         failures = auth_failures + other_failures
-
-        # Token-failure guard. If the token was revoked mid-fan-out (e.g. a
-        # concurrent same-account load on another tab/dept), a MAJORITY of the
-        # per-student fetches 401 and we end up with a catastrophically partial
-        # result — seen in the wild: 12 of 246 because the token died partway.
-        # Returning that partial gets it CACHED for 5 min, so the user sees "12
-        # students" until they manually Sync. Raise instead so the caller
-        # refreshes the token + retries the whole fetch (which recovers the full
-        # set, exactly like the Sync button does). A SMALL number of 401s among
-        # many is still tolerated (transient per-call load-balancer hiccups) so
-        # we don't needlessly retry a basically-complete load.
-        if total > 0 and auth_failures > 0 and (
-            len(students_data) == 0 or auth_failures >= total * 0.5
-        ):
-            raise AbsorbAPIError(
-                f"{auth_failures}/{total} student fetches failed with 401 — "
-                f"token revoked mid-fetch (not caching this partial)", 401
-            )
+        # Majority-401 guard removed — it was the trigger for the cascade
+        # storm. When prod's chad token is healthy (every prod load proves it),
+        # we don't get majority 401s anyway. When chad WAS warring with itself
+        # (caused by the now-removed _get_cached_students_with_retry wrapper),
+        # the guard re-fired the wrapper's refresh → another mint → another
+        # round of revocations. Tolerate partial loads like prod's main does;
+        # the user can always Sync if they suspect a partial.
 
         if failures > 0:
             print(f"[API] COMPLETE: {len(students_data)} students with enrollment data ({failures} skipped due to errors)")

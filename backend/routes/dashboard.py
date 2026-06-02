@@ -422,33 +422,23 @@ def _expired_dept_ids(dept_meta):
 
 
 def _get_cached_students_with_retry(dept_id, max_retries=3):
-    """Wrap get_cached_students with token refresh + retry on 401.
+    """Pass-through to get_cached_students — NO retry, NO refresh.
 
-    Used by single-dept endpoints (/summary, /students) so the first
-    request after login doesn't hard-crash the frontend with a 401 when a
-    stale/just-revoked Absorb token is in play. Refreshes with the user's
-    own stored credentials (tenant isolation preserved) and retries up to
-    max_retries times with a short backoff — a freshly-minted token can be
-    revoked again (another tab/deployment) or not yet propagated across
-    Absorb's backend, so one retry isn't always enough.
+    Removed the outer 401 retry+refresh chain. Each retry called
+    _refresh_user_absorb_token → /Authenticate(chad) → minted a fresh
+    chad token that REVOKED the request's own in-flight token (held
+    by 28 enrollment workers mid-fetch) → those workers all start
+    401-ing → wrapper refreshes again → cascading storm. This is the
+    "every fresh token dies within 1-3 seconds" pattern we chased all
+    day on staging while prod (main, no wrapper) loaded Spencer's
+    1302 students in 26s with ZERO 401 events on the same chad account.
+
+    Match prod: just call get_cached_students directly. If it 401s,
+    the route handler returns the error and the user retries; far
+    rarer than the wrapper's own cascade. max_retries kept in the
+    signature for callers that pass it positionally.
     """
-    import time as _time
-    attempt = 0
-    while True:
-        try:
-            return get_cached_students(dept_id, g.absorb_token)
-        except AbsorbAPIError as e:
-            if e.status_code != 401:
-                raise
-            attempt += 1
-            if attempt > max_retries:
-                raise
-            if not _refresh_user_absorb_token():
-                raise
-            # Clear any partial/empty cache from the failed call so the retry
-            # re-fetches instead of serving a cached empty list.
-            invalidate_cache(dept_id)
-            _time.sleep(0.6)
+    return get_cached_students(dept_id, g.absorb_token)
 
 
 def get_quick_students(department_id, token):
