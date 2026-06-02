@@ -431,7 +431,22 @@ def _fetch_depts_collect(dept_ids, token, sequential=False):
                 })
         return all_formatted, dept_meta
 
-    with ThreadPoolExecutor(max_workers=min(10, len(dept_ids))) as executor:
+    # Dept-level concurrency cap. Each dept thread does its own enrollment
+    # fan-out (default 8 workers), so the per-dept worker count multiplies
+    # the effective load on Absorb. With 10-way dept parallelism + 8-way
+    # enrollment per dept, peak concurrent connections can hit 80. Adding
+    # 4 new cold-cache depts at once was 4×8=32 concurrent enrollment
+    # calls and that hit Absorb's LB 401 threshold (see 2026-06-02 13:08
+    # log — 4 of 4 new depts persistently 401'd through one retry round).
+    # Cap at 4 by default; env-tunable. Larger multi-dept loads will be
+    # slower but more reliable.
+    _dept_cap = 4
+    try:
+        import os as _os_dept
+        _dept_cap = max(1, min(10, int(_os_dept.getenv('MULTI_DEPT_WORKERS', '4'))))
+    except (ValueError, TypeError):
+        _dept_cap = 4
+    with ThreadPoolExecutor(max_workers=min(_dept_cap, len(dept_ids))) as executor:
         future_to_dept = {
             executor.submit(_fetch_dept_students, dept_id, token): dept_id
             for dept_id in dept_ids
@@ -448,6 +463,11 @@ def _fetch_depts_collect(dept_ids, token, sequential=False):
                     'id': dept_id, 'name': None, 'studentCount': 0,
                     'status': 'error', 'error': str(e),
                 })
+    # One-line summary so we can see at a glance which depts failed in a
+    # multi-dept call without digging through interleaved log noise.
+    _failed_ids = [m.get('id') for m in dept_meta if m.get('status') == 'error']
+    if _failed_ids:
+        print(f"[FETCH-SUMMARY] {len(dept_meta) - len(_failed_ids)} ok, {len(_failed_ids)} failed (cap={_dept_cap}): {_failed_ids}")
     return all_formatted, dept_meta
 
 
