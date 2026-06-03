@@ -1256,9 +1256,15 @@ class AbsorbAPIClient:
         # trades a little speed for completeness. Env-tunable so we can dial it
         # in on Render without a redeploy: ABSORB_FETCH_WORKERS (default 16).
         try:
-            _cap = int(_os.getenv('ABSORB_FETCH_WORKERS', '28'))
+            # 28 → 8 → 4 trajectory. 8 worked when chad was healthy but the
+            # sustained ~10 req/sec for ~2 min on Spencer 1305 was tipping
+            # chad into back-pressure mid-fan-out: bucket-split succeeded
+            # (14 calls = burst), then 1246 of 1305 enrollment fetches 401'd
+            # (marathon), producing 59/1305 (2026-06-03 log). 4 halves the
+            # sustained rate; Spencer ~3-4 min instead of ~2.
+            _cap = int(_os.getenv('ABSORB_FETCH_WORKERS', '4'))
         except (ValueError, TypeError):
-            _cap = 28
+            _cap = 4
         _cap = max(1, min(_cap, 50))
         max_workers = min(_cap, total) if total > 0 else 1
 
@@ -1308,6 +1314,13 @@ class AbsorbAPIClient:
 
         if failures > 0:
             print(f"[API] COMPLETE: {len(students_data)} students with enrollment data ({failures} skipped due to errors)")
+            # Detail line: tells us whether the failures were 401s (chad
+            # back-pressure / mid-fetch token death) or other errors
+            # (network, parse, etc.). When auth_failures dominates and
+            # success-rate is low, that's the back-pressure pattern —
+            # answer is lower ABSORB_FETCH_WORKERS or replace shared chad.
+            _success_rate = (len(students_data) / total * 100) if total > 0 else 0
+            print(f"[FAN-OUT FAILURES] total={total} success={len(students_data)} ({_success_rate:.1f}%) auth_401={auth_failures} other={other_failures} workers={max_workers}")
         else:
             print(f"[API] COMPLETE: {len(students_data)} students with enrollment data")
         return students_data
