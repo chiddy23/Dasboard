@@ -1256,15 +1256,15 @@ class AbsorbAPIClient:
         # trades a little speed for completeness. Env-tunable so we can dial it
         # in on Render without a redeploy: ABSORB_FETCH_WORKERS (default 16).
         try:
-            # 28 → 8 → 4 trajectory. 8 worked when chad was healthy but the
-            # sustained ~10 req/sec for ~2 min on Spencer 1305 was tipping
-            # chad into back-pressure mid-fan-out: bucket-split succeeded
-            # (14 calls = burst), then 1246 of 1305 enrollment fetches 401'd
-            # (marathon), producing 59/1305 (2026-06-03 log). 4 halves the
-            # sustained rate; Spencer ~3-4 min instead of ~2.
-            _cap = int(_os.getenv('ABSORB_FETCH_WORKERS', '4'))
+            # 28 → 8 → 4 → 6 trajectory. 8 finished Spencer (1305) in ~52s
+            # but tipped chad into back-pressure mid-fan-out (partial loads).
+            # 4 was safe rate-wise but BLEW THE 120s gunicorn timeout: 1305÷4
+            # = 326 batches × 0.5s = 165s → 110s timeout → boot (2026-06-03
+            # log L90-92). 6 splits the difference: 1305÷6 = 218 batches × 0.5s
+            # ≈ 110s, just under the timeout, AND a lower rate than 8.
+            _cap = int(_os.getenv('ABSORB_FETCH_WORKERS', '6'))
         except (ValueError, TypeError):
-            _cap = 4
+            _cap = 6
         _cap = max(1, min(_cap, 50))
         max_workers = min(_cap, total) if total > 0 else 1
 
