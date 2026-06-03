@@ -838,10 +838,19 @@ def sync_data():
         for dept_id in all_dept_ids:
             invalidate_cache(dept_id)
 
-        # Fetch all departments (parallel if multiple). Uses a helper so we
-        # can cheaply retry only the departments that hit an Absorb 401
-        # after transparently refreshing the user's token.
-        all_formatted, dept_meta = _fetch_depts_collect(all_dept_ids, g.absorb_token)
+        # Sync forces sequential dept fetching. Unlike /students/multi (which
+        # has cache hits for most depts and only cold-fetches the new ones),
+        # Sync invalidates ALL caches at once and forces a full re-fetch of
+        # every dept. Parallel cold-fetching 6+ depts simultaneously — each
+        # with its own 50-worker enrollment fan-out — was the heaviest
+        # operation we put on chad and pushed the account into back-pressure
+        # mid-burst, killing the freshly-minted token on first use (2026-06-03
+        # log: 0/6 depts succeeded even on sequential retry). Sequential from
+        # the start lets each dept's cold fan-out complete before the next
+        # starts. Slower but reliable — and Sync is a user-initiated
+        # "refresh everything" action where slow is acceptable, partial is
+        # not.
+        all_formatted, dept_meta = _fetch_depts_collect(all_dept_ids, g.absorb_token, sequential=True)
 
         expired_ids = _expired_dept_ids(dept_meta)
         if expired_ids and _refresh_user_absorb_token():
