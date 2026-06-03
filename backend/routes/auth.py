@@ -251,35 +251,24 @@ def get_session():
 def heartbeat():
     """Lightweight keepalive called by the frontend every 3 minutes.
 
-    Makes a single cheap Absorb call (/users?_limit=1, ~150ms) to keep the
-    token warm on Absorb's server side. If the call returns 401 (token went
-    stale), refreshes transparently using the stored encrypted credentials
-    via the locked helper — so the next real Absorb call from any route uses
-    a fresh token. Returns the current session expiry so the frontend can
-    optionally display it.
+    DO NOT make Absorb calls from this route. Per memory rules
+    (feedback_dashboard_absorb_auth_rules), a working heartbeat that pings
+    Absorb becomes a 3rd /Authenticate source that races sync_scheduler +
+    user routes → single-session-per-account token war. The previous
+    implementation accidentally enforced the no-Absorb-call invariant via
+    a NameError on `g.absorb_token` (g not imported), which Flask logged
+    as a full stack trace on EVERY heartbeat — ~22 lines per fire, every
+    3 min, drowning the 100-line Render free-tier log buffer and blocking
+    diagnosis of every actual bug (see 2026-06-03 log: 88 of 100 lines
+    were heartbeat tracebacks).
+
+    Fix: keep the route alive (frontend expects 200) but make it truly
+    a no-op. No Absorb call, no log spam. The session's tokenExpiresAt
+    is read straight from the session — no Bearer needed.
     """
-    from routes.dashboard import _refresh_user_absorb_token
-
-    client = AbsorbAPIClient()
-    client.set_token(g.absorb_token)
-
-    try:
-        resp = client._session.get(
-            f"{client.base_url}/users",
-            params={"_limit": 1},
-            headers=client._get_headers(),
-            timeout=10,
-        )
-        if resp.status_code == 401:
-            print('[HEARTBEAT] Token stale, refreshing')
-            _refresh_user_absorb_token()
-    except Exception:
-        # Best-effort keepalive; don't fail the heartbeat itself
-        pass
-
     user = get_current_user()
     return jsonify({
         'success': True,
         'status': 'alive',
-        'expiresAt': user.get('tokenExpiresAt') if user else None
+        'expiresAt': user.get('tokenExpiresAt') if user else None,
     })
