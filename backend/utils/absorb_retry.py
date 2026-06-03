@@ -24,8 +24,15 @@ from functools import wraps
 # escalate to a real refresh if the token genuinely seems dead.
 _INLINE_RETRIES = 2          # cheap retries with same token
 _INLINE_BACKOFF_SECONDS = 0.4
-_REFRESH_RETRIES = 1         # final escalation: refresh + retry
+_REFRESH_RETRIES = 1         # phase 2: refresh + retry
 _REFRESH_BACKOFF_SECONDS = 0.6
+# Phase 3 (last resort): after phase 2 fails, wait for the debounce window
+# to fully expire and try refreshing again. This recovers from chad's per-
+# call DOA state where a freshly-minted token dies on first use — the wait
+# lets Absorb's account state cool slightly AND ensures the next refresh
+# actually mints (vs the debounce reusing the dead one).
+_PHASE3_DELAY_SECONDS = 3.0
+_PHASE3_RETRIES = 1
 
 
 def absorb_retry_on_401(f):
@@ -80,6 +87,20 @@ def absorb_retry_on_401(f):
                 if e.status_code != 401:
                     raise
                 # try refresh again on the next loop iteration
+
+        # Phase 3: chad is in per-call DOA back-pressure (refresh-minted
+        # token died on first use). Wait past the debounce window so the
+        # next refresh attempt mints a genuinely fresh token, then try
+        # once more. This recovers the modal-fails-5x-in-a-row pattern.
+        for _attempt in range(_PHASE3_RETRIES):
+            time.sleep(_PHASE3_DELAY_SECONDS)
+            if not _refresh_user_absorb_token():
+                raise AbsorbAPIError("Session expired. Please log in again.", 401)
+            try:
+                return f(*args, **kwargs)
+            except AbsorbAPIError as e:
+                if e.status_code != 401:
+                    raise
 
         # Out of escalation attempts.
         raise AbsorbAPIError("Session expired. Please log in again.", 401)
