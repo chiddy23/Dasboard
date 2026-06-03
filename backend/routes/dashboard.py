@@ -853,16 +853,28 @@ def sync_data():
         all_formatted, dept_meta = _fetch_depts_collect(all_dept_ids, g.absorb_token, sequential=True)
 
         expired_ids = _expired_dept_ids(dept_meta)
-        if expired_ids and _refresh_user_absorb_token():
-            print(f"[SYNC] Retrying {len(expired_ids)} dept(s) after token refresh")
-            # Invalidate any caches touched by the failed attempts
-            for dept_id in expired_ids:
-                invalidate_cache(dept_id)
-            # Drop the expired error entries, keep successful ones
-            dept_meta = [m for m in dept_meta if m.get('id') not in expired_ids]
-            retry_formatted, retry_meta = _fetch_depts_collect(expired_ids, g.absorb_token, sequential=True)
-            all_formatted.extend(retry_formatted)
-            dept_meta.extend(retry_meta)
+        _ok_ids = [m.get('id') for m in dept_meta if m.get('status') == 'ok']
+        print(f"[SYNC DIAG] Initial fan-out done: {len(_ok_ids)} ok, {len(expired_ids)} expired → expired_ids={expired_ids}")
+        if expired_ids:
+            _refresh_ok = _refresh_user_absorb_token()
+            print(f"[SYNC DIAG] Refresh attempt returned: {_refresh_ok}")
+            if _refresh_ok:
+                print(f"[SYNC] Retrying {len(expired_ids)} dept(s) after token refresh — new g.absorb_token prefix={(g.absorb_token or '')[:8]}")
+                # Invalidate any caches touched by the failed attempts
+                for dept_id in expired_ids:
+                    invalidate_cache(dept_id)
+                # Drop the expired error entries, keep successful ones
+                dept_meta = [m for m in dept_meta if m.get('id') not in expired_ids]
+                retry_formatted, retry_meta = _fetch_depts_collect(expired_ids, g.absorb_token, sequential=True)
+                all_formatted.extend(retry_formatted)
+                dept_meta.extend(retry_meta)
+                # Post-retry counts so we can see if the retry round itself
+                # recovered everything, partially, or not at all.
+                _retry_ok = sum(1 for m in retry_meta if m.get('status') == 'ok')
+                _retry_err = sum(1 for m in retry_meta if m.get('status') == 'error')
+                print(f"[SYNC DIAG] Retry results: {_retry_ok} ok, {_retry_err} still failed")
+            else:
+                print(f"[SYNC DIAG] Refresh failed — keeping the {len(expired_ids)} expired entries as errors. Check earlier [TOKEN REFRESH] lines for cause (no creds / zombie / Absorb rejected).")
 
         # Sort
         all_formatted.sort(
