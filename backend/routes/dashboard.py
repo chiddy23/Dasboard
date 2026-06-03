@@ -431,21 +431,18 @@ def _fetch_depts_collect(dept_ids, token, sequential=False):
                 })
         return all_formatted, dept_meta
 
-    # Dept-level concurrency cap. Each dept thread does its own enrollment
-    # fan-out (default 8 workers), so the per-dept worker count multiplies
-    # the effective load on Absorb. With 10-way dept parallelism + 8-way
-    # enrollment per dept, peak concurrent connections can hit 80. Adding
-    # 4 new cold-cache depts at once was 4×8=32 concurrent enrollment
-    # calls and that hit Absorb's LB 401 threshold (see 2026-06-02 13:08
-    # log — 4 of 4 new depts persistently 401'd through one retry round).
-    # Cap at 4 by default; env-tunable. Larger multi-dept loads will be
-    # slower but more reliable.
-    _dept_cap = 4
+    # MATCH PROD: main hardcodes max_workers=min(10, len(dept_ids)) here.
+    # The 4-worker cap we'd set was calibrating around chad's bad state
+    # on staging, not the real ceiling. Prod handles 10 dept threads × 50
+    # enrollment workers without issue when the account is healthy. Drop
+    # the staging-specific cap; env var still wins if anyone wants to
+    # dial down for testing.
+    _dept_cap = 10
     try:
         import os as _os_dept
-        _dept_cap = max(1, min(10, int(_os_dept.getenv('MULTI_DEPT_WORKERS', '4'))))
+        _dept_cap = max(1, min(10, int(_os_dept.getenv('MULTI_DEPT_WORKERS', '10'))))
     except (ValueError, TypeError):
-        _dept_cap = 4
+        _dept_cap = 10
     with ThreadPoolExecutor(max_workers=min(_dept_cap, len(dept_ids))) as executor:
         future_to_dept = {
             executor.submit(_fetch_dept_students, dept_id, token): dept_id

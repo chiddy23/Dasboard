@@ -1256,15 +1256,17 @@ class AbsorbAPIClient:
         # trades a little speed for completeness. Env-tunable so we can dial it
         # in on Render without a redeploy: ABSORB_FETCH_WORKERS (default 16).
         try:
-            # 28 → 8 → 4 → 6 trajectory. 8 finished Spencer (1305) in ~52s
-            # but tipped chad into back-pressure mid-fan-out (partial loads).
-            # 4 was safe rate-wise but BLEW THE 120s gunicorn timeout: 1305÷4
-            # = 326 batches × 0.5s = 165s → 110s timeout → boot (2026-06-03
-            # log L90-92). 6 splits the difference: 1305÷6 = 218 batches × 0.5s
-            # ≈ 110s, just under the timeout, AND a lower rate than 8.
-            _cap = int(_os.getenv('ABSORB_FETCH_WORKERS', '6'))
+            # MATCH PROD: main branch hardcodes max_workers=min(50, total) at
+            # absorb_api.py:1150 with no env override on the prod service.
+            # Prod loads Spencer 1302/1302 in 26s on this same chad account.
+            # The 28→8→4→6 trajectory was calibrating around chad's bad
+            # session state on staging instead of fixing the real issue —
+            # but prod proves 50 works when the account is healthy. Drop the
+            # staging-specific calibration; match prod's setting and find
+            # out whether chad has cooled overnight. Env var still wins.
+            _cap = int(_os.getenv('ABSORB_FETCH_WORKERS', '50'))
         except (ValueError, TypeError):
-            _cap = 6
+            _cap = 50
         _cap = max(1, min(_cap, 50))
         max_workers = min(_cap, total) if total > 0 else 1
 
