@@ -139,8 +139,11 @@ def get_exam_students():
         elif is_user_sheet:
             from google_sheets import fetch_user_exam_sheet
             sheet_students = fetch_user_exam_sheet(sheet_settings['sheet_id'], user_email)
-        else:
+        elif is_admin:
             sheet_students = fetch_exam_sheet()
+        else:
+            # Multi-tenant guard: non-admin without a personal data source returns empty
+            sheet_students = []
 
         if not sheet_students:
             return jsonify({
@@ -1010,6 +1013,11 @@ def sync_exam_data():
         invalidate_exam_absorb_cache()
 
         user_email = (g.user.get('email') or g.user.get('emailAddress') or '').lower().strip()
+
+        # Check admin mode (accept adminKey from query string OR JSON body)
+        admin_key = request.args.get('adminKey', '') or (request.get_json(silent=True) or {}).get('adminKey', '')
+        is_admin = admin_key == ADMIN_PASSWORD
+
         from snapshot_db import get_user_ghl_settings, get_user_bitrix_settings, get_user_sheet_settings
         ghl_settings = get_user_ghl_settings(user_email)
         bitrix_settings = get_user_bitrix_settings(user_email)
@@ -1032,9 +1040,11 @@ def sync_exam_data():
             from google_sheets import invalidate_user_sheet_cache, fetch_user_exam_sheet
             invalidate_user_sheet_cache(user_email)
             sheet_students = fetch_user_exam_sheet(sheet_settings['sheet_id'], user_email)
-        else:
+        elif is_admin:
             invalidate_sheet_cache()
             sheet_students = fetch_exam_sheet()
+        else:
+            sheet_students = []
 
         return jsonify({
             'success': True,
