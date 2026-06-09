@@ -73,6 +73,39 @@ def combined_prelicense_name(main_names):
     return combined if combined != base else 'Life & Health Pre-license Course'
 
 
+def derive_combined_status(main_statuses, main_progress_values, final_progress):
+    """
+    Derive a single combined enrollment-status code for dual-LOA (Life + Health)
+    pre-licensing students from per-main-course statuses + averaged progress.
+
+    Absorb status enum: 0=Not Started, 1=In Progress, 2=Complete, 3=Complete, 4=Expired.
+
+    Priority (so combined status stays consistent with averaged progress AND with
+    the outer COURSE EXPIRED badge in formatters._is_enrollment_expired):
+      1. ANY main Expired (4) -> Expired (preserves the outer expired short-circuit)
+      2. ALL mains Complete (2 or 3) -> Complete (catches avg=99.x% rounding)
+      3. Combined progress >= 100 -> Complete
+      4. Combined progress > 0, OR any main In Progress (1), OR any main has
+         progress > 0 -> In Progress
+      5. Else -> Not Started
+    """
+    completed_codes = (2, 3)
+    if any(s == 4 for s in main_statuses):
+        return 4
+    if main_statuses and all(s in completed_codes for s in main_statuses):
+        return 2
+    if final_progress is not None and final_progress >= 100:
+        return 2
+    has_progress_signal = (
+        (final_progress is not None and final_progress > 0)
+        or any(s == 1 for s in main_statuses)
+        or any((p or 0) > 0 for p in main_progress_values)
+    )
+    if has_progress_signal:
+        return 1
+    return 0
+
+
 def parse_time_to_minutes(time_value) -> int:
     """Parse time value to minutes. Handles .NET TimeSpan format: [d.]HH:MM:SS[.fffffff]
 

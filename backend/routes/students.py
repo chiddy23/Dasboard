@@ -62,11 +62,18 @@ def calculate_prelicensing_totals(enrollments):
     """
     Calculate total time spent and average progress across all pre-licensing courses.
     Returns: (total_time_minutes, average_progress, course_name, primary_status)
+
+    primary_status is derived from the combined progress + per-main statuses
+    (see derive_combined_status in absorb_api) so it stays consistent with the
+    averaged progress displayed on the modal's top card. Previously it was
+    overwritten on every main-course iteration, so a dual-LOA student showed
+    'X% progress + Not Started' whenever the not-started course happened to
+    be iterated last in Absorb's response.
     """
     prelicensing_enrollments = []
     main_course_name = "Pre-License Course"
     main_course_names = []  # all main pre-license course names (dual Life+Health states)
-    primary_status = 0
+    main_statuses = []      # status of each main pre-license course
 
     for e in enrollments:
         name = e.get('name') or e.get('Name') or e.get('courseName') or e.get('CourseName') or ''
@@ -77,7 +84,14 @@ def calculate_prelicensing_totals(enrollments):
                 main_course_name = name
                 if name:
                     main_course_names.append(name)
-                primary_status = e.get('status', 0)
+                # Normalize status field lookup (Absorb sometimes returns 'Status').
+                _s = e.get('status')
+                if _s is None:
+                    _s = e.get('Status', 0)
+                try:
+                    main_statuses.append(int(_s))
+                except (TypeError, ValueError):
+                    main_statuses.append(0)
 
     if not prelicensing_enrollments:
         # Fall back to first enrollment
@@ -92,7 +106,14 @@ def calculate_prelicensing_totals(enrollments):
                         time_val = parsed
                         break
             progress = e.get('progress', 0)
-            return time_val, progress, e.get('name') or e.get('Name') or e.get('courseName') or 'No Course', e.get('status', 0)
+            _s = e.get('status')
+            if _s is None:
+                _s = e.get('Status', 0)
+            try:
+                _s = int(_s)
+            except (TypeError, ValueError):
+                _s = 0
+            return time_val, progress, e.get('name') or e.get('Name') or e.get('courseName') or 'No Course', _s
         return 0, 0, 'No Course', 0
 
     # Sum time and average progress across ALL main pre-license courses.
@@ -149,10 +170,15 @@ def calculate_prelicensing_totals(enrollments):
 
     # Dual Life+Health (separate-course states): show a combined name so the
     # modal header reflects the combined enrollment rather than one line.
-    from absorb_api import combined_prelicense_name
+    from absorb_api import combined_prelicense_name, derive_combined_status
     _combined = combined_prelicense_name(main_course_names)
     if _combined:
         main_course_name = _combined
+
+    # Derive combined status consistently with combined progress.
+    primary_status = derive_combined_status(
+        main_statuses, _main_progress_values, final_progress
+    )
 
     return main_course_time, final_progress, main_course_name, primary_status
 
