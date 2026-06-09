@@ -990,10 +990,10 @@ class AbsorbAPIClient:
         """
         Find the primary course for dashboard display.
         Prioritizes: Main Pre-Licensing course > Chapters/Modules > Other in-progress
-        Returns: (primary_enrollment, calculated_progress, total_time_spent, display_name)
+        Returns: (primary_enrollment, calculated_progress, total_time_spent, display_name, derived_status)
         """
         if not enrollments:
-            return None, 0, 0, 'No Course'
+            return None, 0, 0, 'No Course', 0
 
         # Categorize enrollments
         prelicensing_main = None
@@ -1048,6 +1048,20 @@ class AbsorbAPIClient:
                     except (ValueError, TypeError):
                         pass
                 avg_progress = sum(_prog_values) / len(_prog_values) if _prog_values else 0
+
+                # Derive combined status from per-main statuses + averaged progress.
+                # Same helper used by calculate_prelicensing_totals so the modal and
+                # list view agree on dual-LOA status (was inconsistent before).
+                _main_statuses = []
+                for m in prelicensing_mains:
+                    _s = m.get('status')
+                    if _s is None:
+                        _s = m.get('Status', 0)
+                    try:
+                        _main_statuses.append(int(_s))
+                    except (TypeError, ValueError):
+                        _main_statuses.append(0)
+                derived_status = derive_combined_status(_main_statuses, _prog_values, avg_progress)
             else:
                 # No main course found, average chapter progress as fallback
                 valid_progress = []
@@ -1059,6 +1073,8 @@ class AbsorbAPIClient:
                     except (ValueError, TypeError):
                         pass
                 avg_progress = sum(valid_progress) / len(valid_progress) if valid_progress else 0
+                # Chapter-only fallback: no main course statuses to combine, treat as Not Started.
+                derived_status = 0
 
             # Sum time across ALL main pre-license courses. Absorb reports each
             # main course's timeSpent as a rollup of its own chapters, so summing
@@ -1100,7 +1116,7 @@ class AbsorbAPIClient:
             if _combined:
                 display_name = _combined
 
-            return primary, avg_progress, main_time, display_name
+            return primary, avg_progress, main_time, display_name, derived_status
 
         # Fall back to exam prep, other in-progress, or first enrollment
         if exam_prep_courses:
@@ -1128,7 +1144,15 @@ class AbsorbAPIClient:
                     break
 
         display_name = primary.get('name') or primary.get('Name') or primary.get('courseName') or primary.get('CourseName') or 'No Course'
-        return primary, progress, time_spent, display_name
+        # Single-course fallback path: derive status directly from the chosen primary enrollment.
+        _primary_status_raw = primary.get('status')
+        if _primary_status_raw is None:
+            _primary_status_raw = primary.get('Status', 0)
+        try:
+            derived_status = int(_primary_status_raw) if _primary_status_raw is not None else 0
+        except (TypeError, ValueError):
+            derived_status = 0
+        return primary, progress, time_spent, display_name, derived_status
 
     def _process_single_user(self, user: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Process a single user and return student data with enrollments.
@@ -1175,7 +1199,7 @@ class AbsorbAPIClient:
                 return None
 
             # Find primary enrollment (prioritizes Pre-Licensing course)
-            primary, calculated_progress, total_time, course_name = self._find_primary_course(enrollments)
+            primary, calculated_progress, total_time, course_name, derived_status = self._find_primary_course(enrollments)
 
             # Calculate exam prep time — main bundle courses only. Per product
             # convention, the main exam prep course name ends with "Exam Prep"
@@ -1220,7 +1244,7 @@ class AbsorbAPIClient:
                 'timeSpent': total_time,
                 'examPrepTime': exam_prep_time,
                 'courseName': course_name,
-                'enrollmentStatus': (primary.get('status') or primary.get('Status') or 0) if primary else 0
+                'enrollmentStatus': derived_status
             }
         except AbsorbAPIError:
             # Propagate Absorb errors (incl. 401) to the orchestrator, which
