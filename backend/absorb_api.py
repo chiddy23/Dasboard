@@ -509,14 +509,6 @@ class AbsorbAPIClient:
             try:
                 users, sub_total = self._fetch_users_page(f, limit=1000)
                 return ('year', year, f, users, sub_total)
-            except AbsorbAPIError as e:
-                # Re-raise 401s so the outer @absorb_retry_on_401 decorator can refresh & retry.
-                # Bug 2 fix: silent swallow caused login-time fetches to return 0 students
-                # when a transient 401 hit mid-bucket-split, with no recovery path.
-                if e.status_code == 401:
-                    raise
-                print(f"[API] Year bucket {year} failed: {e}")
-                return ('year', year, f, [], None)
             except Exception as e:
                 print(f"[API] Year bucket {year} failed: {e}")
                 return ('year', year, f, [], None)
@@ -526,14 +518,6 @@ class AbsorbAPIClient:
             try:
                 users, sub_total = self._fetch_users_page(f, limit=1000)
                 return ('null', None, f, users, sub_total)
-            except AbsorbAPIError as e:
-                # Re-raise 401s so the outer @absorb_retry_on_401 decorator can refresh & retry.
-                # Bug 2 fix: silent swallow caused login-time fetches to return 0 students
-                # when a transient 401 hit mid-bucket-split, with no recovery path.
-                if e.status_code == 401:
-                    raise
-                print(f"[API] Null bucket failed: {e}")
-                return ('null', None, f, [], None)
             except Exception as e:
                 print(f"[API] Null bucket failed: {e}")
                 return ('null', None, f, [], None)
