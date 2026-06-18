@@ -56,7 +56,14 @@ _load_overrides()
 
 
 def get_department_name(client, department_id):
-    """Get department name from Absorb, with caching."""
+    """Get department name from Absorb, with caching.
+
+    Only caches successfully-resolved real names. Placeholder/failure values
+    ('Department' from client.get_department's 401 fallback, or 'Unknown'
+    from any other failure) are NOT cached, so subsequent calls retry until
+    a real name is fetched. Prevents transient 401s during chad-pressure
+    windows from permanently poisoning the cache.
+    """
     if not department_id:
         return 'Unknown'
 
@@ -70,10 +77,12 @@ def get_department_name(client, department_id):
     try:
         dept = client.get_department(department_id)
         name = dept.get('name') or dept.get('Name') or 'Unknown'
-        _dept_name_cache[department_id] = name
+        # Only cache real names — 'Department' and 'Unknown' are failure
+        # sentinels and would permanently poison the cache if stored.
+        if name not in ('Department', 'Unknown'):
+            _dept_name_cache[department_id] = name
         return name
     except Exception:
-        _dept_name_cache[department_id] = 'Unknown'
         return 'Unknown'
 
 
