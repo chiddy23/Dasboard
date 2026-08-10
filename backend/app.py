@@ -32,13 +32,28 @@ def create_app():
     config = get_config()
     app.config.from_object(config)
 
-    # Additional session configuration
+    # Session configuration.
+    #
+    # Identical code path everywhere — Flask-Session's filesystem backend, so
+    # only an opaque session id ever reaches the browser and the Absorb token
+    # stays server-side. The ONLY thing that varies is which directory it
+    # writes to, because a serverless filesystem is read-only apart from /tmp.
+    #
+    # Consequence on serverless: /tmp is per-instance, so a session created on
+    # one warm instance is invisible to another. Hitting a cold instance reads
+    # as a logout. That is a hosting artifact, not an app bug — see
+    # SANDBOX.md → "Vercel deployment".
     app.config['SESSION_TYPE'] = 'filesystem'
-    app.config['SESSION_FILE_DIR'] = os.path.join(os.path.dirname(__file__), 'flask_session')
     app.config['SESSION_PERMANENT'] = True
     app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=4)
 
-    # Initialize session
+    if os.environ.get('SERVERLESS', '').lower() in ('1', 'true', 'yes'):
+        app.config['SESSION_FILE_DIR'] = '/tmp/flask_session'
+        print('[SESSION] Serverless mode — session dir relocated to /tmp '
+              '(per-instance; cold start reads as a logout)')
+    else:
+        app.config['SESSION_FILE_DIR'] = os.path.join(os.path.dirname(__file__), 'flask_session')
+
     Session(app)
 
     # Enable gzip compression for responses
