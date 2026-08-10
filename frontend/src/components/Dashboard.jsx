@@ -125,27 +125,53 @@ function Dashboard({ user, department, onLogout, initialData }) {
     }
   }, [])
 
-  // Load department prefs from backend on mount
+  // Load department prefs from backend on mount, with a localStorage
+  // fallback. On serverless hosting the backend prefs DB lives on ephemeral
+  // /tmp and resets whenever a fresh instance spins up — without the
+  // fallback, a page reload after instance rotation silently dropped every
+  // added department (and if the primary dept is a container with all its
+  // students in sub-departments, the dashboard read "No students found").
+  // localStorage mirrors the list per-browser; the save effect below then
+  // re-seeds the backend DB on the new instance.
   useEffect(() => {
     if (!user?.email) return
+    const lsKey = `ji_extra_depts_${(user.email || '').toLowerCase()}`
     const loadDeptPrefs = async () => {
+      let loaded = []
       try {
         const res = await fetch(`${API_BASE}/dashboard/dept-prefs`, { credentials: 'include' })
         if (res.ok) {
           const data = await res.json()
           if (data.success && data.departmentIds?.length > 0) {
-            setExtraDepartments(data.departmentIds)
+            loaded = data.departmentIds
           }
         }
       } catch (err) { console.error('[DEPT] Failed to load dept prefs:', err) }
+      if (loaded.length === 0) {
+        try {
+          const cached = JSON.parse(localStorage.getItem(lsKey) || '[]')
+          if (Array.isArray(cached) && cached.length > 0) {
+            loaded = cached
+            console.log(`[DEPT] Restored ${cached.length} dept(s) from localStorage (backend prefs empty)`)
+          }
+        } catch { /* corrupted localStorage — ignore */ }
+      }
+      if (loaded.length > 0) setExtraDepartments(loaded)
       deptPrefsLoaded.current = true
     }
     loadDeptPrefs()
   }, [user?.email])
 
-  // Save department prefs to backend when they change (skip initial load)
+  // Save department prefs when they change (skip initial load) — to the
+  // backend AND the localStorage mirror.
   useEffect(() => {
     if (!user?.email || !deptPrefsLoaded.current) return
+    try {
+      localStorage.setItem(
+        `ji_extra_depts_${(user.email || '').toLowerCase()}`,
+        JSON.stringify(extraDepartments)
+      )
+    } catch { /* storage full/blocked — backend save still runs */ }
     fetch(`${API_BASE}/dashboard/dept-prefs`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
