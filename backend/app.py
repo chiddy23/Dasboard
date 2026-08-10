@@ -34,27 +34,43 @@ def create_app():
 
     # Session configuration.
     #
-    # Identical code path everywhere — Flask-Session's filesystem backend, so
-    # only an opaque session id ever reaches the browser and the Absorb token
-    # stays server-side. The ONLY thing that varies is which directory it
-    # writes to, because a serverless filesystem is read-only apart from /tmp.
+    # Server path (Render, local): Flask-Session's filesystem backend — session
+    # contents live on disk, only an opaque session id reaches the browser.
+    # This is the prod code path, unchanged.
     #
-    # Consequence on serverless: /tmp is per-instance, so a session created on
-    # one warm instance is invisible to another. Hitting a cold instance reads
-    # as a logout. That is a hosting artifact, not an app bug — see
-    # SANDBOX.md → "Vercel deployment".
-    app.config['SESSION_TYPE'] = 'filesystem'
+    # Serverless path (SERVERLESS=1, Vercel): filesystem sessions are
+    # structurally broken there — /tmp is per-instance, so a session written by
+    # the login request is invisible to whichever instance serves the next
+    # request. Observed cascade (2026-08-10, first sandbox login):
+    #   1. login lands on instance A, session file written to A's /tmp
+    #   2. the frontend's parallel follow-ups hit instance B → no session →
+    #      401 → frontend boots the user back to login
+    #   3. the SECOND login mints a new Absorb token, which (single-session-
+    #      per-account) REVOKES the first
+    #   4. instances still holding the first session fetch with the revoked
+    #      token → empty student list → "no students found" until /sync's
+    #      refresh+retry re-mints
+    # Fix: skip Flask-Session entirely and use Flask's built-in signed-cookie
+    # session. The session travels WITH the browser, so every instance sees the
+    # same state — no re-login, no second mint, no revocation cascade. The
+    # refresh path already reassigns session['user'] and sets session.modified
+    # (dashboard.py), so a refreshed token propagates into the cookie.
+    #
+    # Security note: a Flask signed cookie is tamper-proof but CLIENT-READABLE.
+    # It carries the user's own Absorb token (same exposure class as any bearer
+    # cookie) and the password blob — the blob stays Fernet-encrypted with the
+    # server-side SECRET_KEY, so it is NOT readable client-side. Acceptable for
+    # the sandbox; this branch never activates on Render/prod.
     app.config['SESSION_PERMANENT'] = True
     app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=4)
 
     if os.environ.get('SERVERLESS', '').lower() in ('1', 'true', 'yes'):
-        app.config['SESSION_FILE_DIR'] = '/tmp/flask_session'
-        print('[SESSION] Serverless mode — session dir relocated to /tmp '
-              '(per-instance; cold start reads as a logout)')
+        print('[SESSION] Serverless mode — Flask signed-cookie sessions '
+              '(server-side session files are per-instance on serverless)')
     else:
+        app.config['SESSION_TYPE'] = 'filesystem'
         app.config['SESSION_FILE_DIR'] = os.path.join(os.path.dirname(__file__), 'flask_session')
-
-    Session(app)
+        Session(app)
 
     # Enable gzip compression for responses
     Compress(app)
