@@ -1,6 +1,35 @@
+# JustInsurance Student Dashboard — SANDBOX
+#
+# Separate Render service, separate GitHub repo, separate Absorb account.
+# Nothing here shares state with production.
+#
+# Deltas from the prod repo's render.yaml, and why:
+#
+#   1. name          — sandbox-specific so it can never collide with prod.
+#
+#   2. startCommand  — `--workers 1 --threads 8` instead of `--workers 4`.
+#      Absorb is single-session-per-account: each gunicorn worker is a separate
+#      OS process with its own module-level `_latest_user_tokens` CAS map, its
+#      own `_active_user_logins` zombie-guard, and its own `_last_mint_at`
+#      debounce dict. With 4 workers, four processes each mint Absorb tokens
+#      that revoke the other three's — the coordination machinery in
+#      dashboard.py cannot see across process boundaries. Threads share memory,
+#      so they get concurrency WITHOUT the token war. This matches the rationale
+#      already written into Dockerfile:62.
+#
+#   3. FLASK_SECRET_KEY — the prod blueprint generates `SECRET_KEY`, but
+#      config.py:15 reads `FLASK_SECRET_KEY`. The generated value was therefore
+#      never read, and Flask silently fell back to the literal
+#      'dev-secret-key-change-in-production'. Fixed here to the name the app
+#      actually reads.
+#
+#   4. SYNC_ABSORB_* — deliberately absent. sync_scheduler.py:201 bails when
+#      either is falsy, which keeps the background scheduler off. A scheduler
+#      would be a second Absorb consumer competing with interactive sessions.
+
 services:
   - type: web
-    name: justinsurance-dashboard
+    name: justinsurance-dashboard-sandbox
     env: python
     buildCommand: |
       set -e
@@ -12,7 +41,7 @@ services:
       ls -la dist/assets/
       cd ..
       pip install -r backend/requirements.txt
-    startCommand: cd backend && gunicorn app:app --bind 0.0.0.0:$PORT --timeout 120 --workers 4
+    startCommand: cd backend && gunicorn app:app --bind 0.0.0.0:$PORT --timeout 120 --workers 1 --threads 8
     envVars:
       - key: NODE_VERSION
         value: "20.11.0"
@@ -22,11 +51,20 @@ services:
         value: "5000"
       - key: FLASK_ENV
         value: production
+      - key: ABSORB_BASE_URL
+        value: "https://rest.myabsorb.com"
+
+      # Secrets — set these in the Render dashboard, not here.
       - key: ABSORB_API_KEY
         sync: false
       - key: ABSORB_PRIVATE_KEY
         sync: false
-      - key: ABSORB_BASE_URL
-        value: "https://rest.myabsorb.com"
-      - key: SECRET_KEY
+      - key: GOOGLE_SHEETS_CREDENTIALS_JSON
+        sync: false
+      - key: EXAM_ADMIN_PASSWORD
+        sync: false
+
+      # Generated per-service. Must NOT match prod's value, so a sandbox
+      # session cookie can never be replayed against production.
+      - key: FLASK_SECRET_KEY
         generateValue: true
