@@ -1,8 +1,29 @@
 # JustInsurance Student Dashboard — SANDBOX
 
 A **completely separate project** from production. Separate GitHub repo,
-separate Render service, separate Absorb account. Nothing here can affect
+separate hosting project, separate Absorb account. Nothing here can affect
 `dashboard.justinsuranceco.com`.
+
+## 🔗 Live sandbox
+
+**https://justinsurance-dashboard-sandbox.vercel.app**
+
+Log in with Absorb account **`chadapitest`** (never `chad`). Verified working:
+`/api/health` 200, SPA 200, `/api/auth/session` 401, all static assets 200.
+
+Redeploy after changes:
+
+```bash
+cd C:/Users/Chidd/Downloads/justinsurance-dashboard-sandbox
+vercel --prod --yes
+```
+
+Frontend changes need `cd frontend && npm run build` first, and `frontend/dist`
+committed — the lambda bundles the committed dist, same as the existing repo
+convention.
+
+There is also a Render path (see "Render setup" below) if you want the strictly
+exact replica; Vercel has a few unavoidable hosting artifacts, listed next.
 
 | | Production | Sandbox (this repo) |
 |---|---|---|
@@ -37,6 +58,56 @@ actually in use is this log line:
 The `[LOGIN]` lines show only the department, not the user. Browser autofill has
 silently substituted the wrong account before — trust the `[TOKEN REFRESH]` line
 over what you think you typed.
+
+---
+
+## Vercel deployment — what is identical, and what is not
+
+**Application code is unchanged.** There is exactly one Vercel-aware branch in
+the whole codebase (`app.py`, session directory), and it is inert unless
+`SERVERLESS=1` is set — so the Render deployment runs the same code as prod.
+Everything else was solved with configuration, not edits:
+
+- `SNAPSHOT_DB_PATH=/tmp/snapshots.db` — `Config.SNAPSHOT_DB_PATH` was already
+  env-configurable, so no code change was needed.
+- All traffic routes to Flask, which serves both the API and the SPA — exactly
+  how it behaves on Render.
+
+**Hosting artifacts you WILL notice.** None are app bugs; none occur on Render:
+
+| Artifact | Cause | Effect |
+|---|---|---|
+| Random logouts | `/tmp` session dir is per-instance | Hitting a cold instance reads as logged-out. Log back in. |
+| Settings reset | SQLite lives at `/tmp/snapshots.db` | Dept prefs, hidden students, GHL/Bitrix/Sheet settings and pass/fail overrides vanish on cold start. |
+| First load always slow | `_student_cache` starts empty on every cold instance | The "instant second load" behavior is unreliable. |
+| Possible token flakiness | Concurrent lambdas each hold their own `_latest_user_tokens` map | Same class of problem as multi-worker gunicorn. Single-user sandbox use rarely triggers it; hammering it will. |
+| Spencer may time out | `maxDuration` is not honored under legacy `builds` config | A cold Spencer load runs 25–35s. If it exceeds the platform default, use a smaller dept or switch to Render. |
+| Static served by lambda | `includeFiles` bundles `frontend/dist` | Slower and costlier than CDN. Deliberate — it keeps parity with Render. |
+
+**If any of those get in the way, use Render.** It runs the identical code with
+none of these artifacts. That is why the Render path is still documented below.
+
+### Vercel env vars (already set, all three environments)
+
+```
+ABSORB_API_KEY, ABSORB_PRIVATE_KEY, ABSORB_BASE_URL
+FLASK_ENV=production
+FLASK_SECRET_KEY          (fresh — does NOT match prod)
+EXAM_ADMIN_PASSWORD       (fresh — does NOT match prod)
+SNAPSHOT_DB_PATH=/tmp/snapshots.db
+```
+
+`SERVERLESS=1` is set in `api/index.py` itself, so it needs no env var.
+`SYNC_ABSORB_*` are deliberately absent — the scheduler stays off.
+
+### Deployment protection
+
+The `*-chad-8413s-projects.vercel.app` deployment URLs sit behind Vercel SSO and
+302 to a login wall. The short alias above is public. Since
+`GOOGLE_SHEETS_CREDENTIALS_JSON` is not set here, the allowlist never loads —
+and `is_user_allowed` returns `True` for everyone when that table is empty. So
+anyone with valid Absorb credentials could reach this sandbox. Enable
+Deployment Protection in Vercel project settings if that matters to you.
 
 ---
 
