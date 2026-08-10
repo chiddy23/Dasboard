@@ -263,8 +263,21 @@ def _refresh_user_absorb_token():
     with _active_logins_lock:
         still_active = uname_key_check in _active_user_logins
     if not still_active:
-        print(f'[TOKEN REFRESH] Skipping refresh — user {uname_key_check} is no longer logged in (zombie request)')
-        return False
+        if os.environ.get('SERVERLESS', '').lower() in ('1', 'true', 'yes'):
+            # Serverless: _active_user_logins is per-instance and starts EMPTY
+            # on every fresh instance, so absence proves nothing about whether
+            # the user is logged in. The signed session cookie that carried
+            # this request past @login_required is the real evidence of an
+            # active login. The zombie this guard exists to stop — a retry
+            # loop from a PRIOR session still cycling inside a long-running
+            # process — cannot survive an instance boundary, so the guard's
+            # premise doesn't apply here. Register the user and proceed.
+            with _active_logins_lock:
+                _active_user_logins.add(uname_key_check)
+            print(f'[TOKEN REFRESH] Serverless — registering {uname_key_check} as active on this instance (cookie session is proof of login)')
+        else:
+            print(f'[TOKEN REFRESH] Skipping refresh — user {uname_key_check} is no longer logged in (zombie request)')
+            return False
 
     lock_path = _refresh_lock_path(username)
     lock_file = None
