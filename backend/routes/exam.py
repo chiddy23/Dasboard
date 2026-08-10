@@ -189,10 +189,13 @@ def get_exam_students():
         print(f"[EXAM] Extra departments param: '{extra_param}'")
         print(f"[EXAM] Primary dept email map size: {len(formatted_email_map)}")
         if extra_param:
-            from routes.dashboard import GUID_RE
+            from routes.dashboard import GUID_RE, MAX_EXTRA_DEPTS
             extra_ids = [d.strip() for d in extra_param.split(',') if d.strip()]
             print(f"[EXAM] Processing {len(extra_ids)} extra department IDs")
-            for dept_id in extra_ids[:10]:
+            # Cap matches the dashboard's dept limit (was a hardcoded [:10],
+            # which silently dropped depts 11+ from the Exam tab merge once
+            # the Load Dept Tree button made big dept lists easy).
+            for dept_id in extra_ids[:MAX_EXTRA_DEPTS]:
                 guid_ok = bool(GUID_RE.match(dept_id))
                 not_primary = dept_id.lower() != (g.department_id or '').lower()
                 print(f"[EXAM] Dept {dept_id[:8]}: GUID valid={guid_ok}, not_primary={not_primary}")

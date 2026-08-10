@@ -675,7 +675,12 @@ def get_students():
 
 
 GUID_RE = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
-MAX_EXTRA_DEPTS = 30
+# Raised 30 → 100 (2026-08-10) to fit whole dept trees loaded via the
+# Load Dept Tree button. Safe now that the global client-side rate limiter
+# (absorb_api._TokenBucket, 150/sec per Absorb's pacing guide) paces every
+# call — the old cap was guarding against unthrottled fan-out bursts.
+# Must match MAX_EXTRA_DEPTS in frontend/src/components/Dashboard.jsx.
+MAX_EXTRA_DEPTS = 100
 
 
 def _compute_summary(formatted_students):

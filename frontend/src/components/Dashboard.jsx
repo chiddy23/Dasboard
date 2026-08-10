@@ -8,6 +8,9 @@ import Charts from './Charts'
 import ExamCharts from './ExamCharts'
 
 const API_BASE = '/api'
+// Max extra departments loadable alongside the primary. Must match
+// MAX_EXTRA_DEPTS in backend/routes/dashboard.py.
+const MAX_EXTRA_DEPTS = 100
 
 function Dashboard({ user, department, onLogout, initialData }) {
   const [students, setStudents] = useState(initialData?.students || [])
@@ -364,7 +367,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
     let duplicates = 0
     let isPrimary = 0
     let overflow = 0
-    const remainingSlots = 30 - extraDepartments.length
+    const remainingSlots = MAX_EXTRA_DEPTS - extraDepartments.length
 
     for (const t of tokens) {
       if (!guidPattern.test(t)) {
@@ -392,7 +395,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
       if (invalid.length) reasons.push(`${invalid.length} invalid`)
       if (duplicates) reasons.push(`${duplicates} duplicate`)
       if (isPrimary) reasons.push(`${isPrimary} primary`)
-      if (overflow) reasons.push(`${overflow} over limit (30 max)`)
+      if (overflow) reasons.push(`${overflow} over limit (${MAX_EXTRA_DEPTS} max)`)
       setDeptError(`Nothing added — ${reasons.join(', ') || 'no valid IDs found'}`)
       return
     }
@@ -433,7 +436,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
       const existing = new Set(extraDepartments.map(d => d.toLowerCase()))
       const toAdd = []
       let overflow = 0
-      const remainingSlots = 30 - extraDepartments.length
+      const remainingSlots = MAX_EXTRA_DEPTS - extraDepartments.length
       for (const d of (data.departments || [])) {
         const low = (d.id || '').toLowerCase()
         if (!low || low === primary || existing.has(low) || toAdd.some(a => a.toLowerCase() === low)) continue
@@ -444,11 +447,11 @@ function Dashboard({ user, department, onLogout, initialData }) {
         setDeptError('No sub-departments found under your primary department')
       } else if (toAdd.length === 0) {
         setDeptError(overflow
-          ? `All 30 department slots are full — ${overflow} sub-department(s) skipped`
+          ? `All ${MAX_EXTRA_DEPTS} department slots are full — ${overflow} sub-department(s) skipped`
           : `All ${data.count} sub-department(s) are already loaded`)
       } else {
         const notes = []
-        if (overflow) notes.push(`${overflow} skipped (30 dept limit)`)
+        if (overflow) notes.push(`${overflow} skipped (${MAX_EXTRA_DEPTS} dept limit)`)
         if (data.truncated) notes.push('tree truncated at 200 nodes')
         setDeptError(notes.length ? `Added ${toAdd.length} sub-department(s). ${notes.join('; ')}` : '')
         setExtraDepartments(prev => [...prev, ...toAdd])
