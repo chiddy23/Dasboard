@@ -69,3 +69,5 @@ htmlcov/
 .docker/
 node_modules
 .vercel
+
+.vercel

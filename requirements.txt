@@ -1,2 +1,36 @@
-# Root requirements - points to backend
--r backend/requirements.txt
+# Root requirements — kept in sync with backend/requirements.txt.
+#
+# This is a literal copy rather than `-r backend/requirements.txt`, because
+# Vercel's dependency resolver cannot follow an -r include and fails the build
+# with "could not parse requirements.txt".
+#
+# Render installs from backend/requirements.txt directly (see render.yaml
+# buildCommand), so that file remains the source of truth. If you change it,
+# mirror the change here.
+
+# Flask and extensions
+Flask==3.0.0
+Flask-CORS==4.0.0
+Flask-Session==0.5.0
+
+# HTTP client for Absorb API
+requests==2.31.0
+
+# Environment variables
+python-dotenv==1.0.0
+
+# Production server (unused on Vercel; Render's startCommand invokes it)
+gunicorn==21.2.0
+
+# Date/time utilities
+python-dateutil==2.8.2
+
+# Response compression
+flask-compress==1.14
+
+# Google Sheets API (write pass/fail results back to sheet)
+gspread>=6.0.0
+google-auth>=2.27.0
+
+# Session-stored credential encryption (for transparent token refresh on expiry)
+cryptography>=42.0.0
