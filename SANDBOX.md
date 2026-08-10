@@ -63,9 +63,26 @@ over what you think you typed.
 
 ## Vercel deployment — what is identical, and what is not
 
-**Application code is unchanged.** There is exactly one Vercel-aware branch in
-the whole codebase (`app.py`, session directory), and it is inert unless
-`SERVERLESS=1` is set — so the Render deployment runs the same code as prod.
+**Application code carries exactly two Vercel-aware branches**, both inert
+unless `SERVERLESS=1` is set — so the Render deployment runs the same code as
+prod:
+
+1. `app.py` — signed-cookie sessions instead of Flask-Session's filesystem
+   backend. Server-side session files are per-instance on serverless; the
+   first real login (2026-08-10) produced a full cascade: boot-to-login →
+   forced second login → second Absorb token revoking the first → "no
+   students found" until Sync's refresh+retry re-minted. Cookie sessions
+   travel with the browser, so every instance sees the same state. Verified
+   fixed: single login → session stable across invocations → 64 students on
+   first load, no Sync needed.
+2. `routes/dashboard.py` — the zombie-refresh guard registers instead of
+   bailing. `_active_user_logins` is per-instance and starts empty on every
+   fresh instance, so a token refresh on a non-login instance would bail as a
+   "zombie" and boot a legitimately logged-in user. On serverless the signed
+   cookie is the proof of login, and the zombie the guard targets (a prior
+   session's retry loop in a long-running process) cannot cross an instance
+   boundary.
+
 Everything else was solved with configuration, not edits:
 
 - `SNAPSHOT_DB_PATH=/tmp/snapshots.db` — `Config.SNAPSHOT_DB_PATH` was already
@@ -77,10 +94,10 @@ Everything else was solved with configuration, not edits:
 
 | Artifact | Cause | Effect |
 |---|---|---|
-| Random logouts | `/tmp` session dir is per-instance | Hitting a cold instance reads as logged-out. Log back in. |
+| ~~Random logouts~~ **FIXED** | ~~`/tmp` session dir is per-instance~~ | Cookie sessions (SERVERLESS branch #1) — sessions now survive instances AND redeploys, which is actually better than Render, where a deploy wipes them. |
 | Settings reset | SQLite lives at `/tmp/snapshots.db` | Dept prefs, hidden students, GHL/Bitrix/Sheet settings and pass/fail overrides vanish on cold start. |
 | First load always slow | `_student_cache` starts empty on every cold instance | The "instant second load" behavior is unreliable. |
-| Possible token flakiness | Concurrent lambdas each hold their own `_latest_user_tokens` map | Same class of problem as multi-worker gunicorn. Single-user sandbox use rarely triggers it; hammering it will. |
+| Residual token flakiness | Concurrent lambdas each hold their own `_last_mint_at` debounce + CAS map | Much reduced: the cookie now carries the live token to every instance, and refresh works everywhere (SERVERLESS branch #2). But two instances refreshing at the same moment can still double-mint. Single-user use rarely triggers it. |
 | Spencer may time out | `maxDuration` is not honored under legacy `builds` config | A cold Spencer load runs 25–35s. If it exceeds the platform default, use a smaller dept or switch to Render. |
 | Static served by lambda | `includeFiles` bundles `frontend/dist` | Slower and costlier than CDN. Deliberate — it keeps parity with Render. |
 
