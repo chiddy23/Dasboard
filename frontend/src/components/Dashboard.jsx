@@ -10,7 +10,7 @@ import ExamCharts from './ExamCharts'
 const API_BASE = '/api'
 // Max extra departments loadable alongside the primary. Must match
 // MAX_EXTRA_DEPTS in backend/routes/dashboard.py.
-const MAX_EXTRA_DEPTS = 100
+const MAX_EXTRA_DEPTS = 200
 
 function Dashboard({ user, department, onLogout, initialData }) {
   const [students, setStudents] = useState(initialData?.students || [])

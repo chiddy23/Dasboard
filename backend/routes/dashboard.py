@@ -690,12 +690,17 @@ def get_students():
 
 
 GUID_RE = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
-# Raised 30 → 100 (2026-08-10) to fit whole dept trees loaded via the
-# Load Dept Tree button. Safe now that the global client-side rate limiter
-# (absorb_api._TokenBucket, 150/sec per Absorb's pacing guide) paces every
-# call — the old cap was guarding against unthrottled fan-out bursts.
+# Raised 30 → 100 → 200 (2026-08-10) to fit whole dept trees loaded via
+# the Load Dept Tree button — the user's real tree needs ~145+ slots (their
+# biggest org discovered 75 subs on top of ~70 already loaded). Safe now
+# that the global client-side rate limiter (absorb_api._TokenBucket,
+# 150/sec per Absorb's pacing guide) paces every call — the old cap was
+# guarding against unthrottled fan-out bursts.
 # Must match MAX_EXTRA_DEPTS in frontend/src/components/Dashboard.jsx.
-MAX_EXTRA_DEPTS = 100
+# NOTE: /students/multi passes ids as a query string — 200 GUIDs ≈ 7.5KB
+# URL, inside typical 14KB limits but don't push this past ~300 without
+# switching that endpoint to POST.
+MAX_EXTRA_DEPTS = 200
 
 
 def _compute_summary(formatted_students):
@@ -860,7 +865,8 @@ def get_dept_tree():
     client = AbsorbAPIClient()
     client.set_token(g.absorb_token)
 
-    MAX_NODES = 200  # runaway guard — deepest real trees are well under this
+    MAX_NODES = 300  # runaway guard, kept above MAX_EXTRA_DEPTS so tree
+                     # discovery never binds before the dept cap does
     seen = {root_id.lower()}
     queue = [root_id]
     tree = []
