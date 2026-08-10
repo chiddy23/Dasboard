@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from flask import session
 from absorb_api import AbsorbAPIClient, AbsorbAPIError
 from middleware import login_required
+from utils.absorb_retry import absorb_retry_on_401
 from utils import format_student_for_response, get_status_from_last_login
 from utils.credential_store import decrypt_password
 from config import Config
@@ -810,6 +811,67 @@ def get_students_multi():
         print(f"[ERROR] Multi-dept fetch failed: {e}")
         traceback.print_exc()
         return jsonify({'success': False, 'error': f'Failed to fetch students: {str(e)}'}), 500
+
+
+@dashboard_bp.route('/dept-tree', methods=['GET'])
+@login_required
+@absorb_retry_on_401
+def get_dept_tree():
+    """Walk every sub-department beneath the session's primary department.
+
+    BFS over Absorb's /departments?parentId filter — one call per node, paced
+    by the global rate limiter (a 30-branch tree costs ~30 calls, a few
+    seconds). Returns id+name for each descendant so the frontend's "Load
+    Dept Tree" button can add them all at once instead of the user pasting
+    GUIDs by hand.
+
+    Only discovers the tree — it does NOT fetch students. The frontend feeds
+    the ids into the existing extraDepartments flow, which loads and caches
+    them through /students/multi exactly like manual adds.
+
+    The @absorb_retry_on_401 decorator gives the walk the same refresh+retry
+    recovery every other Absorb route has: a mid-walk 401 re-runs the whole
+    (cheap) walk on a fresh token instead of surfacing a boot.
+    """
+    root_id = (request.args.get('root') or g.department_id or '').strip()
+    if not GUID_RE.match(root_id):
+        return jsonify({'success': False, 'error': 'Invalid root department id'}), 400
+
+    client = AbsorbAPIClient()
+    client.set_token(g.absorb_token)
+
+    MAX_NODES = 200  # runaway guard — deepest real trees are well under this
+    seen = {root_id.lower()}
+    queue = [root_id]
+    tree = []
+    truncated = False
+    while queue:
+        parent = queue.pop(0)
+        for child in client.get_department_children(parent):
+            cid = child.get('id') or child.get('Id')
+            if not cid or cid.lower() in seen:
+                continue
+            if len(tree) >= MAX_NODES:
+                truncated = True
+                break
+            seen.add(cid.lower())
+            tree.append({
+                'id': cid,
+                'name': child.get('name') or child.get('Name') or '',
+            })
+            queue.append(cid)
+        if truncated:
+            break
+
+    print(f"[DEPT-TREE] root={root_id} → {len(tree)} sub-department(s)"
+          + (" (TRUNCATED at node cap)" if truncated else ""))
+    return jsonify({
+        'success': True,
+        'root': root_id,
+        'count': len(tree),
+        'departments': tree,
+        'truncated': truncated,
+    })
 
 
 @dashboard_bp.route('/sync', methods=['POST'])

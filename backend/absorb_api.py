@@ -838,6 +838,38 @@ class AbsorbAPIClient:
                 print(f"[API] get_department {variant}/{department_id} exception: {e}")
         return {'id': department_id, 'name': 'Department', 'Name': 'Department'}
 
+    def get_department_children(self, parent_id: str) -> List[Dict[str, Any]]:
+        """List the DIRECT child departments of a parent department.
+
+        Uses the same OData filter the Apps Script partner reports use:
+        /departments?_filter=parentId eq guid'{parent}'. One call per node —
+        a tree walk over N departments costs N calls, which the global rate
+        limiter paces automatically.
+
+        Raises AbsorbAPIError on 401 so the route-level retry decorator can
+        refresh and re-walk; returns [] on other failures (a missing branch
+        should not kill the whole tree).
+        """
+        url = f"{self.base_url}/departments"
+        params = {"_filter": f"parentId eq guid'{parent_id}'", "_limit": 500}
+        try:
+            response = self._session.get(url, params=params, headers=self._get_headers(), timeout=30)
+            if response.status_code == 401:
+                raise AbsorbAPIError("Session expired. Please log in again.", 401)
+            if response.status_code != 200:
+                print(f"[API] get_department_children {parent_id} returned "
+                      f"{response.status_code}: {response.text[:200]}")
+                return []
+            data = response.json()
+            if isinstance(data, list):
+                return data
+            return data.get('departments') or data.get('Departments') or []
+        except AbsorbAPIError:
+            raise
+        except Exception as e:
+            print(f"[API] get_department_children {parent_id} exception: {e}")
+            return []
+
     def get_user_enrollments(self, user_id: str) -> List[Dict[str, Any]]:
         """Get all course enrollments for a user."""
         # Use exact endpoint pattern from working Apps Script with _limit parameter

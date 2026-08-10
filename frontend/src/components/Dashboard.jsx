@@ -55,6 +55,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
   const [showDeptManager, setShowDeptManager] = useState(false)
   const [deptInputValue, setDeptInputValue] = useState('')
   const [deptError, setDeptError] = useState('')
+  const [treeLoading, setTreeLoading] = useState(false)
   const [departmentMeta, setDepartmentMeta] = useState([])
   const [studentDeptFilter, setStudentDeptFilter] = useState([])
   const [showDeptDropdown, setShowDeptDropdown] = useState(false)
@@ -413,6 +414,51 @@ function Dashboard({ user, department, onLogout, initialData }) {
 
   const handleRemoveDepartment = (id) => {
     setExtraDepartments(prev => prev.filter(d => d !== id))
+  }
+
+  // Fetch every sub-department under the primary dept from the backend tree
+  // walk and add them all at once — same dedupe/cap rules as manual adds, so
+  // the downstream prefs-save and /students/multi flows are identical.
+  const handleLoadDeptTree = async () => {
+    setTreeLoading(true)
+    setDeptError('')
+    try {
+      const res = await fetch(`${API_BASE}/dashboard/dept-tree`, { credentials: 'include' })
+      const data = await res.json()
+      if (!data.success) {
+        setDeptError(data.error || 'Failed to load department tree')
+        return
+      }
+      const primary = department?.id?.toLowerCase()
+      const existing = new Set(extraDepartments.map(d => d.toLowerCase()))
+      const toAdd = []
+      let overflow = 0
+      const remainingSlots = 30 - extraDepartments.length
+      for (const d of (data.departments || [])) {
+        const low = (d.id || '').toLowerCase()
+        if (!low || low === primary || existing.has(low) || toAdd.some(a => a.toLowerCase() === low)) continue
+        if (toAdd.length >= remainingSlots) { overflow++; continue }
+        toAdd.push(d.id)
+      }
+      if (data.count === 0) {
+        setDeptError('No sub-departments found under your primary department')
+      } else if (toAdd.length === 0) {
+        setDeptError(overflow
+          ? `All 30 department slots are full — ${overflow} sub-department(s) skipped`
+          : `All ${data.count} sub-department(s) are already loaded`)
+      } else {
+        const notes = []
+        if (overflow) notes.push(`${overflow} skipped (30 dept limit)`)
+        if (data.truncated) notes.push('tree truncated at 200 nodes')
+        setDeptError(notes.length ? `Added ${toAdd.length} sub-department(s). ${notes.join('; ')}` : '')
+        setExtraDepartments(prev => [...prev, ...toAdd])
+      }
+    } catch (err) {
+      console.error('[DEPT-TREE] Failed:', err)
+      setDeptError('Failed to load department tree')
+    } finally {
+      setTreeLoading(false)
+    }
   }
 
   const handleHideStudent = (studentEmail) => {
@@ -1505,16 +1551,39 @@ function Dashboard({ user, department, onLogout, initialData }) {
                     ))
                   }
                 </div>
-                <button
-                  onClick={() => { setShowDeptManager(!showDeptManager); setDeptError('') }}
-                  className="text-sm text-ji-blue-bright hover:text-ji-blue-medium flex items-center gap-1"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d={showDeptManager ? "M5 15l7-7 7 7" : "M12 4v16m8-8H4"} />
-                  </svg>
-                  <span>{showDeptManager ? 'Close' : 'Add Department'}</span>
-                </button>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={handleLoadDeptTree}
+                    disabled={treeLoading}
+                    className="text-sm text-ji-blue-bright hover:text-ji-blue-medium flex items-center gap-1 disabled:opacity-50"
+                    title="Fetch every sub-department under your primary department and load them all automatically"
+                  >
+                    {treeLoading ? (
+                      <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
+                      </svg>
+                    ) : (
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                      </svg>
+                    )}
+                    <span>{treeLoading ? 'Loading Tree...' : 'Load Dept Tree'}</span>
+                  </button>
+                  <button
+                    onClick={() => { setShowDeptManager(!showDeptManager); setDeptError('') }}
+                    className="text-sm text-ji-blue-bright hover:text-ji-blue-medium flex items-center gap-1"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d={showDeptManager ? "M5 15l7-7 7 7" : "M12 4v16m8-8H4"} />
+                    </svg>
+                    <span>{showDeptManager ? 'Close' : 'Add Department'}</span>
+                  </button>
+                </div>
               </div>
+              {deptError && !showDeptManager && (
+                <p className="text-xs text-gray-600 mt-2">{deptError}</p>
+              )}
 
               {showDeptManager && (
                 <div className="mt-3 flex gap-2 items-start">
