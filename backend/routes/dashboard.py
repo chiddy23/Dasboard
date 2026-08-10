@@ -805,9 +805,24 @@ def get_students_multi():
         all_formatted, fetched_meta = _fetch_depts_collect(all_dept_ids, g.absorb_token)
         dept_meta.extend(fetched_meta)
 
-        expired_ids = _expired_dept_ids(dept_meta)
-        if expired_ids and _refresh_user_absorb_token():
-            print(f"[MULTI-DEPT] Retrying {len(expired_ids)} dept(s) after token refresh")
+        # Refresh+retry ROUNDS for expired depts (was a single round). On a
+        # very large cold load (~145 depts, 30-60s of sustained fetching), a
+        # competing request can re-mint the account token mid-flight and
+        # revoke the one this route just refreshed — single-round recovery
+        # left 13 depts stuck at "Session expired" even though the storm
+        # settles once the big fetches finish. Up to 3 rounds, each with a
+        # jittered pause so a competing minter can finish first; each round
+        # only refetches the still-failed depts (sequential, cheap).
+        for _round in range(1, 4):
+            expired_ids = _expired_dept_ids(dept_meta)
+            if not expired_ids:
+                break
+            if not _refresh_user_absorb_token():
+                break
+            import time as _t_rounds
+            import random as _r_rounds
+            _t_rounds.sleep(0.6 + _r_rounds.uniform(0, 0.4))
+            print(f"[MULTI-DEPT] Retry round {_round}: {len(expired_ids)} dept(s) after token refresh")
             for dept_id in expired_ids:
                 invalidate_cache(dept_id)
             dept_meta = [m for m in dept_meta if m.get('id') not in expired_ids]
