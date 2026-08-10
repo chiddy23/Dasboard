@@ -567,9 +567,18 @@ def get_summary_quick():
 
 @dashboard_bp.route('/summary', methods=['GET'])
 @login_required
+@absorb_retry_on_401
 def get_summary():
     """
     Get dashboard summary with KPI data (uses cache).
+
+    Decorated with the tiered 401 retry: this route fires on every page
+    load, and without it a single transient 401 (or a sibling request's
+    refresh revoking this request's token mid-fetch) surfaced as HTTP 401
+    to the frontend, which treats that as session-death and boots the
+    user. Inline same-token retries recover transients; the stored-cred
+    refresh recovers a genuinely revoked token. Only a failed refresh
+    still returns 401 — which then IS a dead session.
 
     Returns:
         JSON response with summary statistics
@@ -615,9 +624,11 @@ def get_summary():
 
 @dashboard_bp.route('/students/quick', methods=['GET'])
 @login_required
+@absorb_retry_on_401
 def get_students_quick():
     """
     Get students quickly without enrollment data (fast initial load).
+    Tiered 401 retry for the same reason as get_students/get_summary.
     """
     try:
         formatted_students = get_quick_students(g.department_id, g.absorb_token)
@@ -641,9 +652,13 @@ def get_students_quick():
 
 @dashboard_bp.route('/students', methods=['GET'])
 @login_required
+@absorb_retry_on_401
 def get_students():
     """
     Get all students in the department with progress data (uses cache).
+
+    Decorated with the tiered 401 retry — see get_summary's docstring for
+    why: these page-load routes surfacing a raw 401 is what boots users.
 
     Returns:
         JSON response with formatted student list
