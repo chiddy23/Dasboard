@@ -10,6 +10,7 @@ is imported lazily inside the decorator to break the import cycle.
 """
 
 import time
+import random
 from functools import wraps
 
 # Tiered retry to avoid the cross-request token war.
@@ -22,8 +23,15 @@ from functools import wraps
 # New design: first try inline-retry with the SAME token (handles Absorb's
 # transient per-call LB 401s without touching the auth state at all). Only
 # escalate to a real refresh if the token genuinely seems dead.
+#
+# Backoffs are JITTERED per the Absorb pacing guide (their gateway is a
+# token bucket refreshed every second; ~0.8s base clears a transient
+# throttle, and jitter prevents concurrent retries from firing in sync and
+# re-throttling — "the jitter is the important part", their dev team).
+# Retry COUNTS are settled and unchanged; only the pacing moved.
 _INLINE_RETRIES = 2          # cheap retries with same token
-_INLINE_BACKOFF_SECONDS = 0.4
+_INLINE_BACKOFF_BASE = 0.8   # x 2^attempt, + jitter below
+_JITTER_MAX = 0.4
 _REFRESH_RETRIES = 1         # phase 2: refresh + retry
 _REFRESH_BACKOFF_SECONDS = 0.6
 # Phase 3 (last resort): after phase 2 fails, wait for the debounce window
@@ -62,6 +70,9 @@ def absorb_retry_on_401(f):
         from routes.dashboard import _refresh_user_absorb_token
 
         # Phase 1: inline retries with same token (no /Authenticate).
+        # Jittered exponential: 0.8s, 1.6s (+0-0.4s jitter each) — a transient
+        # gateway throttle clears within ~1s, and the jitter keeps concurrent
+        # routes from re-throttling each other with synchronized retries.
         for _attempt in range(1 + _INLINE_RETRIES):
             try:
                 return f(*args, **kwargs)
@@ -69,8 +80,8 @@ def absorb_retry_on_401(f):
                 if e.status_code != 401:
                     raise
                 if _attempt < _INLINE_RETRIES:
-                    if _INLINE_BACKOFF_SECONDS:
-                        time.sleep(_INLINE_BACKOFF_SECONDS)
+                    time.sleep(_INLINE_BACKOFF_BASE * (2 ** _attempt)
+                               + random.uniform(0, _JITTER_MAX))
                     continue
 
         # Phase 2: escalate to real refresh. Last resort because the new
@@ -79,8 +90,7 @@ def absorb_retry_on_401(f):
             if not _refresh_user_absorb_token():
                 # Refresh failed (no creds / zombie) — give up.
                 raise AbsorbAPIError("Session expired. Please log in again.", 401)
-            if _REFRESH_BACKOFF_SECONDS:
-                time.sleep(_REFRESH_BACKOFF_SECONDS)
+            time.sleep(_REFRESH_BACKOFF_SECONDS + random.uniform(0, _JITTER_MAX))
             try:
                 return f(*args, **kwargs)
             except AbsorbAPIError as e:
@@ -93,7 +103,7 @@ def absorb_retry_on_401(f):
         # next refresh attempt mints a genuinely fresh token, then try
         # once more. This recovers the modal-fails-5x-in-a-row pattern.
         for _attempt in range(_PHASE3_RETRIES):
-            time.sleep(_PHASE3_DELAY_SECONDS)
+            time.sleep(_PHASE3_DELAY_SECONDS + random.uniform(0, _JITTER_MAX))
             if not _refresh_user_absorb_token():
                 raise AbsorbAPIError("Session expired. Please log in again.", 401)
             try:

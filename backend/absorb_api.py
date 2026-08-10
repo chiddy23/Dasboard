@@ -1,5 +1,10 @@
 """Absorb LMS API Client for JustInsurance Student Dashboard."""
 
+import os
+import time
+import random
+import threading
+
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -18,19 +23,81 @@ class AbsorbAPIError(Exception):
         super().__init__(self.message)
 
 
+# ── Client-side pacing (Absorb dev-team guidance, 2026-08) ───────────────────
+# Absorb's gateway throttling is a token bucket: 200 calls/sec steady refill
+# with a 100-call burst bucket. Sustain above the rate and the bucket drains —
+# calls start failing. Their dev team's prescription, verbatim intent:
+#   - "Pace to the steady rate ... target around 150/sec to leave headroom,
+#      and treat the burst as emergency capacity"
+#   - "A token-bucket limiter on your side is the most effective fix"
+#   - "Cap concurrency separately (a semaphore around 50-75)"
+#   - "On backoff ... the jitter is the important part, otherwise all your
+#      retries fire in sync and re-throttle"
+# This limiter is that client-side token bucket. The existing 50-worker
+# fan-out cap satisfies the concurrency guidance; jittered backoffs live at
+# the retry sites. At 150/sec the limiter adds ~zero latency to normal loads
+# (a 1,300-user enrollment fan-out needs a minimum ~9s of budget it was
+# already spending) — what it removes is the burst spikes that drained the
+# gateway bucket and surfaced as "transient LB 401s" mid-fan-out.
+_RATE_LIMIT = float(os.getenv('ABSORB_RATE_LIMIT', '150'))   # calls/sec; <= 0 disables
+_RATE_BURST = float(os.getenv('ABSORB_RATE_BURST', '75'))    # our bucket, < Absorb's 100
+
+
+class _TokenBucket:
+    """Minimal thread-safe token bucket. acquire() blocks until a token is free."""
+
+    def __init__(self, rate: float, capacity: float):
+        self.rate = float(rate)
+        self.capacity = float(capacity)
+        self.tokens = float(capacity)
+        self.stamp = time.monotonic()
+        self.lock = threading.Lock()
+
+    def acquire(self):
+        while True:
+            with self.lock:
+                now = time.monotonic()
+                self.tokens = min(self.capacity, self.tokens + (now - self.stamp) * self.rate)
+                self.stamp = now
+                if self.tokens >= 1.0:
+                    self.tokens -= 1.0
+                    return
+                wait = (1.0 - self.tokens) / self.rate
+            time.sleep(wait)
+
+
+_rate_limiter = _TokenBucket(_RATE_LIMIT, _RATE_BURST) if _RATE_LIMIT > 0 else None
+
+
+class _PacedSession(requests.Session):
+    """requests.Session that paces every outbound call through the global
+    token bucket. ALL Absorb traffic in this process flows through the one
+    session get_session() returns, so this is the single choke point — auth,
+    user lists, enrollment fan-out, lesson/attempt lookups, everything.
+    """
+
+    def send(self, request, **kwargs):
+        if _rate_limiter is not None:
+            _rate_limiter.acquire()
+        return super().send(request, **kwargs)
+
+
 # Global session with connection pooling for better performance
 _session = None
 
 def get_session():
-    """Get or create a requests session with connection pooling."""
+    """Get or create a requests session with connection pooling + pacing."""
     global _session
     if _session is None:
-        _session = requests.Session()
-        # Configure connection pooling and retries
+        _session = _PacedSession()
+        # Transport-level retries for throttle/server blips. 429 included per
+        # the Absorb pacing guide (backoff on 429/5xx); backoff_factor 0.8
+        # matches their "start around 0.8s, not 8s" guidance. Retry-After is
+        # honored by default when the gateway sends it.
         retry_strategy = Retry(
             total=2,
-            backoff_factor=0.5,
-            status_forcelist=[500, 502, 503, 504]
+            backoff_factor=0.8,
+            status_forcelist=[429, 500, 502, 503, 504]
         )
         adapter = HTTPAdapter(
             pool_connections=50,
@@ -501,6 +568,21 @@ class AbsorbAPIClient:
             end = f"{year + 1}-01-01T00:00:00"
             year_range_args.append((year, start, end))
 
+        # Bucket workers: a 401 returns users=None as a SENTINEL rather than a
+        # silently-empty list. History of this exact spot:
+        #   - Original: bare except swallowed 401s into [] with status ok →
+        #     a mid-fan-out 401 silently lost entire buckets ("no students on
+        #     first login, Sync fixes it" — Bug 2, prod 2026-06-10).
+        #   - First fix (668b400): re-raise the 401 → it propagated to the
+        #     frontend as HTTP 401 → booted users on login. Reverted same day.
+        #   - This version (v2, per the Absorb pacing guide): mark the failed
+        #     buckets, then retry JUST those buckets sequentially with the
+        #     SAME token after a jittered pause. Transient throttle-401s clear
+        #     within ~1s (the gateway rate window refreshes every second), so
+        #     a paced retry recovers them without minting a token or raising
+        #     to the frontend. A genuinely dead token still yields a partial —
+        #     loudly logged — which /sync's refresh+retry recovers, exactly as
+        #     before.
         def fetch_year_bucket(year_tuple):
             year, start, end = year_tuple
             f = (f"departmentId eq guid'{department_id}' "
@@ -509,6 +591,12 @@ class AbsorbAPIClient:
             try:
                 users, sub_total = self._fetch_users_page(f, limit=1000)
                 return ('year', year, f, users, sub_total)
+            except AbsorbAPIError as e:
+                if e.status_code == 401:
+                    print(f"[API] Year bucket {year} hit 401 — queued for paced retry")
+                    return ('year', year, f, None, None)
+                print(f"[API] Year bucket {year} failed: {e}")
+                return ('year', year, f, [], None)
             except Exception as e:
                 print(f"[API] Year bucket {year} failed: {e}")
                 return ('year', year, f, [], None)
@@ -518,6 +606,12 @@ class AbsorbAPIClient:
             try:
                 users, sub_total = self._fetch_users_page(f, limit=1000)
                 return ('null', None, f, users, sub_total)
+            except AbsorbAPIError as e:
+                if e.status_code == 401:
+                    print(f"[API] Null bucket hit 401 — queued for paced retry")
+                    return ('null', None, f, None, None)
+                print(f"[API] Null bucket failed: {e}")
+                return ('null', None, f, [], None)
             except Exception as e:
                 print(f"[API] Null bucket failed: {e}")
                 return ('null', None, f, [], None)
@@ -533,9 +627,14 @@ class AbsorbAPIClient:
                     print(f"[API] Year bucket worker exception: {e}")
 
         # Merge the bucket users + identify any that hit the 1000 cap and
-        # need to be subdivided further.
+        # need to be subdivided further. Buckets whose users is None (the 401
+        # sentinel) are collected for the paced retry pass below.
         overflow_buckets = []  # list of (bucket_kind, year, filter_expr, sub_total)
+        retry_401_buckets = []  # list of (bucket_kind, year, filter_expr)
         for kind, year, fexpr, users, sub_total in bucket_results:
+            if users is None:
+                retry_401_buckets.append((kind, year, fexpr))
+                continue
             for u in users:
                 uid = u.get('id') or u.get('Id')
                 if uid and uid not in all_by_id:
@@ -545,6 +644,36 @@ class AbsorbAPIClient:
                 overflow_buckets.append((kind, year, fexpr, sub_total))
             else:
                 print(f"[API] Bucket {kind}={year}: {len(users)} users (total reported: {sub_total})")
+
+        # ─── Paced same-token retry of 401'd buckets (Bug 2 v2) ───────────
+        if retry_401_buckets:
+            delay = 0.8 + random.uniform(0, 0.4)
+            print(f"[API] {len(retry_401_buckets)} bucket(s) 401'd — pacing "
+                  f"{delay:.1f}s then retrying sequentially with the same token")
+            time.sleep(delay)
+            still_failed = []
+            for kind, year, fexpr in retry_401_buckets:
+                try:
+                    users, sub_total = self._fetch_users_page(fexpr, limit=1000)
+                    for u in users:
+                        uid = u.get('id') or u.get('Id')
+                        if uid and uid not in all_by_id:
+                            all_by_id[uid] = u
+                    if sub_total is not None and sub_total > 1000 and len(users) >= 1000:
+                        print(f"[API] Bucket {kind}={year} recovered ({sub_total} users, needs split)")
+                        overflow_buckets.append((kind, year, fexpr, sub_total))
+                    else:
+                        print(f"[API] Bucket {kind}={year} recovered on retry: {len(users)} users")
+                except Exception as e:
+                    still_failed.append((kind, year))
+                    print(f"[API] Bucket {kind}={year} STILL failing after paced retry: {e}")
+            if still_failed:
+                # Do NOT raise — a dept-level 401 propagates to the frontend
+                # as HTTP 401 and boots the user (the 668b400 lesson). Return
+                # the partial; /sync's refresh+retry path recovers it.
+                print(f"[API] WARNING: {len(still_failed)} bucket(s) unrecovered "
+                      f"({[f'{k}={y}' for k, y in still_failed]}) — dept result is "
+                      f"PARTIAL; a Sync will refresh the token and recover")
 
         # ─── Phase 3: recursive split for over-1000 year buckets ──────────
         if overflow_buckets:
@@ -563,7 +692,8 @@ class AbsorbAPIClient:
               f"(reported total: {total_items})")
         if len(all_users) < total_items:
             print(f"[API] WARNING: missing {total_items - len(all_users)} users — "
-                  f"may indicate a bucket exceeded the cap without being detected")
+                  f"either a bucket 401'd past the paced retry (see lines above) "
+                  f"or a bucket exceeded the 1000 cap without being detected")
         return all_users
 
     def _fetch_users_page(self, filter_expr: str, limit: int = 1000):
@@ -1169,16 +1299,22 @@ class AbsorbAPIClient:
             if not user_id:
                 return None
 
-            # Get enrollments with 3 retries on 401 + short backoff. CRITICAL:
-            # these retries reuse the SAME token (no /Authenticate). Absorb's
-            # load balancer throws transient per-call 401s under heavy parallel
-            # fan-out (a known behaviour the memory notes for ~16+ workers on a
-            # 1200+ user dept). 1-retry isn't enough: with 1300 users at ~10%
-            # transient 401 rate, ~130 users persist past one retry; you saw
-            # 519 of 1302 with 1-retry. 3-retry + 0.4s sleep recovers nearly
-            # all of them. SAFE because no /Authenticate fires — the original
-            # token stays alive and the workers don't war.
-            import time as _t_retry
+            # Get enrollments with 3 retries on 401. CRITICAL: these retries
+            # reuse the SAME token (no /Authenticate). Absorb throws transient
+            # per-call 401s under heavy parallel fan-out. 1-retry isn't
+            # enough: with 1300 users at ~10% transient 401 rate, ~130 users
+            # persist past one retry; you saw 519 of 1302 with 1-retry.
+            # 3 attempts recovers nearly all. SAFE because no /Authenticate
+            # fires — the original token stays alive and the workers don't war.
+            #
+            # Backoff is jittered exponential per the Absorb pacing guide:
+            # base 0.8s x 2^attempt + up to 0.4s jitter. The jitter matters
+            # more than the base — with 50 workers, fixed sleeps meant every
+            # failed call retried on the same instant and re-drained the
+            # gateway's token bucket ("retries fire in sync and re-throttle",
+            # their dev team's words). Attempt COUNT and same-token rule are
+            # settled (feedback_dashboard_per_user_401_retry) — only the
+            # pacing changed.
             enrollments = None
             _last_exc = None
             for _attempt in range(3):  # 1 initial + 2 retries
@@ -1191,7 +1327,7 @@ class AbsorbAPIClient:
                         raise
                     _last_exc = _e
                     if _attempt < 2:
-                        _t_retry.sleep(0.4)
+                        time.sleep(0.8 * (2 ** _attempt) + random.uniform(0, 0.4))
             if _last_exc is not None:
                 # Still 401 after retries — skip this user, don't kill the
                 # batch. Returning None counts toward auth_failures at the
