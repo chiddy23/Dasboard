@@ -610,6 +610,10 @@ def get_summary():
         })
 
     except AbsorbAPIError as e:
+        # Re-raise 401s so @absorb_retry_on_401 can refresh+retry — see
+        # get_students for the full story.
+        if e.status_code == 401:
+            raise
         return jsonify({
             'success': False,
             'error': str(e.message)
@@ -639,6 +643,10 @@ def get_students_quick():
             'quick': True
         })
     except AbsorbAPIError as e:
+        # Re-raise 401s so @absorb_retry_on_401 can refresh+retry — see
+        # get_students for the full story.
+        if e.status_code == 401:
+            raise
         return jsonify({
             'success': False,
             'error': str(e.message)
@@ -674,6 +682,13 @@ def get_students():
         })
 
     except AbsorbAPIError as e:
+        # 401s MUST propagate to @absorb_retry_on_401 — this internal handler
+        # was converting them to a 401 response before the decorator ever saw
+        # the exception, making the decorator a no-op and booting the user
+        # (confirmed in the 2026-08-12 capture: 401 served 90ms after fetch
+        # start, no retry, no refresh). Non-401 Absorb errors stay handled here.
+        if e.status_code == 401:
+            raise
         return jsonify({
             'success': False,
             'error': str(e.message)
@@ -777,8 +792,14 @@ def _fetch_dept_students(dept_id, token):
 
 @dashboard_bp.route('/students/multi', methods=['GET'])
 @login_required
+@absorb_retry_on_401
 def get_students_multi():
-    """Get students from multiple departments, merged into one list."""
+    """Get students from multiple departments, merged into one list.
+
+    The internal retry rounds handle per-dept expiries; the decorator is the
+    outer net for a 401 raised outside that machinery, so it reaches the
+    frontend only after refresh itself has failed (genuinely dead session).
+    """
     try:
         extra_param = request.args.get('departments', '')
         extra_ids = [d.strip() for d in extra_param.split(',') if d.strip()] if extra_param else []
@@ -845,6 +866,10 @@ def get_students_multi():
         })
 
     except AbsorbAPIError as e:
+        # Re-raise 401s so @absorb_retry_on_401 can refresh+retry — see
+        # get_students for the full story.
+        if e.status_code == 401:
+            raise
         return jsonify({'success': False, 'error': str(e.message)}), e.status_code or 500
     except Exception as e:
         import traceback
