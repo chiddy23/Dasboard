@@ -62,6 +62,9 @@ function Dashboard({ user, department, onLogout, initialData }) {
   const [deptInputValue, setDeptInputValue] = useState('')
   const [deptError, setDeptError] = useState('')
   const [treeLoading, setTreeLoading] = useState(false)
+  // Dept chip wall collapses past this many chips — 70 tree-loaded depts
+  // rendered as six rows of chips buried the actual dashboard.
+  const [deptChipsExpanded, setDeptChipsExpanded] = useState(false)
   // Generation counter for fetchMultiDeptStudents — a new run (extras changed
   // mid-flight, e.g. Clear All during a load) invalidates in-flight batches.
   const multiFetchGen = useRef(0)
@@ -1733,41 +1736,69 @@ function Dashboard({ user, department, onLogout, initialData }) {
                   <span className="px-2 py-0.5 bg-ji-blue-bright/10 text-ji-blue-bright text-xs rounded-full font-medium">
                     {primaryDeptName || 'Primary'}
                   </span>
-                  {departmentMeta
-                    .filter(d => d.status === 'ok' && d.id !== department?.id)
-                    .map(d => (
-                      <span key={d.id} className="px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded-full flex items-center gap-1">
-                        {d.name} ({d.studentCount})
-                        <button
-                          onClick={() => handleRemoveDepartment(d.id)}
-                          className="text-red-400 hover:text-red-600 ml-0.5"
-                          title="Remove department"
-                        >
-                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
-                          </svg>
-                        </button>
-                      </span>
-                    ))
-                  }
-                  {/* Show IDs that haven't resolved to names yet */}
-                  {extraDepartments
-                    .filter(id => !departmentMeta.some(d => d.id === id && d.status === 'ok'))
-                    .map(id => (
-                      <span key={id} className="px-2 py-0.5 bg-yellow-50 text-yellow-700 text-xs rounded-full flex items-center gap-1">
-                        {id.substring(0, 8)}...
-                        <button
-                          onClick={() => handleRemoveDepartment(id)}
-                          className="text-red-400 hover:text-red-600 ml-0.5"
-                          title="Remove department"
-                        >
-                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
-                          </svg>
-                        </button>
-                      </span>
-                    ))
-                  }
+                  {(() => {
+                    // Collapse the chip wall past a threshold: show the first
+                    // row's worth plus a "+N more" expander. All chips keep
+                    // their remove buttons when expanded.
+                    const CHIP_LIMIT = 10
+                    const resolved = departmentMeta.filter(d => d.status === 'ok' && d.id !== department?.id)
+                    const unresolved = extraDepartments.filter(id => !departmentMeta.some(d => d.id === id && d.status === 'ok'))
+                    const total = resolved.length + unresolved.length
+                    const limit = deptChipsExpanded ? total : CHIP_LIMIT
+                    const shownResolved = resolved.slice(0, limit)
+                    const shownUnresolved = unresolved.slice(0, Math.max(0, limit - shownResolved.length))
+                    const hidden = total - shownResolved.length - shownUnresolved.length
+                    return (
+                      <>
+                        {shownResolved.map(d => (
+                          <span key={d.id} className="px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded-full flex items-center gap-1">
+                            {d.name} ({d.studentCount})
+                            <button
+                              onClick={() => handleRemoveDepartment(d.id)}
+                              className="text-red-400 hover:text-red-600 ml-0.5"
+                              title="Remove department"
+                            >
+                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                              </svg>
+                            </button>
+                          </span>
+                        ))}
+                        {shownUnresolved.map(id => (
+                          <span key={id} className="px-2 py-0.5 bg-yellow-50 text-yellow-700 text-xs rounded-full flex items-center gap-1">
+                            {id.substring(0, 8)}...
+                            <button
+                              onClick={() => handleRemoveDepartment(id)}
+                              className="text-red-400 hover:text-red-600 ml-0.5"
+                              title="Remove department"
+                            >
+                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                              </svg>
+                            </button>
+                          </span>
+                        ))}
+                        {hidden > 0 && (
+                          <button
+                            onClick={() => setDeptChipsExpanded(true)}
+                            className="px-2 py-0.5 bg-ji-blue-bright/10 text-ji-blue-bright text-xs rounded-full font-medium hover:bg-ji-blue-bright/20"
+                            title="Show all departments"
+                          >
+                            +{hidden} more
+                          </button>
+                        )}
+                        {deptChipsExpanded && total > CHIP_LIMIT && (
+                          <button
+                            onClick={() => setDeptChipsExpanded(false)}
+                            className="px-2 py-0.5 bg-gray-100 text-gray-500 text-xs rounded-full font-medium hover:bg-gray-200"
+                            title="Collapse the department list"
+                          >
+                            Show less
+                          </button>
+                        )}
+                      </>
+                    )
+                  })()}
                 </div>
                 <div className="flex items-center gap-3">
                   {multiProgress && (
