@@ -826,39 +826,48 @@ def get_students_multi():
         all_formatted, fetched_meta = _fetch_depts_collect(all_dept_ids, g.absorb_token)
         dept_meta.extend(fetched_meta)
 
-        # Refresh+retry ROUNDS for expired depts (was a single round). On a
-        # very large cold load (~145 depts, 30-60s of sustained fetching), a
-        # competing request can re-mint the account token mid-flight and
-        # revoke the one this route just refreshed — single-round recovery
-        # left 13 depts stuck at "Session expired" even though the storm
-        # settles once the big fetches finish. Up to 3 rounds, each with a
-        # jittered pause so a competing minter can finish first; each round
-        # only refetches the still-failed depts (sequential, cheap).
+        # Refresh+retry ROUNDS for expired depts. Two failure shapes need
+        # opposite openings (2026-08-12 all-70-fail forensics):
+        #
+        #  * ALL depts expired → the token is provably DEAD (4h TTL hit, or
+        #    an external mint revoked it). A same-token round is pure waste —
+        #    the old shape burned a full sequential dead-token pass and then
+        #    recovered SEQUENTIALLY, turning batch recovery into a ~100-second
+        #    lambda that lost the race against the router/user. Refresh
+        #    IMMEDIATELY, settle briefly, retry in paced PARALLEL.
+        #
+        #  * SOME depts expired → the token still works (other depts passed);
+        #    the 401s are transient gateway throttles. Minting here REVOKES a
+        #    healthy token and manufactures the next round's failures (mint
+        #    amplification). Retry with the SAME token first; mint only if
+        #    that fails.
+        #
+        # At most ONE mint per request: after our fresh mint, remaining
+        # failures are propagation stragglers or a competing minter — another
+        # mint amplifies the war instead of winning it. The frontend's sweep
+        # request provides the next fresh mint if it comes to that.
         import time as _t_rounds
         import random as _r_rounds
+        _minted = False
         for _round in range(1, 4):
             expired_ids = _expired_dept_ids(dept_meta)
             if not expired_ids:
                 break
-            if _round == 1:
-                # Round 1 retries with the SAME token — no mint. Transient
-                # throttle-401s clear within ~1s (the gateway bucket refills
-                # every second), and minting on the first failure REVOKES a
-                # healthy token, manufacturing the next round's failures
-                # (mint amplification — the Absorb guide's "refresh only on
-                # a 401, never request a new token per call" warning). Only
-                # rounds 2+ mint, once the token has provably stopped working.
-                _t_rounds.sleep(0.8 + _r_rounds.uniform(0, 0.4))
-                print(f"[MULTI-DEPT] Round 1: retrying {len(expired_ids)} dept(s) with the SAME token (no mint)")
-            else:
+            _all_dead = len(expired_ids) >= len(all_dept_ids)
+            if not _minted and (_all_dead or _round >= 2):
                 if not _refresh_user_absorb_token():
                     break
-                _t_rounds.sleep(0.6 + _r_rounds.uniform(0, 0.4))
-                print(f"[MULTI-DEPT] Round {_round}: retrying {len(expired_ids)} dept(s) after token refresh")
+                _minted = True
+                _t_rounds.sleep(1.2 + _r_rounds.uniform(0, 0.6))
+                print(f"[MULTI-DEPT] Round {_round}: retrying {len(expired_ids)} dept(s) after token refresh"
+                      + (" (all depts expired — token was dead, refreshed first)" if _all_dead else ""))
+            else:
+                _t_rounds.sleep(0.8 + _r_rounds.uniform(0, 0.4))
+                print(f"[MULTI-DEPT] Round {_round}: retrying {len(expired_ids)} dept(s) with the SAME token (no mint)")
             for dept_id in expired_ids:
                 invalidate_cache(dept_id)
             dept_meta = [m for m in dept_meta if m.get('id') not in expired_ids]
-            retry_formatted, retry_meta = _fetch_depts_collect(expired_ids, g.absorb_token, sequential=True)
+            retry_formatted, retry_meta = _fetch_depts_collect(expired_ids, g.absorb_token)
             all_formatted.extend(retry_formatted)
             dept_meta.extend(retry_meta)
 
@@ -1008,28 +1017,34 @@ def sync_data():
         print(f"[SYNC DIAG] Initial fan-out done: {len(_ok_ids)} ok, "
               f"{len(_expired_dept_ids(dept_meta))} expired → expired_ids={_expired_dept_ids(dept_meta)}")
 
-        # Retry rounds — round 1 with the SAME token (no mint), rounds 2-3
-        # with a refresh. Transient throttle-401s clear within ~1s; minting
-        # on the first failure revokes a healthy token and manufactures the
-        # next round's failures (mint amplification). Mirrors the
-        # /students/multi rounds.
+        # Retry rounds — mirrors /students/multi: if ALL depts expired the
+        # token is provably dead (4h TTL or an external mint), so refresh
+        # IMMEDIATELY instead of wasting a same-token pass; if only SOME
+        # expired the token still works and the same-token round handles
+        # transient throttle-401s without mint amplification. At most ONE
+        # mint per request — after our fresh mint, remaining failures are
+        # stragglers or a competing minter, and another mint just amplifies.
         import time as _t_sync
         import random as _r_sync
+        _minted_sync = False
         for _round in range(1, 4):
             expired_ids = _expired_dept_ids(dept_meta)
             if not expired_ids:
                 break
-            if _round == 1:
-                _t_sync.sleep(0.8 + _r_sync.uniform(0, 0.4))
-                print(f"[SYNC DIAG] Round 1: retrying {len(expired_ids)} dept(s) with the SAME token (no mint)")
-            else:
+            _all_dead = len(expired_ids) >= len(all_dept_ids)
+            if not _minted_sync and (_all_dead or _round >= 2):
                 _refresh_ok = _refresh_user_absorb_token()
-                print(f"[SYNC DIAG] Round {_round}: refresh attempt returned: {_refresh_ok}")
+                print(f"[SYNC DIAG] Round {_round}: refresh attempt returned: {_refresh_ok}"
+                      + (" (all depts expired — token was dead, refreshed first)" if _all_dead else ""))
                 if not _refresh_ok:
                     print(f"[SYNC DIAG] Refresh failed — keeping the {len(expired_ids)} expired entries as errors. Check earlier [TOKEN REFRESH] lines for cause (no creds / zombie / Absorb rejected).")
                     break
-                _t_sync.sleep(0.6 + _r_sync.uniform(0, 0.4))
+                _minted_sync = True
+                _t_sync.sleep(1.2 + _r_sync.uniform(0, 0.6))
                 print(f"[SYNC] Retrying {len(expired_ids)} dept(s) after token refresh — new g.absorb_token prefix={(g.absorb_token or '')[:8]}")
+            else:
+                _t_sync.sleep(0.8 + _r_sync.uniform(0, 0.4))
+                print(f"[SYNC DIAG] Round {_round}: retrying {len(expired_ids)} dept(s) with the SAME token (no mint)")
             # Invalidate any caches touched by the failed attempts
             for dept_id in expired_ids:
                 invalidate_cache(dept_id)
