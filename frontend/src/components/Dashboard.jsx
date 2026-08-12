@@ -445,6 +445,22 @@ function Dashboard({ user, department, onLogout, initialData }) {
     setExtraDepartments(prev => prev.filter(d => d !== id))
   }
 
+  // Clear ALL added departments at once (primary stays). Setting the list
+  // empty flows through the same effects as per-chip removal: prefs save
+  // (backend + localStorage mirror both persist the empty list) and the
+  // student reload reverts to primary-only. One confirm guards against a
+  // misclick nuking a hand-curated list — a tree-loaded list is one
+  // Load Dept Tree click to restore, but a pasted-GUID list is not.
+  const handleClearDepartments = () => {
+    if (extraDepartments.length === 0) return
+    if (!window.confirm(
+      `Remove all ${extraDepartments.length} added department(s)? ` +
+      `Your primary department stays loaded. Load Dept Tree can re-add a tree in one click.`
+    )) return
+    setExtraDepartments([])
+    setDeptError('')
+  }
+
   // Fetch every sub-department under the primary dept from the backend tree
   // walk and add them all at once — same dedupe/cap rules as manual adds, so
   // the downstream prefs-save and /students/multi flows are identical.
@@ -1581,6 +1597,18 @@ function Dashboard({ user, department, onLogout, initialData }) {
                   }
                 </div>
                 <div className="flex items-center gap-3">
+                  {extraDepartments.length > 0 && (
+                    <button
+                      onClick={handleClearDepartments}
+                      className="text-sm text-red-500 hover:text-red-700 flex items-center gap-1"
+                      title="Remove all added departments (your primary department stays)"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                      <span>Clear All ({extraDepartments.length})</span>
+                    </button>
+                  )}
                   <button
                     onClick={handleLoadDeptTree}
                     disabled={treeLoading}
