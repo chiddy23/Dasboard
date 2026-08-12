@@ -7,6 +7,9 @@ This builds a historical record for tracking study patterns over time.
 import sqlite3
 import json
 import os
+import time
+import random
+import threading
 from datetime import datetime, timedelta
 
 from config import Config
@@ -20,11 +23,24 @@ from utils.gap_metrics import calculate_gap_metrics
 
 
 def _get_connection():
-    """Get a SQLite connection, creating the data directory if needed."""
+    """Get a SQLite connection, creating the data directory if needed.
+
+    WAL + busy_timeout: prod runs multiple gunicorn workers sharing this DB
+    file; with the default journal mode a concurrent write raised
+    'database is locked' which surfaced as an unhandled 500 on allowlist
+    add/remove ("adds sometimes just fail"). WAL allows concurrent
+    readers during a write and the busy timeout makes writers wait
+    instead of erroring.
+    """
     db_path = Config.SNAPSHOT_DB_PATH
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=10)
     conn.row_factory = sqlite3.Row
+    try:
+        conn.execute('PRAGMA journal_mode=WAL')
+        conn.execute('PRAGMA busy_timeout=5000')
+    except Exception:
+        pass  # pragmas are best-effort; a plain connection still works
     return conn
 
 
@@ -161,12 +177,23 @@ def add_allowed_user(email, name='', added_by=''):
 
 
 def remove_allowed_user(email):
-    """Soft-delete a user from the allowlist (set active=0)."""
+    """Soft-delete a user from the allowlist (set active=0).
+
+    Returns True if a row was actually deactivated, False if the email was
+    never on the list (or already inactive) — previously this returned
+    nothing and a misspelled removal reported success with an unchanged
+    list.
+    """
     email = email.lower().strip()
     conn = _get_connection()
-    conn.execute('UPDATE allowed_users SET active = 0 WHERE email = ?', (email,))
+    cur = conn.execute(
+        'UPDATE allowed_users SET active = 0 WHERE email = ? AND active = 1',
+        (email,)
+    )
+    removed = cur.rowcount > 0
     conn.commit()
     conn.close()
+    return removed
 
 
 def get_all_allowed_users():
@@ -845,9 +872,30 @@ def load_snapshots_from_sheet():
 
 ALLOWLIST_HEADERS = ['email', 'name', 'added_by', 'added_at', 'active']
 
+# True once the allowlist has been successfully hydrated from the Google
+# Sheet this process lifetime. Exposed to routes so the admin UI can tell
+# "list is genuinely empty" apart from "sheet load failed — enforcement is
+# silently OFF" (is_user_allowed passes everyone on an empty table).
+ALLOWLIST_HYDRATED = False
 
-def _get_allowlist_sheet():
-    """Get the AllowedUsers worksheet (second tab of snapshot sheet)."""
+# Serializes sheet writes within a process — two concurrent add/remove
+# requests each doing a full overwrite could interleave into a corrupt or
+# duplicated sheet.
+_allowlist_sheet_lock = threading.Lock()
+_allowlist_ws_cache = None
+
+
+def _get_allowlist_sheet(force_refresh=False):
+    """Get the AllowedUsers worksheet (second tab of snapshot sheet).
+
+    Caches the worksheet handle — gspread auth + open_by_key + worksheet
+    lookup are three HTTP round-trips that were previously paid on EVERY
+    save, contributing most of the 2-5s add latency.
+    """
+    global _allowlist_ws_cache
+    if _allowlist_ws_cache is not None and not force_refresh:
+        return _allowlist_ws_cache
+
     import json
     import gspread
     from google.oauth2.service_account import Credentials
@@ -864,46 +912,80 @@ def _get_allowlist_sheet():
     spreadsheet = gc.open_by_key(sheet_id)
 
     try:
-        return spreadsheet.worksheet('AllowedUsers')
+        ws = spreadsheet.worksheet('AllowedUsers')
     except gspread.exceptions.WorksheetNotFound:
         ws = spreadsheet.add_worksheet(title='AllowedUsers', rows=100, cols=5)
         ws.update('A1', [ALLOWLIST_HEADERS])
-        return ws
+    _allowlist_ws_cache = ws
+    return ws
 
 
 def save_allowlist_to_sheet():
-    """Write the full allowlist to Google Sheets (overwrite). Non-fatal."""
-    try:
-        ws = _get_allowlist_sheet()
-        if not ws:
-            print("[ALLOWLIST] No Google Sheet configured, skipping sheet save")
-            return
-        users = get_all_allowed_users()
-        ws.clear()
-        ws.update('A1', [ALLOWLIST_HEADERS])
-        if users:
-            rows = [[u['email'], u['name'], u['added_by'], u['added_at'], '1'] for u in users]
-            ws.append_rows(rows, value_input_option='RAW')
-        print(f"[ALLOWLIST] Saved {len(users)} allowed users to Google Sheet")
-    except Exception as e:
-        print(f"[ALLOWLIST] Failed to save to Google Sheet (non-fatal): {e}")
+    """Write the full allowlist to Google Sheets. Returns True only when
+    the durable write succeeded.
+
+    ATOMICITY: the old implementation did clear() → update(headers) →
+    append_rows() as three separate API calls. A failure landing between
+    clear() and append_rows() left the durable sheet EMPTY — and since the
+    sheet is what re-hydrates SQLite after every deploy (ephemeral disk),
+    the next boot loaded zero users and enforcement silently failed open.
+    Now the replacement data is written in ONE update call and stale
+    trailing rows are cleared only afterwards.
+    """
+    with _allowlist_sheet_lock:
+        for attempt in range(2):
+            try:
+                ws = _get_allowlist_sheet(force_refresh=(attempt > 0))
+                if not ws:
+                    print("[ALLOWLIST] No Google Sheet configured, skipping sheet save")
+                    return False
+                users = get_all_allowed_users()
+                rows = [ALLOWLIST_HEADERS] + [
+                    [u['email'], u['name'], u['added_by'], u['added_at'], '1']
+                    for u in users
+                ]
+                ws.update('A1', rows, value_input_option='RAW')
+                # Clear leftovers below the fresh data (e.g. after removals).
+                # Failure here is cosmetic — hydration ignores inactive rows
+                # and the authoritative data is already in place.
+                try:
+                    if ws.row_count > len(rows):
+                        ws.batch_clear([f"A{len(rows) + 1}:E{ws.row_count}"])
+                except Exception as _trim_err:
+                    print(f"[ALLOWLIST] Trailing-row cleanup failed (cosmetic): {_trim_err}")
+                print(f"[ALLOWLIST] Saved {len(users)} allowed users to Google Sheet")
+                return True
+            except Exception as e:
+                print(f"[ALLOWLIST] Sheet save attempt {attempt + 1} failed: {e}")
+                if attempt == 0:
+                    time.sleep(1.2 + random.uniform(0, 0.6))
+        return False
 
 
 def load_allowlist_from_sheet():
-    """Load allowlist from Google Sheet into SQLite on startup."""
+    """Hydrate the allowlist from the Google Sheet into SQLite at startup.
+
+    The sheet is AUTHORITATIVE (it is the only copy that survives a
+    deploy). The old loader was insert-only: it never updated existing
+    rows and never deactivated rows missing from the sheet, so removed
+    users resurrected on fresh disks and locally soft-deleted rows could
+    never be revived — sheet and DB diverged permanently. Now every
+    active sheet row is upserted, and rows absent from a FULLY successful
+    sheet read are deactivated (guarded so a blank/new sheet can't
+    mass-deactivate an existing DB).
+    """
+    global ALLOWLIST_HYDRATED
     try:
         ws = _get_allowlist_sheet()
         if not ws:
             print("[ALLOWLIST] No Google Sheet configured, skipping allowlist load")
             return 0
         all_values = ws.get_all_values()
-        if len(all_values) <= 1:
-            print("[ALLOWLIST] Allowlist sheet is empty")
-            return 0
-        headers = all_values[0]
-        data_rows = all_values[1:]
+        headers = all_values[0] if all_values else []
+        data_rows = all_values[1:] if len(all_values) > 1 else []
+
         conn = _get_connection()
-        loaded = 0
+        sheet_active = set()
         for row in data_rows:
             row_dict = {h: row[i] if i < len(row) else '' for i, h in enumerate(headers)}
             email = (row_dict.get('email') or '').lower().strip()
@@ -911,25 +993,45 @@ def load_allowlist_from_sheet():
                 continue
             if row_dict.get('active', '1') != '1':
                 continue
-            existing = conn.execute('SELECT 1 FROM allowed_users WHERE email = ?', (email,)).fetchone()
-            if not existing:
-                conn.execute(
-                    'INSERT INTO allowed_users (email, name, added_by, added_at, active) VALUES (?, ?, ?, ?, 1)',
-                    (email, row_dict.get('name', ''), row_dict.get('added_by', ''),
-                     row_dict.get('added_at', datetime.utcnow().isoformat()))
-                )
-                loaded += 1
+            sheet_active.add(email)
+            conn.execute(
+                'INSERT INTO allowed_users (email, name, added_by, added_at, active) '
+                'VALUES (?, ?, ?, ?, 1) '
+                'ON CONFLICT(email) DO UPDATE SET '
+                'active = 1, name = excluded.name, added_by = excluded.added_by, '
+                'added_at = excluded.added_at',
+                (email, row_dict.get('name', ''), row_dict.get('added_by', ''),
+                 row_dict.get('added_at') or datetime.utcnow().isoformat())
+            )
+        # Reconcile: deactivate DB rows absent from the successfully-read
+        # sheet — but only when the sheet actually contained users, so a
+        # brand-new/blank sheet cannot wipe an existing local list.
+        if sheet_active:
+            for r in conn.execute('SELECT email FROM allowed_users WHERE active = 1').fetchall():
+                if r['email'] not in sheet_active:
+                    conn.execute('UPDATE allowed_users SET active = 0 WHERE email = ?', (r['email'],))
         conn.commit()
         conn.close()
-        print(f"[ALLOWLIST] Loaded {loaded} new allowed users from Google Sheet")
-        return loaded
+        ALLOWLIST_HYDRATED = True
+        print(f"[ALLOWLIST] Hydrated {len(sheet_active)} allowed users from Google Sheet (authoritative)")
+        return len(sheet_active)
     except Exception as e:
-        print(f"[ALLOWLIST] Failed to load from Google Sheet (non-fatal): {e}")
+        print(f"[ALLOWLIST] HYDRATION FAILED — allowlist may be empty and "
+              f"enforcement silently OFF until the next successful load: {e}")
         return 0
 
 
-# Initialize DB on import
-init_db()
+# ── Initialize on import ──────────────────────────────────────────────
+# Wrapped so a transient failure can never leave this module half-imported:
+# Python removes a failed import from sys.modules, so every later request
+# that lazily imports snapshot_db would re-run this block and re-raise —
+# observed as repeatable 500s on /exam/allowlist that "cleared up" only
+# after a restart. Failures are loud in the logs instead; routes surface
+# hydration state via ALLOWLIST_HYDRATED.
+try:
+    init_db()
+except Exception as _init_err:
+    print(f"[SNAPSHOT_DB] init_db FAILED at import — DB likely unusable: {_init_err}")
 
 # Load historical snapshots from Google Sheet (survives Render deploys)
 load_snapshots_from_sheet()

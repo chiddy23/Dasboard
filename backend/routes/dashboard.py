@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from flask import session
 from absorb_api import AbsorbAPIClient, AbsorbAPIError
 from middleware import login_required
+from utils.absorb_retry import absorb_retry_on_401
 from utils import format_student_for_response, get_status_from_last_login
 from utils.credential_store import decrypt_password
 from config import Config
@@ -49,6 +50,11 @@ dashboard_bp = Blueprint('dashboard', __name__)
 # Structure: {department_id: {'data': [...], 'timestamp': datetime, 'formatted': [...]}}
 _student_cache = {}
 CACHE_TTL_MINUTES = 5  # Cache data for 5 minutes
+
+# Depts whose most recent fetch came back PARTIAL (bucket 401'd past the
+# paced retry) — dept_id (lower) → approx missing count. Written by
+# get_cached_students, consumed by _fetch_dept_students to mark the meta.
+_partial_fetch_marks = {}
 
 # Per-department FETCH lock. Absorb uses a single-session-per-account token, so
 # only ONE /Authenticate may be "live" at a time. On a cold cache, /students and
@@ -132,12 +138,19 @@ def get_cached_students(department_id, token):
             reverse=False
         )
 
-        # Store in cache
-        _student_cache[department_id] = {
-            'data': students,
-            'formatted': formatted_students,
-            'timestamp': datetime.utcnow()
-        }
+        # Store in cache — but NEVER cache a PARTIAL fetch (bucket 401'd past
+        # the paced retry during a token war). A cached partial serves a huge
+        # dept as ~0 students for 5 minutes; leaving it uncached lets the next
+        # request (sweep/Sync/reload) refetch the full set instead.
+        if getattr(client, 'last_fetch_partial', False):
+            print(f"[CACHE] PARTIAL fetch for {department_id} — returning uncached so the next request refetches")
+            _partial_fetch_marks[(department_id or '').lower()] = getattr(client, 'last_fetch_missing', 0) or 1
+        else:
+            _student_cache[department_id] = {
+                'data': students,
+                'formatted': formatted_students,
+                'timestamp': datetime.utcnow()
+            }
 
         return students, formatted_students
     finally:
@@ -263,8 +276,21 @@ def _refresh_user_absorb_token():
     with _active_logins_lock:
         still_active = uname_key_check in _active_user_logins
     if not still_active:
-        print(f'[TOKEN REFRESH] Skipping refresh — user {uname_key_check} is no longer logged in (zombie request)')
-        return False
+        if os.environ.get('SERVERLESS', '').lower() in ('1', 'true', 'yes'):
+            # Serverless: _active_user_logins is per-instance and starts EMPTY
+            # on every fresh instance, so absence proves nothing about whether
+            # the user is logged in. The signed session cookie that carried
+            # this request past @login_required is the real evidence of an
+            # active login. The zombie this guard exists to stop — a retry
+            # loop from a PRIOR session still cycling inside a long-running
+            # process — cannot survive an instance boundary, so the guard's
+            # premise doesn't apply here. Register the user and proceed.
+            with _active_logins_lock:
+                _active_user_logins.add(uname_key_check)
+            print(f'[TOKEN REFRESH] Serverless — registering {uname_key_check} as active on this instance (cookie session is proof of login)')
+        else:
+            print(f'[TOKEN REFRESH] Skipping refresh — user {uname_key_check} is no longer logged in (zombie request)')
+            return False
 
     lock_path = _refresh_lock_path(username)
     lock_file = None
@@ -394,6 +420,32 @@ def _refresh_user_absorb_token():
                     lock_file.close()
                 except Exception:
                     pass
+
+
+def _proactive_refresh_if_expiring(threshold_minutes=20):
+    """Mint a fresh token BEFORE a big fan-out when the session token is
+    inside its final minutes of Absorb's 4h TTL.
+
+    A mid-load expiry 401-storms every dept and puts the whole recovery
+    machine on the user's critical path; refreshing up front is one quiet
+    mint with nothing to recover. Returns True if a mint happened (callers
+    count it as the request's single allowed mint). Never raises.
+    """
+    try:
+        user_data = session.get('user') if session else None
+        expires_raw = (user_data or {}).get('tokenExpiresAt')
+        if not expires_raw:
+            return False
+        expires_at = datetime.fromisoformat(str(expires_raw).replace('Z', ''))
+        remaining = (expires_at - datetime.utcnow()).total_seconds()
+        if remaining > threshold_minutes * 60:
+            return False
+        print(f"[TOKEN REFRESH] Proactive: token expires in {max(0, int(remaining // 60))}m "
+              f"(< {threshold_minutes}m) — refreshing before the fan-out")
+        return bool(_refresh_user_absorb_token())
+    except Exception as e:
+        print(f"[TOKEN REFRESH] Proactive check failed ({type(e).__name__}) — continuing with current token")
+        return False
 
 
 def _fetch_depts_collect(dept_ids, token, sequential=False):
@@ -553,9 +605,18 @@ def get_summary_quick():
 
 @dashboard_bp.route('/summary', methods=['GET'])
 @login_required
+@absorb_retry_on_401
 def get_summary():
     """
     Get dashboard summary with KPI data (uses cache).
+
+    Decorated with the tiered 401 retry: this route fires on every page
+    load, and without it a single transient 401 (or a sibling request's
+    refresh revoking this request's token mid-fetch) surfaced as HTTP 401
+    to the frontend, which treats that as session-death and boots the
+    user. Inline same-token retries recover transients; the stored-cred
+    refresh recovers a genuinely revoked token. Only a failed refresh
+    still returns 401 — which then IS a dead session.
 
     Returns:
         JSON response with summary statistics
@@ -587,6 +648,10 @@ def get_summary():
         })
 
     except AbsorbAPIError as e:
+        # Re-raise 401s so @absorb_retry_on_401 can refresh+retry — see
+        # get_students for the full story.
+        if e.status_code == 401:
+            raise
         return jsonify({
             'success': False,
             'error': str(e.message)
@@ -601,9 +666,11 @@ def get_summary():
 
 @dashboard_bp.route('/students/quick', methods=['GET'])
 @login_required
+@absorb_retry_on_401
 def get_students_quick():
     """
     Get students quickly without enrollment data (fast initial load).
+    Tiered 401 retry for the same reason as get_students/get_summary.
     """
     try:
         formatted_students = get_quick_students(g.department_id, g.absorb_token)
@@ -614,6 +681,10 @@ def get_students_quick():
             'quick': True
         })
     except AbsorbAPIError as e:
+        # Re-raise 401s so @absorb_retry_on_401 can refresh+retry — see
+        # get_students for the full story.
+        if e.status_code == 401:
+            raise
         return jsonify({
             'success': False,
             'error': str(e.message)
@@ -627,9 +698,13 @@ def get_students_quick():
 
 @dashboard_bp.route('/students', methods=['GET'])
 @login_required
+@absorb_retry_on_401
 def get_students():
     """
     Get all students in the department with progress data (uses cache).
+
+    Decorated with the tiered 401 retry — see get_summary's docstring for
+    why: these page-load routes surfacing a raw 401 is what boots users.
 
     Returns:
         JSON response with formatted student list
@@ -645,6 +720,13 @@ def get_students():
         })
 
     except AbsorbAPIError as e:
+        # 401s MUST propagate to @absorb_retry_on_401 — this internal handler
+        # was converting them to a 401 response before the decorator ever saw
+        # the exception, making the decorator a no-op and booting the user
+        # (confirmed in the 2026-08-12 capture: 401 served 90ms after fetch
+        # start, no retry, no refresh). Non-401 Absorb errors stay handled here.
+        if e.status_code == 401:
+            raise
         return jsonify({
             'success': False,
             'error': str(e.message)
@@ -661,7 +743,17 @@ def get_students():
 
 
 GUID_RE = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
-MAX_EXTRA_DEPTS = 30
+# Raised 30 → 100 → 200 (2026-08-10) to fit whole dept trees loaded via
+# the Load Dept Tree button — the user's real tree needs ~145+ slots (their
+# biggest org discovered 75 subs on top of ~70 already loaded). Safe now
+# that the global client-side rate limiter (absorb_api._TokenBucket,
+# 150/sec per Absorb's pacing guide) paces every call — the old cap was
+# guarding against unthrottled fan-out bursts.
+# Must match MAX_EXTRA_DEPTS in frontend/src/components/Dashboard.jsx.
+# NOTE: /students/multi passes ids as a query string — 200 GUIDs ≈ 7.5KB
+# URL, inside typical 14KB limits but don't push this past ~300 without
+# switching that endpoint to POST.
+MAX_EXTRA_DEPTS = 200
 
 
 def _compute_summary(formatted_students):
@@ -728,18 +820,36 @@ def _fetch_dept_students(dept_id, token):
     for s in formatted:
         s['departmentName'] = dept_name
 
-    return {
+    # Surface PARTIAL fetches instead of letting them pass as clean "ok"
+    # metas — a bucket that 401'd past the paced retry silently shrinks a
+    # big dept's student list with no error, no banner, and no way to tell
+    # from the UI. get_cached_students marks the dept; we report it so the
+    # frontend can flag the chip and auto-retry (partials are never cached,
+    # so a retry refetches for real).
+    _partial_missing = _partial_fetch_marks.pop((dept_id or '').lower(), 0)
+    meta = {
         'id': dept_id,
         'name': dept_name,
         'studentCount': len(formatted),
         'status': 'ok',
-    }, formatted
+    }
+    if _partial_missing:
+        meta['partial'] = True
+        meta['missing'] = _partial_missing
+        print(f"[FETCH] PARTIAL dept {dept_id} ({dept_name}): {len(formatted)} loaded, ~{_partial_missing} missing")
+    return meta, formatted
 
 
 @dashboard_bp.route('/students/multi', methods=['GET'])
 @login_required
+@absorb_retry_on_401
 def get_students_multi():
-    """Get students from multiple departments, merged into one list."""
+    """Get students from multiple departments, merged into one list.
+
+    The internal retry rounds handle per-dept expiries; the decorator is the
+    outer net for a 401 raised outside that machinery, so it reaches the
+    frontend only after refresh itself has failed (genuinely dead session).
+    """
     try:
         extra_param = request.args.get('departments', '')
         extra_ids = [d.strip() for d in extra_param.split(',') if d.strip()] if extra_param else []
@@ -757,6 +867,13 @@ def get_students_multi():
         # Always include user's own department
         all_dept_ids = [g.department_id] + valid_ids
 
+        # Proactive refresh: if the session token is inside its last 20
+        # minutes, mint ONCE now — before the fan-out — instead of letting
+        # a mid-load expiry 401-storm all depts. This is the only mint a
+        # data route may perform, and only in its first ~100ms (an
+        # abandoned-request mint this early cannot war with anything).
+        _proactive_refresh_if_expiring()
+
         # Fetch all departments in parallel. The refresh path inside
         # _fetch_depts_collect is now guarded by an in-process threading
         # lock + cross-process fcntl file lock (see _refresh_user_absorb_token)
@@ -766,13 +883,32 @@ def get_students_multi():
         all_formatted, fetched_meta = _fetch_depts_collect(all_dept_ids, g.absorb_token)
         dept_meta.extend(fetched_meta)
 
-        expired_ids = _expired_dept_ids(dept_meta)
-        if expired_ids and _refresh_user_absorb_token():
-            print(f"[MULTI-DEPT] Retrying {len(expired_ids)} dept(s) after token refresh")
+        # Recovery rounds — SAME-TOKEN ONLY. Data requests never mint: a
+        # mint from an abandoned request (F5, logout, superseded loader
+        # run) revokes the live session's token minutes later — the entire
+        # 2026-08-12 token-war class. The mint authority is
+        # POST /api/auth/refresh-token (frontend single-flight). Two shapes:
+        #
+        #  * SOME depts expired → token alive (others passed); the 401s are
+        #    transient gateway throttles. Same-token rounds heal them.
+        #  * ALL depts expired → token dead. Same-token retries are
+        #    pointless and minting is forbidden here — return FAST with
+        #    tokenExpired so the frontend refreshes once and refires.
+        import time as _t_rounds
+        import random as _r_rounds
+        for _round in range(1, 3):
+            expired_ids = _expired_dept_ids(dept_meta)
+            if not expired_ids:
+                break
+            if len(expired_ids) >= len(all_dept_ids):
+                print(f"[MULTI-DEPT] Token dead ({len(expired_ids)}/{len(all_dept_ids)} expired) — returning for a frontend refresh+refire")
+                break
+            _t_rounds.sleep(0.8 * _round + _r_rounds.uniform(0, 0.4))
+            print(f"[MULTI-DEPT] Round {_round}: retrying {len(expired_ids)} dept(s) with the SAME token (no mint)")
             for dept_id in expired_ids:
                 invalidate_cache(dept_id)
             dept_meta = [m for m in dept_meta if m.get('id') not in expired_ids]
-            retry_formatted, retry_meta = _fetch_depts_collect(expired_ids, g.absorb_token, sequential=True)
+            retry_formatted, retry_meta = _fetch_depts_collect(expired_ids, g.absorb_token)
             all_formatted.extend(retry_formatted)
             dept_meta.extend(retry_meta)
 
@@ -788,15 +924,84 @@ def get_students_multi():
             'count': len(all_formatted),
             'summary': _compute_summary(all_formatted),
             'departments': dept_meta,
+            # Frontend cue: refresh once via /auth/refresh-token (single-
+            # flight) and refire the expired depts with the new cookie.
+            'tokenExpired': bool(_expired_dept_ids(dept_meta)),
         })
 
     except AbsorbAPIError as e:
+        # Re-raise 401s so @absorb_retry_on_401 can retry same-token — see
+        # get_students for the full story.
+        if e.status_code == 401:
+            raise
         return jsonify({'success': False, 'error': str(e.message)}), e.status_code or 500
     except Exception as e:
         import traceback
         print(f"[ERROR] Multi-dept fetch failed: {e}")
         traceback.print_exc()
         return jsonify({'success': False, 'error': f'Failed to fetch students: {str(e)}'}), 500
+
+
+@dashboard_bp.route('/dept-tree', methods=['GET'])
+@login_required
+@absorb_retry_on_401
+def get_dept_tree():
+    """Walk every sub-department beneath the session's primary department.
+
+    BFS over Absorb's /departments?parentId filter — one call per node, paced
+    by the global rate limiter (a 30-branch tree costs ~30 calls, a few
+    seconds). Returns id+name for each descendant so the frontend's "Load
+    Dept Tree" button can add them all at once instead of the user pasting
+    GUIDs by hand.
+
+    Only discovers the tree — it does NOT fetch students. The frontend feeds
+    the ids into the existing extraDepartments flow, which loads and caches
+    them through /students/multi exactly like manual adds.
+
+    The @absorb_retry_on_401 decorator gives the walk the same refresh+retry
+    recovery every other Absorb route has: a mid-walk 401 re-runs the whole
+    (cheap) walk on a fresh token instead of surfacing a boot.
+    """
+    root_id = (request.args.get('root') or g.department_id or '').strip()
+    if not GUID_RE.match(root_id):
+        return jsonify({'success': False, 'error': 'Invalid root department id'}), 400
+
+    client = AbsorbAPIClient()
+    client.set_token(g.absorb_token)
+
+    MAX_NODES = 300  # runaway guard, kept above MAX_EXTRA_DEPTS so tree
+                     # discovery never binds before the dept cap does
+    seen = {root_id.lower()}
+    queue = [root_id]
+    tree = []
+    truncated = False
+    while queue:
+        parent = queue.pop(0)
+        for child in client.get_department_children(parent):
+            cid = child.get('id') or child.get('Id')
+            if not cid or cid.lower() in seen:
+                continue
+            if len(tree) >= MAX_NODES:
+                truncated = True
+                break
+            seen.add(cid.lower())
+            tree.append({
+                'id': cid,
+                'name': child.get('name') or child.get('Name') or '',
+            })
+            queue.append(cid)
+        if truncated:
+            break
+
+    print(f"[DEPT-TREE] root={root_id} → {len(tree)} sub-department(s)"
+          + (" (TRUNCATED at node cap)" if truncated else ""))
+    return jsonify({
+        'success': True,
+        'root': root_id,
+        'count': len(tree),
+        'departments': tree,
+        'truncated': truncated,
+    })
 
 
 @dashboard_bp.route('/sync', methods=['POST'])
@@ -834,9 +1039,26 @@ def sync_data():
         dept_name = g.user.get('departmentName', 'Unknown')
         print(f"[SYNC] Starting sync for {len(all_dept_ids)} department(s): {dept_name} ({g.department_id})")
 
+        # Mint proactively if the token is near its 4h TTL — the only mint
+        # a data route may perform, and only in its first ~100ms.
+        _proactive_refresh_if_expiring()
+
         # Invalidate student caches (not exam cache - that's separate data)
         for dept_id in all_dept_ids:
             invalidate_cache(dept_id)
+
+        # Serverless-scale Sync: a 70-dept sequential sync in ONE lambda
+        # outlives every router ceiling on Vercel, and the orphaned lambda
+        # then wars over the account token with every subsequent reload
+        # (2026-08-12: user hit Sync at 70 depts → next reload lost 40
+        # depts to the sync zombie's mint). With invalidateOnly the server
+        # clears EVERY dept cache but fetches only the primary; the
+        # frontend re-streams the extras through the batched multi loader —
+        # bounded requests, zombie-fenced, war-resistant.
+        if data.get('invalidateOnly') and len(all_dept_ids) > 1:
+            print(f"[SYNC] invalidateOnly: cleared {len(all_dept_ids)} dept cache(s); "
+                  f"fetching primary only — frontend re-streams extras batched")
+            all_dept_ids = [g.department_id]
 
         # Sync forces sequential dept fetching. Unlike /students/multi (which
         # has cache hits for most depts and only cold-fetches the new ones),
@@ -852,29 +1074,37 @@ def sync_data():
         # not.
         all_formatted, dept_meta = _fetch_depts_collect(all_dept_ids, g.absorb_token, sequential=True)
 
-        expired_ids = _expired_dept_ids(dept_meta)
         _ok_ids = [m.get('id') for m in dept_meta if m.get('status') == 'ok']
-        print(f"[SYNC DIAG] Initial fan-out done: {len(_ok_ids)} ok, {len(expired_ids)} expired → expired_ids={expired_ids}")
-        if expired_ids:
-            _refresh_ok = _refresh_user_absorb_token()
-            print(f"[SYNC DIAG] Refresh attempt returned: {_refresh_ok}")
-            if _refresh_ok:
-                print(f"[SYNC] Retrying {len(expired_ids)} dept(s) after token refresh — new g.absorb_token prefix={(g.absorb_token or '')[:8]}")
-                # Invalidate any caches touched by the failed attempts
-                for dept_id in expired_ids:
-                    invalidate_cache(dept_id)
-                # Drop the expired error entries, keep successful ones
-                dept_meta = [m for m in dept_meta if m.get('id') not in expired_ids]
-                retry_formatted, retry_meta = _fetch_depts_collect(expired_ids, g.absorb_token, sequential=True)
-                all_formatted.extend(retry_formatted)
-                dept_meta.extend(retry_meta)
-                # Post-retry counts so we can see if the retry round itself
-                # recovered everything, partially, or not at all.
-                _retry_ok = sum(1 for m in retry_meta if m.get('status') == 'ok')
-                _retry_err = sum(1 for m in retry_meta if m.get('status') == 'error')
-                print(f"[SYNC DIAG] Retry results: {_retry_ok} ok, {_retry_err} still failed")
-            else:
-                print(f"[SYNC DIAG] Refresh failed — keeping the {len(expired_ids)} expired entries as errors. Check earlier [TOKEN REFRESH] lines for cause (no creds / zombie / Absorb rejected).")
+        print(f"[SYNC DIAG] Initial fan-out done: {len(_ok_ids)} ok, "
+              f"{len(_expired_dept_ids(dept_meta))} expired → expired_ids={_expired_dept_ids(dept_meta)}")
+
+        # Retry rounds — SAME-TOKEN ONLY, mirrors /students/multi. Data
+        # requests never mint (abandoned-request mints are the 2026-08-12
+        # token-war class); the mint authority is /auth/refresh-token,
+        # frontend single-flight. ALL depts expired → token dead → return
+        # fast with tokenExpired so the frontend refreshes and refires.
+        import time as _t_sync
+        import random as _r_sync
+        for _round in range(1, 3):
+            expired_ids = _expired_dept_ids(dept_meta)
+            if not expired_ids:
+                break
+            if len(expired_ids) >= len(all_dept_ids):
+                print(f"[SYNC DIAG] Token dead ({len(expired_ids)}/{len(all_dept_ids)} expired) — returning for a frontend refresh+refire")
+                break
+            _t_sync.sleep(0.8 * _round + _r_sync.uniform(0, 0.4))
+            print(f"[SYNC DIAG] Round {_round}: retrying {len(expired_ids)} dept(s) with the SAME token (no mint)")
+            # Invalidate any caches touched by the failed attempts
+            for dept_id in expired_ids:
+                invalidate_cache(dept_id)
+            # Drop the expired error entries, keep successful ones
+            dept_meta = [m for m in dept_meta if m.get('id') not in expired_ids]
+            retry_formatted, retry_meta = _fetch_depts_collect(expired_ids, g.absorb_token, sequential=True)
+            all_formatted.extend(retry_formatted)
+            dept_meta.extend(retry_meta)
+            _retry_ok = sum(1 for m in retry_meta if m.get('status') == 'ok')
+            _retry_err = sum(1 for m in retry_meta if m.get('status') == 'error')
+            print(f"[SYNC DIAG] Round {_round} results: {_retry_ok} ok, {_retry_err} still failed")
 
         # Sort
         all_formatted.sort(
@@ -890,7 +1120,8 @@ def sync_data():
             'summary': _compute_summary(all_formatted),
             'students': all_formatted,
             'departments': dept_meta,
-            'syncedAt': g.user.get('loginTime')
+            'syncedAt': g.user.get('loginTime'),
+            'tokenExpired': bool(_expired_dept_ids(dept_meta)),
         })
 
     except AbsorbAPIError as e:

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import StatusBadge from './StatusBadge'
 import ProgressBar from './ProgressBar'
+import { ensureFreshToken, fetchWithAuthRetry } from '../authFetch'
 
 const API_BASE = '/api'
 
@@ -320,12 +321,23 @@ function StudentModal({ studentId, examInfo, onClose, onSessionExpired, onUpdate
         const params = new URLSearchParams()
         if (examInfo?.examCourse) params.set('courseType', examInfo.examCourse)
         const qs = params.toString() ? `?${params.toString()}` : ''
-        const response = await fetch(`${API_BASE}/students/${studentId}${qs}`, {
+        const response = await fetchWithAuthRetry(`${API_BASE}/students/${studentId}${qs}`, {
           credentials: 'include',
           signal: reqSignal
         })
 
         if (response.status === 401) {
+          // fetchWithAuthRetry already refreshed once and retried. If the
+          // session can STILL mint (refresh succeeds), this 401 means Absorb
+          // is throttling fresh tokens (back-pressure: fresh token dead on
+          // first use). Booting would mint again on re-login and deepen it —
+          // degrade to a soft error instead. Only a dead session boots.
+          const sessionAlive = await ensureFreshToken()
+          if (sessionAlive) {
+            setError('Absorb is throttling requests right now — close this card and try again in a minute or two.')
+            setLoading(false)
+            return
+          }
           onSessionExpired()
           setLoading(false)
           return

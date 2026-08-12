@@ -6,8 +6,15 @@ import StudentModal from './StudentModal'
 import ExamSheetModal from './ExamSheetModal'
 import Charts from './Charts'
 import ExamCharts from './ExamCharts'
+import { ensureFreshToken, fetchWithAuthRetry } from '../authFetch'
 
 const API_BASE = '/api'
+// Max extra departments loadable alongside the primary. Must match
+// MAX_EXTRA_DEPTS in backend/routes/dashboard.py.
+const MAX_EXTRA_DEPTS = 200
+
+// Single-flight token refresh + self-healing fetch — shared by every
+// component that touches Absorb-backed routes (see src/authFetch.js).
 
 function Dashboard({ user, department, onLogout, initialData }) {
   const [students, setStudents] = useState(initialData?.students || [])
@@ -48,6 +55,9 @@ function Dashboard({ user, department, onLogout, initialData }) {
   const [newAllowName, setNewAllowName] = useState('')
   const [allowlistError, setAllowlistError] = useState('')
   const [allowlistEnforcing, setAllowlistEnforcing] = useState(false)
+  const [allowlistSaving, setAllowlistSaving] = useState(false)
+  const [allowlistLoadError, setAllowlistLoadError] = useState('')
+  const [allowlistSheetLoaded, setAllowlistSheetLoaded] = useState(true)
 
   // Multi-department state
   const [extraDepartments, setExtraDepartments] = useState([])
@@ -55,6 +65,22 @@ function Dashboard({ user, department, onLogout, initialData }) {
   const [showDeptManager, setShowDeptManager] = useState(false)
   const [deptInputValue, setDeptInputValue] = useState('')
   const [deptError, setDeptError] = useState('')
+  const [treeLoading, setTreeLoading] = useState(false)
+  // Dept chip wall collapses past this many chips — 70 tree-loaded depts
+  // rendered as six rows of chips buried the actual dashboard.
+  const [deptChipsExpanded, setDeptChipsExpanded] = useState(false)
+  // Generation counter for fetchMultiDeptStudents — a new run (extras changed
+  // mid-flight, e.g. Clear All during a load) invalidates in-flight batches.
+  const multiFetchGen = useRef(0)
+  // True while a multi-dept batch run owns the screen. Guards the plain
+  // primary-dept fetches (fetchDashboardData / loadFullDataInBackground)
+  // from overwriting the merged multi data if they resolve mid-stream —
+  // without this the student list visibly SHRINKS back to primary-only for
+  // a moment during a cold login.
+  const multiActiveRef = useRef(false)
+  // {loaded, total} while batches stream in — drives the small progress
+  // indicator in the Department Manager header.
+  const [multiProgress, setMultiProgress] = useState(null)
   const [departmentMeta, setDepartmentMeta] = useState([])
   const [studentDeptFilter, setStudentDeptFilter] = useState([])
   const [showDeptDropdown, setShowDeptDropdown] = useState(false)
@@ -106,11 +132,17 @@ function Dashboard({ user, department, onLogout, initialData }) {
   const [examReadinessFilter, setExamReadinessFilter] = useState('all')
   const [examDaysFilter, setExamDaysFilter] = useState('all')
 
-  // Fetch data on mount only if no initial data provided
+  // On mount WITHOUT initialData (page reload with a live session), do NOT
+  // fetch here — the dept-prefs loader below drives the initial fetch after
+  // prefs resolve, picking exactly ONE path: batched multi when extras
+  // exist, primary-only otherwise. Firing the primary fetch here as well
+  // duplicated it (the dept-length effect's initial run fires it too) and
+  // raced it against the batch stream on a cold instance — the slowest
+  // loser timed out and threw "Failed to load dashboard data" over a
+  // healthy batch load.
   useEffect(() => {
     if (!initialData) {
-      console.log('[DASHBOARD] Component mounted, fetching data...')
-      fetchDashboardData()
+      console.log('[DASHBOARD] Mounted without initial data — waiting for dept prefs to pick the load path')
     } else {
       console.log('[DASHBOARD] Using pre-fetched data')
       // If we got quick data, load full data in background
@@ -121,27 +153,77 @@ function Dashboard({ user, department, onLogout, initialData }) {
     }
   }, [])
 
-  // Load department prefs from backend on mount
+  // Load department prefs from backend on mount, with a localStorage
+  // fallback. On serverless hosting the backend prefs DB lives on ephemeral
+  // /tmp and resets whenever a fresh instance spins up — without the
+  // fallback, a page reload after instance rotation silently dropped every
+  // added department (and if the primary dept is a container with all its
+  // students in sub-departments, the dashboard read "No students found").
+  // localStorage mirrors the list per-browser; the save effect below then
+  // re-seeds the backend DB on the new instance.
   useEffect(() => {
     if (!user?.email) return
+    const lsKey = `ji_extra_depts_${(user.email || '').toLowerCase()}`
     const loadDeptPrefs = async () => {
+      // UNION the server list with the localStorage mirror. The server copy
+      // lives in per-instance storage on Vercel — different instances hold
+      // different stale versions, so "server wins" let whichever instance
+      // answered SHRINK the list and then the save-back effect overwrote
+      // the good mirror with the stale copy (the 853/860/1094-student
+      // roulette of 2026-08-12: each login adopted a different partial
+      // list, loaded it fully, and honestly said "done"). Union never
+      // loses entries and the save-back heals the answering instance.
+      // Clear All still empties both copies — that's an explicit save of
+      // [], not this login-time merge.
+      let serverList = []
       try {
         const res = await fetch(`${API_BASE}/dashboard/dept-prefs`, { credentials: 'include' })
         if (res.ok) {
           const data = await res.json()
-          if (data.success && data.departmentIds?.length > 0) {
-            setExtraDepartments(data.departmentIds)
+          if (data.success && Array.isArray(data.departmentIds)) {
+            serverList = data.departmentIds
           }
         }
       } catch (err) { console.error('[DEPT] Failed to load dept prefs:', err) }
+      let mirror = []
+      try {
+        const cached = JSON.parse(localStorage.getItem(lsKey) || '[]')
+        if (Array.isArray(cached)) mirror = cached
+      } catch { /* corrupted localStorage — ignore */ }
+      const seenIds = new Set()
+      let loaded = []
+      for (const id of [...serverList, ...mirror]) {
+        const k = (typeof id === 'string' ? id : '').toLowerCase()
+        if (k && !seenIds.has(k)) { seenIds.add(k); loaded.push(id) }
+      }
+      loaded = loaded.slice(0, MAX_EXTRA_DEPTS)
+      if (mirror.length > serverList.length) {
+        console.log(`[DEPT] Union restored ${loaded.length} dept(s) (server had ${serverList.length}, mirror had ${mirror.length})`)
+      }
       deptPrefsLoaded.current = true
+      if (loaded.length > 0) {
+        // Setting extras triggers the dept-length effect → batched multi
+        // load (batch 1 includes the primary dept, so nothing is missed).
+        setExtraDepartments(loaded)
+      } else if (!initialData) {
+        // No extras and no login-time prefetch — this is the one path where
+        // the primary-only fetch is the right (and only) loader.
+        fetchDashboardData()
+      }
     }
     loadDeptPrefs()
   }, [user?.email])
 
-  // Save department prefs to backend when they change (skip initial load)
+  // Save department prefs when they change (skip initial load) — to the
+  // backend AND the localStorage mirror.
   useEffect(() => {
     if (!user?.email || !deptPrefsLoaded.current) return
+    try {
+      localStorage.setItem(
+        `ji_extra_depts_${(user.email || '').toLowerCase()}`,
+        JSON.stringify(extraDepartments)
+      )
+    } catch { /* storage full/blocked — backend save still runs */ }
     fetch(`${API_BASE}/dashboard/dept-prefs`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -211,6 +293,17 @@ function Dashboard({ user, department, onLogout, initialData }) {
     if (extraDepartments.length > 0) {
       fetchMultiDeptStudents()
     } else {
+      // This effect also runs once on mount with length 0 — before the
+      // dept prefs have resolved. Firing the primary fetch then would race
+      // (and duplicate) whichever loader the prefs loader picks. Only act
+      // on a REAL transition back to single-dept (e.g. Clear All).
+      if (!deptPrefsLoaded.current) return
+      // Cancel any in-flight batch run and release its screen ownership —
+      // a superseded run's finally skips the reset, so without this the
+      // primary fetch below would be blocked from writing state forever.
+      multiFetchGen.current++
+      multiActiveRef.current = false
+      setMultiProgress(null)
       // Reset department meta and filter when going back to single dept
       setDepartmentMeta([])
       setStudentDeptFilter([])
@@ -237,7 +330,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
       const qs = params.toString()
       const url = qs ? `${API_BASE}/exam/students?${qs}` : `${API_BASE}/exam/students`
       console.log('[EXAM] Fetching with URL:', url, 'extraDepts:', extraDepartments)
-      const res = await fetch(url, { credentials: 'include' })
+      const res = await fetchWithAuthRetry(url, { credentials: 'include' })
       if (!res.ok) {
         if (res.status === 401) {
           onLogout()
@@ -272,8 +365,8 @@ function Dashboard({ user, department, onLogout, initialData }) {
   const loadFullDataInBackground = async () => {
     try {
       const [summaryRes, studentsRes] = await Promise.all([
-        fetch(`${API_BASE}/dashboard/summary`, { credentials: 'include' }),
-        fetch(`${API_BASE}/dashboard/students`, { credentials: 'include' })
+        fetchWithAuthRetry(`${API_BASE}/dashboard/summary`, { credentials: 'include' }),
+        fetchWithAuthRetry(`${API_BASE}/dashboard/students`, { credentials: 'include' })
       ])
 
       if (summaryRes.ok && studentsRes.ok) {
@@ -282,7 +375,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
           studentsRes.json()
         ])
 
-        if (summaryData.success && studentsData.success) {
+        if (summaryData.success && studentsData.success && !multiActiveRef.current) {
           console.log('[DASHBOARD] Full data loaded, updating...')
           setSummary(summaryData.summary)
           setStudents(studentsData.students)
@@ -296,53 +389,224 @@ function Dashboard({ user, department, onLogout, initialData }) {
     }
   }
 
-  const fetchMultiDeptStudents = async (_isRetry = false) => {
+  // Batched, progressive multi-dept loader.
+  //
+  // The previous version sent ALL extra departments as one request. At real
+  // scale (70-145 tree-loaded depts) that single request ran minutes on a
+  // cold serverless instance and died at the platform's duration ceiling —
+  // so a fresh login showed primary-only students until the user hit Sync
+  // (whose server-side path happened to survive on part-warmed caches).
+  // Batching keeps every request small enough to finish anywhere, and the
+  // dashboard fills progressively as each batch lands instead of blocking
+  // on the slowest department.
+  const MULTI_BATCH_SIZE = 15
+
+  const computeClientSummary = (studs) => {
+    const total = studs.length
+    const count = (st) => studs.filter(s => s.status?.status === st).length
+    const totalProgress = studs.reduce((acc, s) => acc + (s.progress?.value || 0), 0)
+    return {
+      totalStudents: total,
+      completeCount: count('COMPLETE'),
+      activeCount: count('ACTIVE'),
+      warningCount: count('WARNING'),
+      reengageCount: count('RE-ENGAGE'),
+      averageProgress: total > 0 ? Math.round(totalProgress / total * 10) / 10 : 0,
+    }
+  }
+
+  const fetchMultiDeptStudents = async () => {
+    const gen = ++multiFetchGen.current
+    multiActiveRef.current = true
     setLoading(true)
     setError(null)
-    try {
-      const deptIds = extraDepartments.join(',')
-      const res = await fetch(
-        `${API_BASE}/dashboard/students/multi?departments=${encodeURIComponent(deptIds)}`,
-        { credentials: 'include' }
-      )
-      if (!res.ok) {
-        if (res.status === 401) { onLogout(); return }
-        throw new Error('Failed to fetch multi-department data')
-      }
-      const data = await res.json()
-      if (data.success) {
-        // Silent auto-retry on PARTIAL failures only — at least one dept
-        // succeeded AND at least one failed with a token-expired error AND
-        // we haven't already retried. NOT triggered when everything failed
-        // (count==0) — that's a legitimate "no data" state and re-running
-        // would just hammer Absorb. The backend's refresh-debounce + the
-        // 5-back-to-back-mints fix should make this rare; this is the
-        // safety net for the residual cases.
-        const failed = (data.departments || []).filter(d => d.status === 'error')
-        const okCount = (data.departments || []).filter(d => d.status === 'ok').length
-        const expiredCount = failed.filter(d => /session expired|authoriz/i.test(d.error || '')).length
-        const isPartial = okCount > 0 && failed.length > 0
-        if (!_isRetry && isPartial && expiredCount > 0) {
-          console.log('[DASHBOARD] Multi-dept partial — silent auto-retry in 1.5s')
-          setTimeout(() => { fetchMultiDeptStudents(true) }, 1500)
-          return
-        }
-        setStudents(data.students)
-        setSummary(data.summary)
-        setDepartmentMeta(data.departments || [])
-        setLastSynced(new Date())
 
-        // Warn about failed departments (only after the retry path; first-pass
-        // partials get a silent retry instead of a banner).
-        if (failed.length > 0) {
-          setDeptError(`Could not load ${failed.length} department(s): ${failed.map(d => d.error || d.id).join(', ')}`)
+    const fetchBatch = async (batchIds) => {
+      const url = `${API_BASE}/dashboard/students/multi?departments=${encodeURIComponent(batchIds.join(','))}`
+      const res = await fetchWithAuthRetry(url, { credentials: 'include' })
+      if (!res.ok) {
+        if (res.status === 401) return { auth: true }
+        throw new Error(`Batch failed with HTTP ${res.status}`)
+      }
+      let data = await res.json()
+      // Server reports the token died mid-batch (it never mints its own
+      // replacement — see ensureFreshToken). Refresh once and refire this
+      // batch with the new cookie; already-ok depts re-serve from cache.
+      if (data?.success && data.tokenExpired) {
+        if (await ensureFreshToken()) {
+          const res2 = await fetchWithAuthRetry(url, { credentials: 'include' })
+          if (res2.ok) data = await res2.json()
+        }
+      }
+      return { data }
+    }
+
+    // Merge helpers — the primary dept rides along in EVERY batch response
+    // (the backend always includes it), so dedupe students by id and keep
+    // the first meta entry per dept id.
+    const byId = new Map()
+    const metaById = new Map()
+    const mergeBatch = (data) => {
+      for (const s of (data.students || [])) {
+        if (s.id && !byId.has(s.id)) byId.set(s.id, s)
+      }
+      for (const m of (data.departments || [])) {
+        if (m.id && !metaById.has(m.id)) metaById.set(m.id, m)
+        else if (m.id && m.status === 'ok' && metaById.get(m.id)?.status === 'error') {
+          metaById.set(m.id, m)  // a later success beats an earlier failure
+        } else if (m.id && m.status === 'ok' && !m.partial && metaById.get(m.id)?.partial) {
+          metaById.set(m.id, m)  // a later FULL fetch beats an earlier partial
+        }
+      }
+    }
+    const pushMerged = () => {
+      const merged = Array.from(byId.values())
+      merged.sort((a, b) =>
+        (a.status?.priority || 0) - (b.status?.priority || 0) ||
+        (b.progress?.value || 0) - (a.progress?.value || 0))
+      setStudents(merged)
+      setSummary(computeClientSummary(merged))
+      setDepartmentMeta(Array.from(metaById.values()))
+    }
+
+    try {
+      const batches = []
+      for (let i = 0; i < extraDepartments.length; i += MULTI_BATCH_SIZE) {
+        batches.push(extraDepartments.slice(i, i + MULTI_BATCH_SIZE))
+      }
+      console.log(`[DASHBOARD] Multi-dept: ${extraDepartments.length} dept(s) in ${batches.length} batch(es)`)
+
+      // Paint policy ("loads like the tree button, not one dept at a time"):
+      // batch 1 paints the table immediately so there's no dead spinner; the
+      // remaining batches buffer silently behind a progress counter (only
+      // the dept-chip bar grows per batch — cheap, non-disruptive), and the
+      // table/KPIs settle ONCE at the end. Per-batch full repaints made rows
+      // reshuffle, KPIs bounce, and pagination reset on every wave.
+      for (let b = 0; b < batches.length; b++) {
+        if (gen !== multiFetchGen.current) return  // superseded by a newer run
+        const { auth, data } = await fetchBatch(batches[b])
+        if (auth) { onLogout(); return }
+        if (gen !== multiFetchGen.current) return
+        if (data?.success) {
+          mergeBatch(data)
+          if (b === 0) {
+            pushMerged()
+            setLoading(false)  // show data as soon as batch 1 lands
+          } else {
+            setDepartmentMeta(Array.from(metaById.values()))
+          }
+          setMultiProgress({
+            loaded: Math.min((b + 1) * MULTI_BATCH_SIZE, extraDepartments.length),
+            total: extraDepartments.length,
+          })
+        }
+      }
+
+      // Sweep passes for depts that failed with token-expired errors.
+      // Up to 3 passes with backoff: a refresh-during-load can leave an
+      // abandoned server request warring over the account token for up to
+      // ~a minute (its mint revokes ours, ours revokes its). One immediate
+      // pass loses that war; waiting out the zombie and re-asking wins it —
+      // the LAST active requester ends up holding the live token.
+      const SWEEP_DELAYS_MS = [0, 4000, 10000]
+      // Retryable = token-expired errors AND partial loads (a dept whose
+      // fetch was interrupted returns 'ok' with fewer students + partial
+      // flag; partials are never cached, so a retry refetches for real).
+      const listExpired = () => Array.from(metaById.values())
+        .filter(m => (m.status === 'error' && /session expired|authoriz/i.test(m.error || '')) || m.partial === true)
+        .map(m => m.id)
+        .filter(id => extraDepartments.some(d => d.toLowerCase() === (id || '').toLowerCase())
+          || (id || '').toLowerCase() === (department?.id || '').toLowerCase())
+      for (let pass = 0; pass < SWEEP_DELAYS_MS.length; pass++) {
+        const failedExpired = listExpired()
+        if (failedExpired.length === 0 || gen !== multiFetchGen.current) break
+        if (SWEEP_DELAYS_MS[pass] > 0) {
+          await new Promise(r => setTimeout(r, SWEEP_DELAYS_MS[pass]))
+          if (gen !== multiFetchGen.current) break
+        }
+        console.log(`[DASHBOARD] Multi-dept sweep ${pass + 1}/${SWEEP_DELAYS_MS.length}: retrying ${failedExpired.length} expired dept(s)`)
+        try {
+          const { auth, data } = await fetchBatch(failedExpired)
+          if (auth) { onLogout(); return }
+          if (data?.success && gen === multiFetchGen.current) {
+            for (const m of (data.departments || [])) {
+              if (m.id) metaById.set(m.id, m)
+            }
+            mergeBatch(data)
+            pushMerged()
+          }
+        } catch (err) {
+          console.error(`[DASHBOARD] Sweep pass ${pass + 1} failed:`, err)
+        }
+      }
+
+      if (gen !== multiFetchGen.current) return
+      pushMerged()  // the single final settle — everything sorted, one repaint
+      setLastSynced(new Date())
+      const stillFailed = Array.from(metaById.values()).filter(m => m.status === 'error')
+      if (stillFailed.length > 0) {
+        const expiredLeft = stillFailed.filter(m => /session expired|authoriz/i.test(m.error || ''))
+        if (expiredLeft.length === stillFailed.length) {
+          // Token-turbulence residue — never show users a "Session expired"
+          // wall. Keep healing quietly in the background (15s/30s/60s) and
+          // only escalate to an actionable message if every pass loses.
+          setDeptError(`${stillFailed.length} department(s) still syncing — retrying automatically…`)
+          ;(async () => {
+            for (const delay of [15000, 30000, 60000]) {
+              await new Promise(r => setTimeout(r, delay))
+              if (gen !== multiFetchGen.current) return
+              const ids = listExpired()
+              if (ids.length === 0) { setDeptError(''); return }
+              try {
+                const { auth, data } = await fetchBatch(ids)
+                if (auth) { onLogout(); return }
+                if (data?.success && gen === multiFetchGen.current) {
+                  for (const m of (data.departments || [])) {
+                    if (m.id) metaById.set(m.id, m)
+                  }
+                  mergeBatch(data)
+                  pushMerged()
+                  const left = listExpired()
+                  if (left.length === 0) {
+                    setDeptError('')
+                    setLastSynced(new Date())
+                    return
+                  }
+                  setDeptError(`${left.length} department(s) still syncing — retrying automatically…`)
+                }
+              } catch (e) {
+                console.error('[DASHBOARD] Background heal pass failed:', e)
+              }
+            }
+            if (gen === multiFetchGen.current && listExpired().length > 0) {
+              setDeptError(`${listExpired().length} department(s) could not load — press Sync to retry.`)
+            }
+          })()
+        } else {
+          // Real (non-token) failures: one concise line, not a repeated wall.
+          const firstErr = stillFailed[0].error || stillFailed[0].id
+          setDeptError(`Could not load ${stillFailed.length} department(s): ${firstErr}${stillFailed.length > 1 ? ` (+${stillFailed.length - 1} more)` : ''}`)
+        }
+      } else {
+        const stillPartial = Array.from(metaById.values()).filter(m => m.partial)
+        if (stillPartial.length > 0) {
+          const missing = stillPartial.reduce((a, m) => a + (m.missing || 0), 0)
+          setDeptError(`${stillPartial.length} department(s) loaded partially${missing ? ` (~${missing} students missing)` : ''} — press Sync to retry.`)
         }
       }
     } catch (err) {
-      setError('Failed to load multi-department data. Please try again.')
+      if (gen !== multiFetchGen.current) return
+      // Paint whatever batches accumulated — a mid-run failure should
+      // degrade to partial data, not wipe the screen.
+      pushMerged()
+      setError('Some departments failed to load. Sync will retry them.')
       console.error('[DASHBOARD] Multi-dept error:', err)
     } finally {
-      setLoading(false)
+      if (gen === multiFetchGen.current) {
+        setLoading(false)
+        setMultiProgress(null)
+        multiActiveRef.current = false
+      }
     }
   }
 
@@ -363,7 +627,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
     let duplicates = 0
     let isPrimary = 0
     let overflow = 0
-    const remainingSlots = 30 - extraDepartments.length
+    const remainingSlots = MAX_EXTRA_DEPTS - extraDepartments.length
 
     for (const t of tokens) {
       if (!guidPattern.test(t)) {
@@ -391,7 +655,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
       if (invalid.length) reasons.push(`${invalid.length} invalid`)
       if (duplicates) reasons.push(`${duplicates} duplicate`)
       if (isPrimary) reasons.push(`${isPrimary} primary`)
-      if (overflow) reasons.push(`${overflow} over limit (30 max)`)
+      if (overflow) reasons.push(`${overflow} over limit (${MAX_EXTRA_DEPTS} max)`)
       setDeptError(`Nothing added — ${reasons.join(', ') || 'no valid IDs found'}`)
       return
     }
@@ -413,6 +677,67 @@ function Dashboard({ user, department, onLogout, initialData }) {
 
   const handleRemoveDepartment = (id) => {
     setExtraDepartments(prev => prev.filter(d => d !== id))
+  }
+
+  // Clear ALL added departments at once (primary stays). Setting the list
+  // empty flows through the same effects as per-chip removal: prefs save
+  // (backend + localStorage mirror both persist the empty list) and the
+  // student reload reverts to primary-only. One confirm guards against a
+  // misclick nuking a hand-curated list — a tree-loaded list is one
+  // Load Dept Tree click to restore, but a pasted-GUID list is not.
+  const handleClearDepartments = () => {
+    if (extraDepartments.length === 0) return
+    if (!window.confirm(
+      `Remove all ${extraDepartments.length} added department(s)? ` +
+      `Your primary department stays loaded. Load Dept Tree can re-add a tree in one click.`
+    )) return
+    setExtraDepartments([])
+    setDeptError('')
+  }
+
+  // Fetch every sub-department under the primary dept from the backend tree
+  // walk and add them all at once — same dedupe/cap rules as manual adds, so
+  // the downstream prefs-save and /students/multi flows are identical.
+  const handleLoadDeptTree = async () => {
+    setTreeLoading(true)
+    setDeptError('')
+    try {
+      const res = await fetchWithAuthRetry(`${API_BASE}/dashboard/dept-tree`, { credentials: 'include' })
+      const data = await res.json()
+      if (!data.success) {
+        setDeptError(data.error || 'Failed to load department tree')
+        return
+      }
+      const primary = department?.id?.toLowerCase()
+      const existing = new Set(extraDepartments.map(d => d.toLowerCase()))
+      const toAdd = []
+      let overflow = 0
+      const remainingSlots = MAX_EXTRA_DEPTS - extraDepartments.length
+      for (const d of (data.departments || [])) {
+        const low = (d.id || '').toLowerCase()
+        if (!low || low === primary || existing.has(low) || toAdd.some(a => a.toLowerCase() === low)) continue
+        if (toAdd.length >= remainingSlots) { overflow++; continue }
+        toAdd.push(d.id)
+      }
+      if (data.count === 0) {
+        setDeptError('No sub-departments found under your primary department')
+      } else if (toAdd.length === 0) {
+        setDeptError(overflow
+          ? `All ${MAX_EXTRA_DEPTS} department slots are full — ${overflow} sub-department(s) skipped`
+          : `All ${data.count} sub-department(s) are already loaded`)
+      } else {
+        const notes = []
+        if (overflow) notes.push(`${overflow} skipped (${MAX_EXTRA_DEPTS} dept limit)`)
+        if (data.truncated) notes.push('tree truncated at 200 nodes')
+        setDeptError(notes.length ? `Added ${toAdd.length} sub-department(s). ${notes.join('; ')}` : '')
+        setExtraDepartments(prev => [...prev, ...toAdd])
+      }
+    } catch (err) {
+      console.error('[DEPT-TREE] Failed:', err)
+      setDeptError('Failed to load department tree')
+    } finally {
+      setTreeLoading(false)
+    }
   }
 
   const handleHideStudent = (studentEmail) => {
@@ -625,8 +950,8 @@ function Dashboard({ user, department, onLogout, initialData }) {
     try {
       // Fetch summary and students in parallel
       const [summaryRes, studentsRes] = await Promise.all([
-        fetch(`${API_BASE}/dashboard/summary`, { credentials: 'include' }),
-        fetch(`${API_BASE}/dashboard/students`, { credentials: 'include' })
+        fetchWithAuthRetry(`${API_BASE}/dashboard/summary`, { credentials: 'include' }),
+        fetchWithAuthRetry(`${API_BASE}/dashboard/students`, { credentials: 'include' })
       ])
 
       if (!summaryRes.ok || !studentsRes.ok) {
@@ -640,6 +965,12 @@ function Dashboard({ user, department, onLogout, initialData }) {
       const summaryData = await summaryRes.json()
       const studentsData = await studentsRes.json()
 
+      // A multi-dept batch run owns the screen while active — this
+      // primary-only result would visibly SHRINK the merged list if it
+      // resolved mid-stream (the server-side cache warm still happened,
+      // which is all this call contributes in that case).
+      if (multiActiveRef.current) return
+
       if (summaryData.success) {
         setSummary(summaryData.summary)
       }
@@ -650,6 +981,9 @@ function Dashboard({ user, department, onLogout, initialData }) {
 
       setLastSynced(new Date())
     } catch (err) {
+      // Never paint this banner over an active batch run — its data is
+      // healthy; this primary-only call failing is irrelevant to the user.
+      if (multiActiveRef.current) return
       setError('Failed to load dashboard data. Please try again.')
       console.error('Dashboard error:', err)
     } finally {
@@ -662,11 +996,16 @@ function Dashboard({ user, department, onLogout, initialData }) {
     setError(null)
 
     try {
+      // With extras, Sync asks the server to invalidate every dept cache but
+      // fetch only the primary — a 70-dept sequential sync in one request
+      // outlives Vercel's router and its orphaned lambda then wars over the
+      // account token with the next reload. The extras re-stream through the
+      // batched loader below (bounded, zombie-fenced).
       const body = extraDepartments.length > 0
-        ? JSON.stringify({ extraDepartments })
+        ? JSON.stringify({ extraDepartments, invalidateOnly: true })
         : undefined
 
-      const response = await fetch(`${API_BASE}/dashboard/sync`, {
+      const response = await fetchWithAuthRetry(`${API_BASE}/dashboard/sync`, {
         method: 'POST',
         credentials: 'include',
         headers: body ? { 'Content-Type': 'application/json' } : {},
@@ -685,6 +1024,25 @@ function Dashboard({ user, department, onLogout, initialData }) {
       const data = await response.json()
 
       if (data.success) {
+        if (extraDepartments.length > 0) {
+          // invalidateOnly path: server cleared all dept caches + refreshed
+          // the primary. Re-stream everything through the batched loader —
+          // it owns the merge, the progress counter, and the sweep retries.
+          setLastSynced(new Date())
+          if (examLoaded) {
+            setExamLoaded(false)
+            if (activeTab === 'exam') fetchExamData()
+          }
+          fetchMultiDeptStudents()
+          return
+        }
+        // Token died mid-sync: refresh once (single-flight) and re-sync.
+        if (data.tokenExpired && !_isRetry) {
+          if (await ensureFreshToken()) {
+            setTimeout(() => { handleSync(true) }, 500)
+            return
+          }
+        }
         // Silent auto-retry on PARTIAL failures only — see fetchMultiDeptStudents.
         // Same gate: at least one dept ok AND at least one expired-error AND
         // we haven't retried. NOT on count==0 (legitimate empty).
@@ -786,36 +1144,49 @@ function Dashboard({ user, department, onLogout, initialData }) {
   }
 
   // ── Allowlist handlers ──────────────────────────────────
+  // adminKey travels in the X-Admin-Key header, never the URL — the old
+  // GET put the raw admin password in the query string (access logs,
+  // browser history).
   const fetchAllowlist = async (key) => {
     setAllowlistLoading(true)
+    setAllowlistLoadError('')
     try {
-      const res = await fetch(`${API_BASE}/exam/allowlist?adminKey=${encodeURIComponent(key || adminKey)}`, {
-        credentials: 'include'
+      const res = await fetch(`${API_BASE}/exam/allowlist`, {
+        credentials: 'include',
+        headers: { 'X-Admin-Key': key || adminKey }
       })
       const data = await res.json()
       if (data.success) {
         setAllowedUsers(data.users)
         setAllowlistEnforcing(data.enforcing)
+        setAllowlistSheetLoaded(data.sheetLoaded !== false)
+      } else {
+        // Previously silent — a failed load rendered as "No users in
+        // allowlist yet.", which could be a lie.
+        setAllowlistLoadError(data.error || 'Failed to load allowlist')
       }
     } catch (err) {
       console.error('Failed to fetch allowlist:', err)
+      setAllowlistLoadError('Network error loading allowlist')
     } finally {
       setAllowlistLoading(false)
     }
   }
 
   const handleAddAllowedUser = async () => {
+    if (allowlistSaving) return  // double-Enter / double-click guard
     if (!newAllowEmail.trim()) {
       setAllowlistError('Email is required')
       return
     }
     setAllowlistError('')
+    setAllowlistSaving(true)
     try {
       const res = await fetch(`${API_BASE}/exam/allowlist/add`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Key': adminKey },
         credentials: 'include',
-        body: JSON.stringify({ email: newAllowEmail.trim(), name: newAllowName.trim(), adminKey })
+        body: JSON.stringify({ email: newAllowEmail.trim(), name: newAllowName.trim() })
       })
       const data = await res.json()
       if (data.success) {
@@ -823,6 +1194,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
         setAllowlistEnforcing(true)
         setNewAllowEmail('')
         setNewAllowName('')
+        if (data.warning) setAllowlistError(data.warning)
         if (data.autoAddedAdmin) {
           alert('Your admin account was automatically added to the allowlist to prevent lockout.')
         }
@@ -831,26 +1203,36 @@ function Dashboard({ user, department, onLogout, initialData }) {
       }
     } catch {
       setAllowlistError('Network error')
+    } finally {
+      setAllowlistSaving(false)
     }
   }
 
   const handleRemoveAllowedUser = async (email) => {
+    if (allowlistSaving) return
     if (!confirm(`Remove ${email} from allowed users? They will not be able to log in.`)) return
+    setAllowlistSaving(true)
     try {
       const res = await fetch(`${API_BASE}/exam/allowlist/remove`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Key': adminKey },
         credentials: 'include',
-        body: JSON.stringify({ email, adminKey })
+        body: JSON.stringify({ email })
       })
       const data = await res.json()
       if (data.success) {
         setAllowedUsers(data.users)
         setAllowlistEnforcing(data.enforcing)
         if (data.warning) alert(data.warning)
+      } else {
+        // Previously silent — a failed remove looked like the button did nothing.
+        setAllowlistError(data.error || 'Failed to remove user')
       }
     } catch (err) {
       console.error('Failed to remove from allowlist:', err)
+      setAllowlistError('Network error removing user')
+    } finally {
+      setAllowlistSaving(false)
     }
   }
 
@@ -1469,52 +1851,128 @@ function Dashboard({ user, department, onLogout, initialData }) {
                   <span className="px-2 py-0.5 bg-ji-blue-bright/10 text-ji-blue-bright text-xs rounded-full font-medium">
                     {primaryDeptName || 'Primary'}
                   </span>
-                  {departmentMeta
-                    .filter(d => d.status === 'ok' && d.id !== department?.id)
-                    .map(d => (
-                      <span key={d.id} className="px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded-full flex items-center gap-1">
-                        {d.name} ({d.studentCount})
-                        <button
-                          onClick={() => handleRemoveDepartment(d.id)}
-                          className="text-red-400 hover:text-red-600 ml-0.5"
-                          title="Remove department"
-                        >
-                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
-                          </svg>
-                        </button>
-                      </span>
-                    ))
-                  }
-                  {/* Show IDs that haven't resolved to names yet */}
-                  {extraDepartments
-                    .filter(id => !departmentMeta.some(d => d.id === id && d.status === 'ok'))
-                    .map(id => (
-                      <span key={id} className="px-2 py-0.5 bg-yellow-50 text-yellow-700 text-xs rounded-full flex items-center gap-1">
-                        {id.substring(0, 8)}...
-                        <button
-                          onClick={() => handleRemoveDepartment(id)}
-                          className="text-red-400 hover:text-red-600 ml-0.5"
-                          title="Remove department"
-                        >
-                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
-                          </svg>
-                        </button>
-                      </span>
-                    ))
-                  }
+                  {(() => {
+                    // Collapse the chip wall past a threshold: show the first
+                    // row's worth plus a "+N more" expander. All chips keep
+                    // their remove buttons when expanded.
+                    const CHIP_LIMIT = 10
+                    const resolved = departmentMeta.filter(d => d.status === 'ok' && d.id !== department?.id)
+                    const unresolved = extraDepartments.filter(id => !departmentMeta.some(d => d.id === id && d.status === 'ok'))
+                    const total = resolved.length + unresolved.length
+                    const limit = deptChipsExpanded ? total : CHIP_LIMIT
+                    const shownResolved = resolved.slice(0, limit)
+                    const shownUnresolved = unresolved.slice(0, Math.max(0, limit - shownResolved.length))
+                    const hidden = total - shownResolved.length - shownUnresolved.length
+                    return (
+                      <>
+                        {shownResolved.map(d => (
+                          <span
+                            key={d.id}
+                            className={`px-2 py-0.5 ${d.partial ? 'bg-amber-50 text-amber-700' : 'bg-gray-100 text-gray-600'} text-xs rounded-full flex items-center gap-1`}
+                            title={d.partial ? `Partial load — ~${d.missing || '?'} students missing; Sync retries it` : undefined}
+                          >
+                            {d.name} ({d.studentCount}{d.partial ? '…' : ''})
+                            <button
+                              onClick={() => handleRemoveDepartment(d.id)}
+                              className="text-red-400 hover:text-red-600 ml-0.5"
+                              title="Remove department"
+                            >
+                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                              </svg>
+                            </button>
+                          </span>
+                        ))}
+                        {shownUnresolved.map(id => (
+                          <span key={id} className="px-2 py-0.5 bg-yellow-50 text-yellow-700 text-xs rounded-full flex items-center gap-1">
+                            {id.substring(0, 8)}...
+                            <button
+                              onClick={() => handleRemoveDepartment(id)}
+                              className="text-red-400 hover:text-red-600 ml-0.5"
+                              title="Remove department"
+                            >
+                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                              </svg>
+                            </button>
+                          </span>
+                        ))}
+                        {hidden > 0 && (
+                          <button
+                            onClick={() => setDeptChipsExpanded(true)}
+                            className="px-2 py-0.5 bg-ji-blue-bright/10 text-ji-blue-bright text-xs rounded-full font-medium hover:bg-ji-blue-bright/20"
+                            title="Show all departments"
+                          >
+                            +{hidden} more
+                          </button>
+                        )}
+                        {deptChipsExpanded && total > CHIP_LIMIT && (
+                          <button
+                            onClick={() => setDeptChipsExpanded(false)}
+                            className="px-2 py-0.5 bg-gray-100 text-gray-500 text-xs rounded-full font-medium hover:bg-gray-200"
+                            title="Collapse the department list"
+                          >
+                            Show less
+                          </button>
+                        )}
+                      </>
+                    )
+                  })()}
                 </div>
-                <button
-                  onClick={() => { setShowDeptManager(!showDeptManager); setDeptError('') }}
-                  className="text-sm text-ji-blue-bright hover:text-ji-blue-medium flex items-center gap-1"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d={showDeptManager ? "M5 15l7-7 7 7" : "M12 4v16m8-8H4"} />
-                  </svg>
-                  <span>{showDeptManager ? 'Close' : 'Add Department'}</span>
-                </button>
+                <div className="flex items-center gap-3">
+                  {multiProgress && (
+                    <span className="text-xs text-gray-500 flex items-center gap-1.5">
+                      <svg className="animate-spin w-3 h-3" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
+                      </svg>
+                      Loading departments {multiProgress.loaded}/{multiProgress.total}…
+                    </span>
+                  )}
+                  {extraDepartments.length > 0 && (
+                    <button
+                      onClick={handleClearDepartments}
+                      className="text-sm text-red-500 hover:text-red-700 flex items-center gap-1"
+                      title="Remove all added departments (your primary department stays)"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                      <span>Clear All ({extraDepartments.length})</span>
+                    </button>
+                  )}
+                  <button
+                    onClick={handleLoadDeptTree}
+                    disabled={treeLoading}
+                    className="text-sm text-ji-blue-bright hover:text-ji-blue-medium flex items-center gap-1 disabled:opacity-50"
+                    title="Fetch every sub-department under your primary department and load them all automatically"
+                  >
+                    {treeLoading ? (
+                      <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
+                      </svg>
+                    ) : (
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                      </svg>
+                    )}
+                    <span>{treeLoading ? 'Loading Tree...' : 'Load Dept Tree'}</span>
+                  </button>
+                  <button
+                    onClick={() => { setShowDeptManager(!showDeptManager); setDeptError('') }}
+                    className="text-sm text-ji-blue-bright hover:text-ji-blue-medium flex items-center gap-1"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d={showDeptManager ? "M5 15l7-7 7 7" : "M12 4v16m8-8H4"} />
+                    </svg>
+                    <span>{showDeptManager ? 'Close' : 'Add Department'}</span>
+                  </button>
+                </div>
               </div>
+              {deptError && !showDeptManager && (
+                <p className="text-xs text-gray-600 mt-2">{deptError}</p>
+              )}
 
               {showDeptManager && (
                 <div className="mt-3 flex gap-2 items-start">
@@ -1710,14 +2168,33 @@ function Dashboard({ user, department, onLogout, initialData }) {
               </div>
             </div>
 
-            {/* Student Table */}
-            <StudentTable
-              students={filteredStudents}
-              onViewStudent={setSelectedStudent}
-              showDepartment={extraDepartments.length > 0}
-              onHideStudent={showHidden ? handleUnhideStudent : handleHideStudent}
-              showHidden={showHidden}
-            />
+            {/* Student Table. While a batched multi-dept load is still
+                streaming (multiProgress active) and no rows have arrived yet,
+                show a progress panel instead of StudentTable's "No students
+                found" — on big trees the first batches are often tiny (0-1
+                student) depts, so an honest-but-alarming empty table sat on
+                screen for a minute while the large depts were still loading. */}
+            {multiProgress && filteredStudents.length === 0 ? (
+              <div className="bg-white rounded-xl shadow-md p-12 text-center">
+                <svg className="animate-spin w-10 h-10 mx-auto text-ji-blue-bright mb-4" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
+                </svg>
+                <h3 className="text-lg font-medium text-gray-600 mb-1">Loading students…</h3>
+                <p className="text-gray-500 text-sm">
+                  Departments {multiProgress.loaded}/{multiProgress.total} loaded so far —
+                  large loads can take a minute or two the first time.
+                </p>
+              </div>
+            ) : (
+              <StudentTable
+                students={filteredStudents}
+                onViewStudent={setSelectedStudent}
+                showDepartment={extraDepartments.length > 0}
+                onHideStudent={showHidden ? handleUnhideStudent : handleHideStudent}
+                showHidden={showHidden}
+              />
+            )}
           </>
         )}
 
@@ -2216,13 +2693,19 @@ function Dashboard({ user, department, onLogout, initialData }) {
                     </span>
                   </div>
                   <button
-                    onClick={() => { setShowAllowlist(!showAllowlist); if (!showAllowlist && allowedUsers.length === 0) fetchAllowlist() }}
+                    onClick={() => { setShowAllowlist(!showAllowlist); if (!showAllowlist) fetchAllowlist() }}
                     className="text-sm text-purple-600 hover:text-purple-800 font-medium"
                   >
                     {showAllowlist ? 'Hide' : 'Manage'}
                   </button>
                 </div>
 
+                {!allowlistSheetLoaded && (
+                  <p className="text-xs text-amber-600 font-medium mb-1">
+                    ⚠ Google Sheet not loaded — this list may be incomplete, and if it shows empty,
+                    access enforcement is OFF for everyone until the sheet loads.
+                  </p>
+                )}
                 {!allowlistEnforcing && !showAllowlist && (
                   <p className="text-xs text-gray-500">
                     No users in allowlist. All authenticated Absorb users can log in. Add a user to start restricting access.
@@ -2250,15 +2733,26 @@ function Dashboard({ user, department, onLogout, initialData }) {
                       />
                       <button
                         onClick={handleAddAllowedUser}
-                        className="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm font-medium hover:bg-purple-700"
+                        disabled={allowlistSaving}
+                        className="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm font-medium hover:bg-purple-700 disabled:opacity-50"
                       >
-                        Add
+                        {allowlistSaving ? 'Saving...' : 'Add'}
                       </button>
                     </div>
                     {allowlistError && <p className="text-xs text-red-500 mb-2">{allowlistError}</p>}
 
                     {allowlistLoading ? (
                       <p className="text-sm text-gray-400">Loading...</p>
+                    ) : allowlistLoadError ? (
+                      <div className="text-sm text-red-500 flex items-center gap-3">
+                        <span>{allowlistLoadError}</span>
+                        <button
+                          onClick={() => fetchAllowlist()}
+                          className="text-xs px-2 py-1 border border-red-300 rounded hover:bg-red-50"
+                        >
+                          Retry
+                        </button>
+                      </div>
                     ) : allowedUsers.length > 0 ? (
                       <div className="divide-y divide-gray-100 max-h-64 overflow-y-auto">
                         {allowedUsers.map(u => (
@@ -2269,7 +2763,8 @@ function Dashboard({ user, department, onLogout, initialData }) {
                             </div>
                             <button
                               onClick={() => handleRemoveAllowedUser(u.email)}
-                              className="text-xs text-red-500 hover:text-red-700 px-2 py-1 rounded hover:bg-red-50"
+                              disabled={allowlistSaving}
+                              className="text-xs text-red-500 hover:text-red-700 px-2 py-1 rounded hover:bg-red-50 disabled:opacity-40"
                             >
                               Remove
                             </button>

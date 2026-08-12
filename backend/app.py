@@ -32,14 +32,45 @@ def create_app():
     config = get_config()
     app.config.from_object(config)
 
-    # Additional session configuration
-    app.config['SESSION_TYPE'] = 'filesystem'
-    app.config['SESSION_FILE_DIR'] = os.path.join(os.path.dirname(__file__), 'flask_session')
+    # Session configuration.
+    #
+    # Server path (Render, local): Flask-Session's filesystem backend — session
+    # contents live on disk, only an opaque session id reaches the browser.
+    # This is the prod code path, unchanged.
+    #
+    # Serverless path (SERVERLESS=1, Vercel): filesystem sessions are
+    # structurally broken there — /tmp is per-instance, so a session written by
+    # the login request is invisible to whichever instance serves the next
+    # request. Observed cascade (2026-08-10, first sandbox login):
+    #   1. login lands on instance A, session file written to A's /tmp
+    #   2. the frontend's parallel follow-ups hit instance B → no session →
+    #      401 → frontend boots the user back to login
+    #   3. the SECOND login mints a new Absorb token, which (single-session-
+    #      per-account) REVOKES the first
+    #   4. instances still holding the first session fetch with the revoked
+    #      token → empty student list → "no students found" until /sync's
+    #      refresh+retry re-mints
+    # Fix: skip Flask-Session entirely and use Flask's built-in signed-cookie
+    # session. The session travels WITH the browser, so every instance sees the
+    # same state — no re-login, no second mint, no revocation cascade. The
+    # refresh path already reassigns session['user'] and sets session.modified
+    # (dashboard.py), so a refreshed token propagates into the cookie.
+    #
+    # Security note: a Flask signed cookie is tamper-proof but CLIENT-READABLE.
+    # It carries the user's own Absorb token (same exposure class as any bearer
+    # cookie) and the password blob — the blob stays Fernet-encrypted with the
+    # server-side SECRET_KEY, so it is NOT readable client-side. Acceptable for
+    # the sandbox; this branch never activates on Render/prod.
     app.config['SESSION_PERMANENT'] = True
     app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=4)
 
-    # Initialize session
-    Session(app)
+    if os.environ.get('SERVERLESS', '').lower() in ('1', 'true', 'yes'):
+        print('[SESSION] Serverless mode — Flask signed-cookie sessions '
+              '(server-side session files are per-instance on serverless)')
+    else:
+        app.config['SESSION_TYPE'] = 'filesystem'
+        app.config['SESSION_FILE_DIR'] = os.path.join(os.path.dirname(__file__), 'flask_session')
+        Session(app)
 
     # Enable gzip compression for responses
     Compress(app)
@@ -91,6 +122,24 @@ def create_app():
         return response
 
     # Error handlers
+    from absorb_api import AbsorbAPIError
+
+    @app.errorhandler(AbsorbAPIError)
+    def absorb_error(error):
+        """Map uncaught AbsorbAPIError to its real status instead of a 500.
+
+        Since data routes stopped minting (single mint authority), a route
+        whose same-token retries fail raises AbsorbAPIError(401) out of the
+        decorator. Routes without their own except-blocks (e.g. /dept-tree)
+        let it reach Flask — which turned it into a generic 500, so the
+        frontend's 401→refresh→retry healing never engaged ("Internal
+        server error" on Load Dept Tree, 2026-08-12).
+        """
+        return jsonify({
+            'success': False,
+            'error': str(getattr(error, 'message', None) or error),
+        }), getattr(error, 'status_code', None) or 500
+
     @app.errorhandler(404)
     def not_found(error):
         return jsonify({
