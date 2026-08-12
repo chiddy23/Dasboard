@@ -59,6 +59,9 @@ function Dashboard({ user, department, onLogout, initialData }) {
   const [deptInputValue, setDeptInputValue] = useState('')
   const [deptError, setDeptError] = useState('')
   const [treeLoading, setTreeLoading] = useState(false)
+  // Generation counter for fetchMultiDeptStudents — a new run (extras changed
+  // mid-flight, e.g. Clear All during a load) invalidates in-flight batches.
+  const multiFetchGen = useRef(0)
   const [departmentMeta, setDepartmentMeta] = useState([])
   const [studentDeptFilter, setStudentDeptFilter] = useState([])
   const [showDeptDropdown, setShowDeptDropdown] = useState(false)
@@ -326,53 +329,132 @@ function Dashboard({ user, department, onLogout, initialData }) {
     }
   }
 
-  const fetchMultiDeptStudents = async (_isRetry = false) => {
+  // Batched, progressive multi-dept loader.
+  //
+  // The previous version sent ALL extra departments as one request. At real
+  // scale (70-145 tree-loaded depts) that single request ran minutes on a
+  // cold serverless instance and died at the platform's duration ceiling —
+  // so a fresh login showed primary-only students until the user hit Sync
+  // (whose server-side path happened to survive on part-warmed caches).
+  // Batching keeps every request small enough to finish anywhere, and the
+  // dashboard fills progressively as each batch lands instead of blocking
+  // on the slowest department.
+  const MULTI_BATCH_SIZE = 15
+
+  const computeClientSummary = (studs) => {
+    const total = studs.length
+    const count = (st) => studs.filter(s => s.status?.status === st).length
+    const totalProgress = studs.reduce((acc, s) => acc + (s.progress?.value || 0), 0)
+    return {
+      totalStudents: total,
+      completeCount: count('COMPLETE'),
+      activeCount: count('ACTIVE'),
+      warningCount: count('WARNING'),
+      reengageCount: count('RE-ENGAGE'),
+      averageProgress: total > 0 ? Math.round(totalProgress / total * 10) / 10 : 0,
+    }
+  }
+
+  const fetchMultiDeptStudents = async () => {
+    const gen = ++multiFetchGen.current
     setLoading(true)
     setError(null)
-    try {
-      const deptIds = extraDepartments.join(',')
+
+    const fetchBatch = async (batchIds) => {
       const res = await fetch(
-        `${API_BASE}/dashboard/students/multi?departments=${encodeURIComponent(deptIds)}`,
+        `${API_BASE}/dashboard/students/multi?departments=${encodeURIComponent(batchIds.join(','))}`,
         { credentials: 'include' }
       )
       if (!res.ok) {
-        if (res.status === 401) { onLogout(); return }
-        throw new Error('Failed to fetch multi-department data')
+        if (res.status === 401) return { auth: true }
+        throw new Error(`Batch failed with HTTP ${res.status}`)
       }
-      const data = await res.json()
-      if (data.success) {
-        // Silent auto-retry on PARTIAL failures only — at least one dept
-        // succeeded AND at least one failed with a token-expired error AND
-        // we haven't already retried. NOT triggered when everything failed
-        // (count==0) — that's a legitimate "no data" state and re-running
-        // would just hammer Absorb. The backend's refresh-debounce + the
-        // 5-back-to-back-mints fix should make this rare; this is the
-        // safety net for the residual cases.
-        const failed = (data.departments || []).filter(d => d.status === 'error')
-        const okCount = (data.departments || []).filter(d => d.status === 'ok').length
-        const expiredCount = failed.filter(d => /session expired|authoriz/i.test(d.error || '')).length
-        const isPartial = okCount > 0 && failed.length > 0
-        if (!_isRetry && isPartial && expiredCount > 0) {
-          console.log('[DASHBOARD] Multi-dept partial — silent auto-retry in 1.5s')
-          setTimeout(() => { fetchMultiDeptStudents(true) }, 1500)
-          return
-        }
-        setStudents(data.students)
-        setSummary(data.summary)
-        setDepartmentMeta(data.departments || [])
-        setLastSynced(new Date())
+      return { data: await res.json() }
+    }
 
-        // Warn about failed departments (only after the retry path; first-pass
-        // partials get a silent retry instead of a banner).
-        if (failed.length > 0) {
-          setDeptError(`Could not load ${failed.length} department(s): ${failed.map(d => d.error || d.id).join(', ')}`)
+    // Merge helpers — the primary dept rides along in EVERY batch response
+    // (the backend always includes it), so dedupe students by id and keep
+    // the first meta entry per dept id.
+    const byId = new Map()
+    const metaById = new Map()
+    const mergeBatch = (data) => {
+      for (const s of (data.students || [])) {
+        if (s.id && !byId.has(s.id)) byId.set(s.id, s)
+      }
+      for (const m of (data.departments || [])) {
+        if (m.id && !metaById.has(m.id)) metaById.set(m.id, m)
+        else if (m.id && m.status === 'ok' && metaById.get(m.id)?.status === 'error') {
+          metaById.set(m.id, m)  // a later success beats an earlier failure
         }
+      }
+    }
+    const pushMerged = () => {
+      const merged = Array.from(byId.values())
+      merged.sort((a, b) =>
+        (a.status?.priority || 0) - (b.status?.priority || 0) ||
+        (b.progress?.value || 0) - (a.progress?.value || 0))
+      setStudents(merged)
+      setSummary(computeClientSummary(merged))
+      setDepartmentMeta(Array.from(metaById.values()))
+    }
+
+    try {
+      const batches = []
+      for (let i = 0; i < extraDepartments.length; i += MULTI_BATCH_SIZE) {
+        batches.push(extraDepartments.slice(i, i + MULTI_BATCH_SIZE))
+      }
+      console.log(`[DASHBOARD] Multi-dept: ${extraDepartments.length} dept(s) in ${batches.length} batch(es)`)
+
+      for (let b = 0; b < batches.length; b++) {
+        if (gen !== multiFetchGen.current) return  // superseded by a newer run
+        const { auth, data } = await fetchBatch(batches[b])
+        if (auth) { onLogout(); return }
+        if (gen !== multiFetchGen.current) return
+        if (data?.success) {
+          mergeBatch(data)
+          pushMerged()
+          if (b === 0) setLoading(false)  // show data as soon as batch 1 lands
+        }
+      }
+
+      // One retry pass for depts that failed with token-expired errors —
+      // the backend's own retry rounds make this rare; this sweeps the
+      // residue in a single cheap request.
+      const failedExpired = Array.from(metaById.values())
+        .filter(m => m.status === 'error' && /session expired|authoriz/i.test(m.error || ''))
+        .map(m => m.id)
+        .filter(id => extraDepartments.some(d => d.toLowerCase() === (id || '').toLowerCase()))
+      if (failedExpired.length > 0 && gen === multiFetchGen.current) {
+        console.log(`[DASHBOARD] Multi-dept: retrying ${failedExpired.length} expired dept(s)`)
+        try {
+          const { auth, data } = await fetchBatch(failedExpired)
+          if (auth) { onLogout(); return }
+          if (data?.success && gen === multiFetchGen.current) {
+            for (const m of (data.departments || [])) {
+              if (m.id) metaById.set(m.id, m)
+            }
+            mergeBatch(data)
+            pushMerged()
+          }
+        } catch (err) {
+          console.error('[DASHBOARD] Expired-dept retry failed:', err)
+        }
+      }
+
+      if (gen !== multiFetchGen.current) return
+      setLastSynced(new Date())
+      const stillFailed = Array.from(metaById.values()).filter(m => m.status === 'error')
+      if (stillFailed.length > 0) {
+        setDeptError(`Could not load ${stillFailed.length} department(s): ${stillFailed.map(d => d.error || d.id).join(', ')}`)
       }
     } catch (err) {
-      setError('Failed to load multi-department data. Please try again.')
+      if (gen !== multiFetchGen.current) return
+      // Keep whatever batches already rendered — a mid-run failure should
+      // degrade to partial data, not wipe the screen.
+      setError('Some departments failed to load. Sync will retry them.')
       console.error('[DASHBOARD] Multi-dept error:', err)
     } finally {
-      setLoading(false)
+      if (gen === multiFetchGen.current) setLoading(false)
     }
   }
 
