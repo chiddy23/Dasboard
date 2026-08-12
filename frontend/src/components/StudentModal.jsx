@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import StatusBadge from './StatusBadge'
 import ProgressBar from './ProgressBar'
+import { fetchWithAuthRetry } from '../authFetch'
 
 const API_BASE = '/api'
 
@@ -320,12 +321,14 @@ function StudentModal({ studentId, examInfo, onClose, onSessionExpired, onUpdate
         const params = new URLSearchParams()
         if (examInfo?.examCourse) params.set('courseType', examInfo.examCourse)
         const qs = params.toString() ? `?${params.toString()}` : ''
-        const response = await fetch(`${API_BASE}/students/${studentId}${qs}`, {
+        const response = await fetchWithAuthRetry(`${API_BASE}/students/${studentId}${qs}`, {
           credentials: 'include',
           signal: reqSignal
         })
 
         if (response.status === 401) {
+          // fetchWithAuthRetry already refreshed once and retried — a 401
+          // here means the session itself is dead, not a stale token.
           onSessionExpired()
           setLoading(false)
           return
