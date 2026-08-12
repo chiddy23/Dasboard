@@ -51,6 +51,11 @@ dashboard_bp = Blueprint('dashboard', __name__)
 _student_cache = {}
 CACHE_TTL_MINUTES = 5  # Cache data for 5 minutes
 
+# Depts whose most recent fetch came back PARTIAL (bucket 401'd past the
+# paced retry) — dept_id (lower) → approx missing count. Written by
+# get_cached_students, consumed by _fetch_dept_students to mark the meta.
+_partial_fetch_marks = {}
+
 # Per-department FETCH lock. Absorb uses a single-session-per-account token, so
 # only ONE /Authenticate may be "live" at a time. On a cold cache, /students and
 # /summary (and any extra tabs) BOTH fall through to a fresh fetch at the same
@@ -139,6 +144,7 @@ def get_cached_students(department_id, token):
         # request (sweep/Sync/reload) refetch the full set instead.
         if getattr(client, 'last_fetch_partial', False):
             print(f"[CACHE] PARTIAL fetch for {department_id} — returning uncached so the next request refetches")
+            _partial_fetch_marks[(department_id or '').lower()] = getattr(client, 'last_fetch_missing', 0) or 1
         else:
             _student_cache[department_id] = {
                 'data': students,
@@ -814,12 +820,24 @@ def _fetch_dept_students(dept_id, token):
     for s in formatted:
         s['departmentName'] = dept_name
 
-    return {
+    # Surface PARTIAL fetches instead of letting them pass as clean "ok"
+    # metas — a bucket that 401'd past the paced retry silently shrinks a
+    # big dept's student list with no error, no banner, and no way to tell
+    # from the UI. get_cached_students marks the dept; we report it so the
+    # frontend can flag the chip and auto-retry (partials are never cached,
+    # so a retry refetches for real).
+    _partial_missing = _partial_fetch_marks.pop((dept_id or '').lower(), 0)
+    meta = {
         'id': dept_id,
         'name': dept_name,
         'studentCount': len(formatted),
         'status': 'ok',
-    }, formatted
+    }
+    if _partial_missing:
+        meta['partial'] = True
+        meta['missing'] = _partial_missing
+        print(f"[FETCH] PARTIAL dept {dept_id} ({dept_name}): {len(formatted)} loaded, ~{_partial_missing} missing")
+    return meta, formatted
 
 
 @dashboard_bp.route('/students/multi', methods=['GET'])

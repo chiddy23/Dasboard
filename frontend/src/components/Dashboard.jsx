@@ -487,6 +487,8 @@ function Dashboard({ user, department, onLogout, initialData }) {
         if (m.id && !metaById.has(m.id)) metaById.set(m.id, m)
         else if (m.id && m.status === 'ok' && metaById.get(m.id)?.status === 'error') {
           metaById.set(m.id, m)  // a later success beats an earlier failure
+        } else if (m.id && m.status === 'ok' && !m.partial && metaById.get(m.id)?.partial) {
+          metaById.set(m.id, m)  // a later FULL fetch beats an earlier partial
         }
       }
     }
@@ -540,10 +542,14 @@ function Dashboard({ user, department, onLogout, initialData }) {
       // pass loses that war; waiting out the zombie and re-asking wins it —
       // the LAST active requester ends up holding the live token.
       const SWEEP_DELAYS_MS = [0, 4000, 10000]
+      // Retryable = token-expired errors AND partial loads (a dept whose
+      // fetch was interrupted returns 'ok' with fewer students + partial
+      // flag; partials are never cached, so a retry refetches for real).
       const listExpired = () => Array.from(metaById.values())
-        .filter(m => m.status === 'error' && /session expired|authoriz/i.test(m.error || ''))
+        .filter(m => (m.status === 'error' && /session expired|authoriz/i.test(m.error || '')) || m.partial === true)
         .map(m => m.id)
-        .filter(id => extraDepartments.some(d => d.toLowerCase() === (id || '').toLowerCase()))
+        .filter(id => extraDepartments.some(d => d.toLowerCase() === (id || '').toLowerCase())
+          || (id || '').toLowerCase() === (department?.id || '').toLowerCase())
       for (let pass = 0; pass < SWEEP_DELAYS_MS.length; pass++) {
         const failedExpired = listExpired()
         if (failedExpired.length === 0 || gen !== multiFetchGen.current) break
@@ -613,6 +619,12 @@ function Dashboard({ user, department, onLogout, initialData }) {
           // Real (non-token) failures: one concise line, not a repeated wall.
           const firstErr = stillFailed[0].error || stillFailed[0].id
           setDeptError(`Could not load ${stillFailed.length} department(s): ${firstErr}${stillFailed.length > 1 ? ` (+${stillFailed.length - 1} more)` : ''}`)
+        }
+      } else {
+        const stillPartial = Array.from(metaById.values()).filter(m => m.partial)
+        if (stillPartial.length > 0) {
+          const missing = stillPartial.reduce((a, m) => a + (m.missing || 0), 0)
+          setDeptError(`${stillPartial.length} department(s) loaded partially${missing ? ` (~${missing} students missing)` : ''} — press Sync to retry.`)
         }
       }
     } catch (err) {
@@ -1887,8 +1899,12 @@ function Dashboard({ user, department, onLogout, initialData }) {
                     return (
                       <>
                         {shownResolved.map(d => (
-                          <span key={d.id} className="px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded-full flex items-center gap-1">
-                            {d.name} ({d.studentCount})
+                          <span
+                            key={d.id}
+                            className={`px-2 py-0.5 ${d.partial ? 'bg-amber-50 text-amber-700' : 'bg-gray-100 text-gray-600'} text-xs rounded-full flex items-center gap-1`}
+                            title={d.partial ? `Partial load — ~${d.missing || '?'} students missing; Sync retries it` : undefined}
+                          >
+                            {d.name} ({d.studentCount}{d.partial ? '…' : ''})
                             <button
                               onClick={() => handleRemoveDepartment(d.id)}
                               className="text-red-400 hover:text-red-600 ml-0.5"

@@ -530,12 +530,13 @@ class AbsorbAPIClient:
         """
         print(f"[API] get_users_by_department: {department_id}")
 
-        # Reset the partial marker for this fetch. Callers (get_cached_students)
-        # check it after the fetch: a PARTIAL result (bucket 401'd past the
+        # Reset the partial markers for this fetch. Callers (get_cached_students)
+        # check them after the fetch: a PARTIAL result (bucket 401'd past the
         # paced retry during a token war) must NOT be cached as if complete —
         # a cached partial serves ~0 students for a huge dept for 5 minutes
         # (2026-08-12: Spencer's 1,357 shrank to ~0 in a 1,111-total load).
         self.last_fetch_partial = False
+        self.last_fetch_missing = 0
 
         # ─── Phase 1: single-call fast path ───────────────────────────────
         first_users, total_items = self._fetch_users_page(
@@ -702,6 +703,7 @@ class AbsorbAPIClient:
                   f"either a bucket 401'd past the paced retry (see lines above) "
                   f"or a bucket exceeded the 1000 cap without being detected")
             self.last_fetch_partial = True
+            self.last_fetch_missing = total_items - len(all_users)
         return all_users
 
     def _fetch_users_page(self, filter_expr: str, limit: int = 1000):
