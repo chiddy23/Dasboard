@@ -84,34 +84,14 @@ def absorb_retry_on_401(f):
                                + random.uniform(0, _JITTER_MAX))
                     continue
 
-        # Phase 2: escalate to real refresh. Last resort because the new
-        # token revokes everyone else's chad session in this process.
-        for _attempt in range(_REFRESH_RETRIES):
-            if not _refresh_user_absorb_token():
-                # Refresh failed (no creds / zombie) — give up.
-                raise AbsorbAPIError("Session expired. Please log in again.", 401)
-            time.sleep(_REFRESH_BACKOFF_SECONDS + random.uniform(0, _JITTER_MAX))
-            try:
-                return f(*args, **kwargs)
-            except AbsorbAPIError as e:
-                if e.status_code != 401:
-                    raise
-                # try refresh again on the next loop iteration
-
-        # Phase 3: chad is in per-call DOA back-pressure (refresh-minted
-        # token died on first use). Wait past the debounce window so the
-        # next refresh attempt mints a genuinely fresh token, then try
-        # once more. This recovers the modal-fails-5x-in-a-row pattern.
-        for _attempt in range(_PHASE3_RETRIES):
-            time.sleep(_PHASE3_DELAY_SECONDS + random.uniform(0, _JITTER_MAX))
-            if not _refresh_user_absorb_token():
-                raise AbsorbAPIError("Session expired. Please log in again.", 401)
-            try:
-                return f(*args, **kwargs)
-            except AbsorbAPIError as e:
-                if e.status_code != 401:
-                    raise
-
-        # Out of escalation attempts.
+        # Phases 2+3 REMOVED (2026-08-12): the decorator used to refresh —
+        # i.e. MINT — when inline retries failed. That made every data
+        # request a potential assassin: an abandoned request (F5, logout,
+        # superseded loader run) could mint minutes later and revoke the
+        # live session's token — the entire token-war class of 2026-08-12.
+        # Data paths never mint now. The single mint authority is
+        # POST /api/auth/refresh-token, called single-flight by the
+        # frontend; a persistent 401 propagates to the client, which
+        # refreshes once and retries the call with the new cookie.
         raise AbsorbAPIError("Session expired. Please log in again.", 401)
     return wrapper

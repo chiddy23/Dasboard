@@ -272,3 +272,29 @@ def heartbeat():
         'status': 'alive',
         'expiresAt': user.get('tokenExpiresAt') if user else None,
     })
+
+
+@auth_bp.route('/refresh-token', methods=['POST'])
+@login_required
+def refresh_token():
+    """THE single mint authority for live sessions.
+
+    Data routes never call /Authenticate (see utils/absorb_retry.py) — an
+    abandoned data request that mints revokes the live session's token
+    minutes later (the 2026-08-12 token-war class). Instead, when a data
+    response reports an expired token, the frontend funnels every caller
+    through ONE single-flight request to this endpoint, then retries with
+    the refreshed cookie. The heartbeat no-Absorb rule is untouched: this
+    route only mints when the frontend explicitly asks after an expiry.
+    """
+    from routes.dashboard import _refresh_user_absorb_token
+    if _refresh_user_absorb_token():
+        user = get_current_user()
+        return jsonify({
+            'success': True,
+            'expiresAt': user.get('tokenExpiresAt') if user else None,
+        })
+    return jsonify({
+        'success': False,
+        'error': 'Could not refresh session. Please log in again.',
+    }), 401

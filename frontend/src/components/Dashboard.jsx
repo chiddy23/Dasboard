@@ -12,6 +12,43 @@ const API_BASE = '/api'
 // MAX_EXTRA_DEPTS in backend/routes/dashboard.py.
 const MAX_EXTRA_DEPTS = 200
 
+// ── Single mint authority (browser side) ────────────────────────────
+// Data routes never refresh Absorb tokens server-side — an abandoned
+// request's mint could revoke the live session minutes later (the
+// 2026-08-12 token wars). When any response reports an expired token,
+// every caller funnels through this ONE single-flight refresh: at most
+// one /auth/refresh-token call in flight per tab, and the refreshed
+// cookie is shared by all subsequent requests (and other tabs).
+let _refreshPromise = null
+const ensureFreshToken = async () => {
+  if (!_refreshPromise) {
+    _refreshPromise = fetch(`${API_BASE}/auth/refresh-token`, {
+      method: 'POST',
+      credentials: 'include',
+    })
+      .then(r => (r.ok ? r.json() : { success: false }))
+      .catch(() => ({ success: false }))
+    _refreshPromise.finally(() => {
+      // Hold the settled promise briefly so a burst of callers dedupes,
+      // then clear so a later genuine expiry can refresh again.
+      setTimeout(() => { _refreshPromise = null }, 2000)
+    })
+  }
+  const res = await _refreshPromise
+  return !!(res && res.success)
+}
+
+// fetch() that treats a 401 as "token expired": refresh once (single-
+// flight) and retry with the new cookie. Only a post-refresh 401 —
+// a genuinely dead session — reaches the caller.
+const fetchWithAuthRetry = async (url, opts) => {
+  let res = await fetch(url, opts)
+  if (res.status === 401 && await ensureFreshToken()) {
+    res = await fetch(url, opts)
+  }
+  return res
+}
+
 function Dashboard({ user, department, onLogout, initialData }) {
   const [students, setStudents] = useState(initialData?.students || [])
   const [summary, setSummary] = useState(initialData?.summary || null)
@@ -345,8 +382,8 @@ function Dashboard({ user, department, onLogout, initialData }) {
   const loadFullDataInBackground = async () => {
     try {
       const [summaryRes, studentsRes] = await Promise.all([
-        fetch(`${API_BASE}/dashboard/summary`, { credentials: 'include' }),
-        fetch(`${API_BASE}/dashboard/students`, { credentials: 'include' })
+        fetchWithAuthRetry(`${API_BASE}/dashboard/summary`, { credentials: 'include' }),
+        fetchWithAuthRetry(`${API_BASE}/dashboard/students`, { credentials: 'include' })
       ])
 
       if (summaryRes.ok && studentsRes.ok) {
@@ -402,15 +439,23 @@ function Dashboard({ user, department, onLogout, initialData }) {
     setError(null)
 
     const fetchBatch = async (batchIds) => {
-      const res = await fetch(
-        `${API_BASE}/dashboard/students/multi?departments=${encodeURIComponent(batchIds.join(','))}`,
-        { credentials: 'include' }
-      )
+      const url = `${API_BASE}/dashboard/students/multi?departments=${encodeURIComponent(batchIds.join(','))}`
+      const res = await fetchWithAuthRetry(url, { credentials: 'include' })
       if (!res.ok) {
         if (res.status === 401) return { auth: true }
         throw new Error(`Batch failed with HTTP ${res.status}`)
       }
-      return { data: await res.json() }
+      let data = await res.json()
+      // Server reports the token died mid-batch (it never mints its own
+      // replacement — see ensureFreshToken). Refresh once and refire this
+      // batch with the new cookie; already-ok depts re-serve from cache.
+      if (data?.success && data.tokenExpired) {
+        if (await ensureFreshToken()) {
+          const res2 = await fetchWithAuthRetry(url, { credentials: 'include' })
+          if (res2.ok) data = await res2.json()
+        }
+      }
+      return { data }
     }
 
     // Merge helpers — the primary dept rides along in EVERY batch response
@@ -910,8 +955,8 @@ function Dashboard({ user, department, onLogout, initialData }) {
     try {
       // Fetch summary and students in parallel
       const [summaryRes, studentsRes] = await Promise.all([
-        fetch(`${API_BASE}/dashboard/summary`, { credentials: 'include' }),
-        fetch(`${API_BASE}/dashboard/students`, { credentials: 'include' })
+        fetchWithAuthRetry(`${API_BASE}/dashboard/summary`, { credentials: 'include' }),
+        fetchWithAuthRetry(`${API_BASE}/dashboard/students`, { credentials: 'include' })
       ])
 
       if (!summaryRes.ok || !studentsRes.ok) {
@@ -965,7 +1010,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
         ? JSON.stringify({ extraDepartments, invalidateOnly: true })
         : undefined
 
-      const response = await fetch(`${API_BASE}/dashboard/sync`, {
+      const response = await fetchWithAuthRetry(`${API_BASE}/dashboard/sync`, {
         method: 'POST',
         credentials: 'include',
         headers: body ? { 'Content-Type': 'application/json' } : {},
@@ -995,6 +1040,13 @@ function Dashboard({ user, department, onLogout, initialData }) {
           }
           fetchMultiDeptStudents()
           return
+        }
+        // Token died mid-sync: refresh once (single-flight) and re-sync.
+        if (data.tokenExpired && !_isRetry) {
+          if (await ensureFreshToken()) {
+            setTimeout(() => { handleSync(true) }, 500)
+            return
+          }
         }
         // Silent auto-retry on PARTIAL failures only — see fetchMultiDeptStudents.
         // Same gate: at least one dept ok AND at least one expired-error AND

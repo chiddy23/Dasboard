@@ -851,9 +851,10 @@ def get_students_multi():
 
         # Proactive refresh: if the session token is inside its last 20
         # minutes, mint ONCE now — before the fan-out — instead of letting
-        # a mid-load expiry 401-storm all depts and put recovery on the
-        # critical path. Users should never see the 4h TTL.
-        _proactively_minted = _proactive_refresh_if_expiring()
+        # a mid-load expiry 401-storm all depts. This is the only mint a
+        # data route may perform, and only in its first ~100ms (an
+        # abandoned-request mint this early cannot war with anything).
+        _proactive_refresh_if_expiring()
 
         # Fetch all departments in parallel. The refresh path inside
         # _fetch_depts_collect is now guarded by an in-process threading
@@ -864,54 +865,28 @@ def get_students_multi():
         all_formatted, fetched_meta = _fetch_depts_collect(all_dept_ids, g.absorb_token)
         dept_meta.extend(fetched_meta)
 
-        # Refresh+retry ROUNDS for expired depts. Two failure shapes need
-        # opposite openings (2026-08-12 all-70-fail forensics):
+        # Recovery rounds — SAME-TOKEN ONLY. Data requests never mint: a
+        # mint from an abandoned request (F5, logout, superseded loader
+        # run) revokes the live session's token minutes later — the entire
+        # 2026-08-12 token-war class. The mint authority is
+        # POST /api/auth/refresh-token (frontend single-flight). Two shapes:
         #
-        #  * ALL depts expired → the token is provably DEAD (4h TTL hit, or
-        #    an external mint revoked it). A same-token round is pure waste —
-        #    the old shape burned a full sequential dead-token pass and then
-        #    recovered SEQUENTIALLY, turning batch recovery into a ~100-second
-        #    lambda that lost the race against the router/user. Refresh
-        #    IMMEDIATELY, settle briefly, retry in paced PARALLEL.
-        #
-        #  * SOME depts expired → the token still works (other depts passed);
-        #    the 401s are transient gateway throttles. Minting here REVOKES a
-        #    healthy token and manufactures the next round's failures (mint
-        #    amplification). Retry with the SAME token first; mint only if
-        #    that fails.
-        #
-        # At most ONE mint per request: after our fresh mint, remaining
-        # failures are propagation stragglers or a competing minter — another
-        # mint amplifies the war instead of winning it. The frontend's sweep
-        # request provides the next fresh mint if it comes to that.
+        #  * SOME depts expired → token alive (others passed); the 401s are
+        #    transient gateway throttles. Same-token rounds heal them.
+        #  * ALL depts expired → token dead. Same-token retries are
+        #    pointless and minting is forbidden here — return FAST with
+        #    tokenExpired so the frontend refreshes once and refires.
         import time as _t_rounds
         import random as _r_rounds
-        _minted = _proactively_minted  # a proactive mint counts as this request's one mint
-        _rounds_t0 = _t_rounds.monotonic()
-        _ROUNDS_BUDGET_SEC = 45  # Zombie fence: an F5 abandons the browser side
-        # but this lambda keeps running (Flask can't see the disconnect), and
-        # its recovery mint revokes the NEW page's token — refresh-during-load
-        # manufactured a 3-way token war (2026-08-12 06:43 log). Capping total
-        # rounds time bounds how long an abandoned request can keep fighting;
-        # the live page's sweep passes carry the healing forward instead.
-        for _round in range(1, 4):
+        for _round in range(1, 3):
             expired_ids = _expired_dept_ids(dept_meta)
             if not expired_ids:
                 break
-            if _t_rounds.monotonic() - _rounds_t0 > _ROUNDS_BUDGET_SEC:
-                print(f"[MULTI-DEPT] Rounds budget ({_ROUNDS_BUDGET_SEC}s) exhausted — returning {len(expired_ids)} dept(s) as expired; the frontend sweep continues recovery on a fresh request")
+            if len(expired_ids) >= len(all_dept_ids):
+                print(f"[MULTI-DEPT] Token dead ({len(expired_ids)}/{len(all_dept_ids)} expired) — returning for a frontend refresh+refire")
                 break
-            _all_dead = len(expired_ids) >= len(all_dept_ids)
-            if not _minted and (_all_dead or _round >= 2):
-                if not _refresh_user_absorb_token():
-                    break
-                _minted = True
-                _t_rounds.sleep(1.2 + _r_rounds.uniform(0, 0.6))
-                print(f"[MULTI-DEPT] Round {_round}: retrying {len(expired_ids)} dept(s) after token refresh"
-                      + (" (all depts expired — token was dead, refreshed first)" if _all_dead else ""))
-            else:
-                _t_rounds.sleep(0.8 + _r_rounds.uniform(0, 0.4))
-                print(f"[MULTI-DEPT] Round {_round}: retrying {len(expired_ids)} dept(s) with the SAME token (no mint)")
+            _t_rounds.sleep(0.8 * _round + _r_rounds.uniform(0, 0.4))
+            print(f"[MULTI-DEPT] Round {_round}: retrying {len(expired_ids)} dept(s) with the SAME token (no mint)")
             for dept_id in expired_ids:
                 invalidate_cache(dept_id)
             dept_meta = [m for m in dept_meta if m.get('id') not in expired_ids]
@@ -931,10 +906,13 @@ def get_students_multi():
             'count': len(all_formatted),
             'summary': _compute_summary(all_formatted),
             'departments': dept_meta,
+            # Frontend cue: refresh once via /auth/refresh-token (single-
+            # flight) and refire the expired depts with the new cookie.
+            'tokenExpired': bool(_expired_dept_ids(dept_meta)),
         })
 
     except AbsorbAPIError as e:
-        # Re-raise 401s so @absorb_retry_on_401 can refresh+retry — see
+        # Re-raise 401s so @absorb_retry_on_401 can retry same-token — see
         # get_students for the full story.
         if e.status_code == 401:
             raise
@@ -1043,9 +1021,9 @@ def sync_data():
         dept_name = g.user.get('departmentName', 'Unknown')
         print(f"[SYNC] Starting sync for {len(all_dept_ids)} department(s): {dept_name} ({g.department_id})")
 
-        # Mint proactively if the token is near its 4h TTL — see
-        # _proactive_refresh_if_expiring; counts as this request's one mint.
-        _sync_proactively_minted = _proactive_refresh_if_expiring()
+        # Mint proactively if the token is near its 4h TTL — the only mint
+        # a data route may perform, and only in its first ~100ms.
+        _proactive_refresh_if_expiring()
 
         # Invalidate student caches (not exam cache - that's separate data)
         for dept_id in all_dept_ids:
@@ -1082,39 +1060,22 @@ def sync_data():
         print(f"[SYNC DIAG] Initial fan-out done: {len(_ok_ids)} ok, "
               f"{len(_expired_dept_ids(dept_meta))} expired → expired_ids={_expired_dept_ids(dept_meta)}")
 
-        # Retry rounds — mirrors /students/multi: if ALL depts expired the
-        # token is provably dead (4h TTL or an external mint), so refresh
-        # IMMEDIATELY instead of wasting a same-token pass; if only SOME
-        # expired the token still works and the same-token round handles
-        # transient throttle-401s without mint amplification. At most ONE
-        # mint per request — after our fresh mint, remaining failures are
-        # stragglers or a competing minter, and another mint just amplifies.
+        # Retry rounds — SAME-TOKEN ONLY, mirrors /students/multi. Data
+        # requests never mint (abandoned-request mints are the 2026-08-12
+        # token-war class); the mint authority is /auth/refresh-token,
+        # frontend single-flight. ALL depts expired → token dead → return
+        # fast with tokenExpired so the frontend refreshes and refires.
         import time as _t_sync
         import random as _r_sync
-        _minted_sync = _sync_proactively_minted  # proactive mint = this request's one mint
-        _sync_rounds_t0 = _t_sync.monotonic()
-        _SYNC_ROUNDS_BUDGET_SEC = 45  # zombie fence — same rationale as /students/multi
-        for _round in range(1, 4):
+        for _round in range(1, 3):
             expired_ids = _expired_dept_ids(dept_meta)
             if not expired_ids:
                 break
-            if _t_sync.monotonic() - _sync_rounds_t0 > _SYNC_ROUNDS_BUDGET_SEC:
-                print(f"[SYNC DIAG] Rounds budget ({_SYNC_ROUNDS_BUDGET_SEC}s) exhausted — returning {len(expired_ids)} dept(s) as expired")
+            if len(expired_ids) >= len(all_dept_ids):
+                print(f"[SYNC DIAG] Token dead ({len(expired_ids)}/{len(all_dept_ids)} expired) — returning for a frontend refresh+refire")
                 break
-            _all_dead = len(expired_ids) >= len(all_dept_ids)
-            if not _minted_sync and (_all_dead or _round >= 2):
-                _refresh_ok = _refresh_user_absorb_token()
-                print(f"[SYNC DIAG] Round {_round}: refresh attempt returned: {_refresh_ok}"
-                      + (" (all depts expired — token was dead, refreshed first)" if _all_dead else ""))
-                if not _refresh_ok:
-                    print(f"[SYNC DIAG] Refresh failed — keeping the {len(expired_ids)} expired entries as errors. Check earlier [TOKEN REFRESH] lines for cause (no creds / zombie / Absorb rejected).")
-                    break
-                _minted_sync = True
-                _t_sync.sleep(1.2 + _r_sync.uniform(0, 0.6))
-                print(f"[SYNC] Retrying {len(expired_ids)} dept(s) after token refresh — new g.absorb_token prefix={(g.absorb_token or '')[:8]}")
-            else:
-                _t_sync.sleep(0.8 + _r_sync.uniform(0, 0.4))
-                print(f"[SYNC DIAG] Round {_round}: retrying {len(expired_ids)} dept(s) with the SAME token (no mint)")
+            _t_sync.sleep(0.8 * _round + _r_sync.uniform(0, 0.4))
+            print(f"[SYNC DIAG] Round {_round}: retrying {len(expired_ids)} dept(s) with the SAME token (no mint)")
             # Invalidate any caches touched by the failed attempts
             for dept_id in expired_ids:
                 invalidate_cache(dept_id)
@@ -1141,7 +1102,8 @@ def sync_data():
             'summary': _compute_summary(all_formatted),
             'students': all_formatted,
             'departments': dept_meta,
-            'syncedAt': g.user.get('loginTime')
+            'syncedAt': g.user.get('loginTime'),
+            'tokenExpired': bool(_expired_dept_ids(dept_meta)),
         })
 
     except AbsorbAPIError as e:
