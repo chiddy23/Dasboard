@@ -46,10 +46,19 @@ def _is_state_law(name):
 
 
 def _is_video_course(name):
-    """Check if enrollment is a video course."""
+    """Check if enrollment is a Line-of-Authority study video.
+
+    Walkthrough/orientation videos are EXCLUDED (owner ruling 2026-08-12):
+    "Life & Health Exam Prep Walkthrough Video" is a platform tour, not
+    study content — and because its name contains video+life+health, the
+    substring buckets below counted its time into BOTH the Life and Health
+    requirements (Tony Wilson showed Life 8m / Health 6m while the real
+    study-guide rows held 3m34s / 1m57s).
+    """
     if not name:
         return False
-    return 'video' in name.lower()
+    lower = name.lower()
+    return 'video' in lower and 'walkthrough' not in lower
 
 
 def _is_life_video(name):
@@ -57,7 +66,7 @@ def _is_life_video(name):
     if not name:
         return False
     lower = name.lower()
-    return 'video' in lower and 'life' in lower
+    return _is_video_course(name) and 'life' in lower
 
 
 def _is_health_video(name):
@@ -65,7 +74,7 @@ def _is_health_video(name):
     if not name:
         return False
     lower = name.lower()
-    return 'video' in lower and 'health' in lower
+    return _is_video_course(name) and 'health' in lower
 
 
 def _get_enrollment_minutes(enrollment):
