@@ -472,15 +472,25 @@ function Dashboard({ user, department, onLogout, initialData }) {
         }
       }
 
-      // One retry pass for depts that failed with token-expired errors —
-      // the backend's own retry rounds make this rare; this sweeps the
-      // residue in a single cheap request.
-      const failedExpired = Array.from(metaById.values())
+      // Sweep passes for depts that failed with token-expired errors.
+      // Up to 3 passes with backoff: a refresh-during-load can leave an
+      // abandoned server request warring over the account token for up to
+      // ~a minute (its mint revokes ours, ours revokes its). One immediate
+      // pass loses that war; waiting out the zombie and re-asking wins it —
+      // the LAST active requester ends up holding the live token.
+      const SWEEP_DELAYS_MS = [0, 4000, 10000]
+      const listExpired = () => Array.from(metaById.values())
         .filter(m => m.status === 'error' && /session expired|authoriz/i.test(m.error || ''))
         .map(m => m.id)
         .filter(id => extraDepartments.some(d => d.toLowerCase() === (id || '').toLowerCase()))
-      if (failedExpired.length > 0 && gen === multiFetchGen.current) {
-        console.log(`[DASHBOARD] Multi-dept: retrying ${failedExpired.length} expired dept(s)`)
+      for (let pass = 0; pass < SWEEP_DELAYS_MS.length; pass++) {
+        const failedExpired = listExpired()
+        if (failedExpired.length === 0 || gen !== multiFetchGen.current) break
+        if (SWEEP_DELAYS_MS[pass] > 0) {
+          await new Promise(r => setTimeout(r, SWEEP_DELAYS_MS[pass]))
+          if (gen !== multiFetchGen.current) break
+        }
+        console.log(`[DASHBOARD] Multi-dept sweep ${pass + 1}/${SWEEP_DELAYS_MS.length}: retrying ${failedExpired.length} expired dept(s)`)
         try {
           const { auth, data } = await fetchBatch(failedExpired)
           if (auth) { onLogout(); return }
@@ -492,7 +502,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
             pushMerged()
           }
         } catch (err) {
-          console.error('[DASHBOARD] Expired-dept retry failed:', err)
+          console.error(`[DASHBOARD] Sweep pass ${pass + 1} failed:`, err)
         }
       }
 

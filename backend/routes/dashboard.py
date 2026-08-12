@@ -849,9 +849,19 @@ def get_students_multi():
         import time as _t_rounds
         import random as _r_rounds
         _minted = False
+        _rounds_t0 = _t_rounds.monotonic()
+        _ROUNDS_BUDGET_SEC = 45  # Zombie fence: an F5 abandons the browser side
+        # but this lambda keeps running (Flask can't see the disconnect), and
+        # its recovery mint revokes the NEW page's token — refresh-during-load
+        # manufactured a 3-way token war (2026-08-12 06:43 log). Capping total
+        # rounds time bounds how long an abandoned request can keep fighting;
+        # the live page's sweep passes carry the healing forward instead.
         for _round in range(1, 4):
             expired_ids = _expired_dept_ids(dept_meta)
             if not expired_ids:
+                break
+            if _t_rounds.monotonic() - _rounds_t0 > _ROUNDS_BUDGET_SEC:
+                print(f"[MULTI-DEPT] Rounds budget ({_ROUNDS_BUDGET_SEC}s) exhausted — returning {len(expired_ids)} dept(s) as expired; the frontend sweep continues recovery on a fresh request")
                 break
             _all_dead = len(expired_ids) >= len(all_dept_ids)
             if not _minted and (_all_dead or _round >= 2):
