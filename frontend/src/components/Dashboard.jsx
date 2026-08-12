@@ -51,6 +51,9 @@ function Dashboard({ user, department, onLogout, initialData }) {
   const [newAllowName, setNewAllowName] = useState('')
   const [allowlistError, setAllowlistError] = useState('')
   const [allowlistEnforcing, setAllowlistEnforcing] = useState(false)
+  const [allowlistSaving, setAllowlistSaving] = useState(false)
+  const [allowlistLoadError, setAllowlistLoadError] = useState('')
+  const [allowlistSheetLoaded, setAllowlistSheetLoaded] = useState(true)
 
   // Multi-department state
   const [extraDepartments, setExtraDepartments] = useState([])
@@ -1023,36 +1026,49 @@ function Dashboard({ user, department, onLogout, initialData }) {
   }
 
   // ── Allowlist handlers ──────────────────────────────────
+  // adminKey travels in the X-Admin-Key header, never the URL — the old
+  // GET put the raw admin password in the query string (access logs,
+  // browser history).
   const fetchAllowlist = async (key) => {
     setAllowlistLoading(true)
+    setAllowlistLoadError('')
     try {
-      const res = await fetch(`${API_BASE}/exam/allowlist?adminKey=${encodeURIComponent(key || adminKey)}`, {
-        credentials: 'include'
+      const res = await fetch(`${API_BASE}/exam/allowlist`, {
+        credentials: 'include',
+        headers: { 'X-Admin-Key': key || adminKey }
       })
       const data = await res.json()
       if (data.success) {
         setAllowedUsers(data.users)
         setAllowlistEnforcing(data.enforcing)
+        setAllowlistSheetLoaded(data.sheetLoaded !== false)
+      } else {
+        // Previously silent — a failed load rendered as "No users in
+        // allowlist yet.", which could be a lie.
+        setAllowlistLoadError(data.error || 'Failed to load allowlist')
       }
     } catch (err) {
       console.error('Failed to fetch allowlist:', err)
+      setAllowlistLoadError('Network error loading allowlist')
     } finally {
       setAllowlistLoading(false)
     }
   }
 
   const handleAddAllowedUser = async () => {
+    if (allowlistSaving) return  // double-Enter / double-click guard
     if (!newAllowEmail.trim()) {
       setAllowlistError('Email is required')
       return
     }
     setAllowlistError('')
+    setAllowlistSaving(true)
     try {
       const res = await fetch(`${API_BASE}/exam/allowlist/add`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Key': adminKey },
         credentials: 'include',
-        body: JSON.stringify({ email: newAllowEmail.trim(), name: newAllowName.trim(), adminKey })
+        body: JSON.stringify({ email: newAllowEmail.trim(), name: newAllowName.trim() })
       })
       const data = await res.json()
       if (data.success) {
@@ -1060,6 +1076,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
         setAllowlistEnforcing(true)
         setNewAllowEmail('')
         setNewAllowName('')
+        if (data.warning) setAllowlistError(data.warning)
         if (data.autoAddedAdmin) {
           alert('Your admin account was automatically added to the allowlist to prevent lockout.')
         }
@@ -1068,26 +1085,36 @@ function Dashboard({ user, department, onLogout, initialData }) {
       }
     } catch {
       setAllowlistError('Network error')
+    } finally {
+      setAllowlistSaving(false)
     }
   }
 
   const handleRemoveAllowedUser = async (email) => {
+    if (allowlistSaving) return
     if (!confirm(`Remove ${email} from allowed users? They will not be able to log in.`)) return
+    setAllowlistSaving(true)
     try {
       const res = await fetch(`${API_BASE}/exam/allowlist/remove`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Key': adminKey },
         credentials: 'include',
-        body: JSON.stringify({ email, adminKey })
+        body: JSON.stringify({ email })
       })
       const data = await res.json()
       if (data.success) {
         setAllowedUsers(data.users)
         setAllowlistEnforcing(data.enforcing)
         if (data.warning) alert(data.warning)
+      } else {
+        // Previously silent — a failed remove looked like the button did nothing.
+        setAllowlistError(data.error || 'Failed to remove user')
       }
     } catch (err) {
       console.error('Failed to remove from allowlist:', err)
+      setAllowlistError('Network error removing user')
+    } finally {
+      setAllowlistSaving(false)
     }
   }
 
@@ -2497,13 +2524,19 @@ function Dashboard({ user, department, onLogout, initialData }) {
                     </span>
                   </div>
                   <button
-                    onClick={() => { setShowAllowlist(!showAllowlist); if (!showAllowlist && allowedUsers.length === 0) fetchAllowlist() }}
+                    onClick={() => { setShowAllowlist(!showAllowlist); if (!showAllowlist) fetchAllowlist() }}
                     className="text-sm text-purple-600 hover:text-purple-800 font-medium"
                   >
                     {showAllowlist ? 'Hide' : 'Manage'}
                   </button>
                 </div>
 
+                {!allowlistSheetLoaded && (
+                  <p className="text-xs text-amber-600 font-medium mb-1">
+                    ⚠ Google Sheet not loaded — this list may be incomplete, and if it shows empty,
+                    access enforcement is OFF for everyone until the sheet loads.
+                  </p>
+                )}
                 {!allowlistEnforcing && !showAllowlist && (
                   <p className="text-xs text-gray-500">
                     No users in allowlist. All authenticated Absorb users can log in. Add a user to start restricting access.
@@ -2531,15 +2564,26 @@ function Dashboard({ user, department, onLogout, initialData }) {
                       />
                       <button
                         onClick={handleAddAllowedUser}
-                        className="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm font-medium hover:bg-purple-700"
+                        disabled={allowlistSaving}
+                        className="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm font-medium hover:bg-purple-700 disabled:opacity-50"
                       >
-                        Add
+                        {allowlistSaving ? 'Saving...' : 'Add'}
                       </button>
                     </div>
                     {allowlistError && <p className="text-xs text-red-500 mb-2">{allowlistError}</p>}
 
                     {allowlistLoading ? (
                       <p className="text-sm text-gray-400">Loading...</p>
+                    ) : allowlistLoadError ? (
+                      <div className="text-sm text-red-500 flex items-center gap-3">
+                        <span>{allowlistLoadError}</span>
+                        <button
+                          onClick={() => fetchAllowlist()}
+                          className="text-xs px-2 py-1 border border-red-300 rounded hover:bg-red-50"
+                        >
+                          Retry
+                        </button>
+                      </div>
                     ) : allowedUsers.length > 0 ? (
                       <div className="divide-y divide-gray-100 max-h-64 overflow-y-auto">
                         {allowedUsers.map(u => (
@@ -2550,7 +2594,8 @@ function Dashboard({ user, department, onLogout, initialData }) {
                             </div>
                             <button
                               onClick={() => handleRemoveAllowedUser(u.email)}
-                              className="text-xs text-red-500 hover:text-red-700 px-2 py-1 rounded hover:bg-red-50"
+                              disabled={allowlistSaving}
+                              className="text-xs text-red-500 hover:text-red-700 px-2 py-1 rounded hover:bg-red-50 disabled:opacity-40"
                             >
                               Remove
                             </button>

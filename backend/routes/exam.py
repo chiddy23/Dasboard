@@ -20,7 +20,18 @@ from demo_data import is_demo_dept, DEMO_DEPT_NAME, get_demo_email_lookup
 
 exam_bp = Blueprint('exam', __name__)
 
-ADMIN_PASSWORD = os.environ.get('EXAM_ADMIN_PASSWORD', 'Justinsurance123$')
+# Fail closed: no hardcoded fallback. If EXAM_ADMIN_PASSWORD is unset,
+# ADMIN_PASSWORD is None and every admin comparison fails — admin features
+# are disabled rather than protected by a password that ships in the repo.
+ADMIN_PASSWORD = os.environ.get('EXAM_ADMIN_PASSWORD')
+
+
+def _check_admin_key(supplied):
+    """Constant-time admin key check; False when the env var is unset."""
+    import hmac
+    if not ADMIN_PASSWORD or not supplied:
+        return False
+    return hmac.compare_digest(str(supplied), str(ADMIN_PASSWORD))
 
 # Cache for department names (departmentId -> name)
 _dept_name_cache = {}
@@ -1098,22 +1109,43 @@ def get_scheduler_status():
 
 # ── Allowed Users (allowlist) endpoints ──────────────────────────────
 
+def _allowlist_admin_key():
+    """Admin key from the X-Admin-Key header (preferred — keeps the password
+    out of URLs and access logs) with query/body fallback for older clients."""
+    key = request.headers.get('X-Admin-Key', '')
+    if not key:
+        key = request.args.get('adminKey', '')
+    if not key:
+        data = request.get_json(silent=True) or {}
+        key = data.get('adminKey', '')
+    return key
+
+
 @exam_bp.route('/allowlist', methods=['GET'])
 @login_required
 def get_allowlist():
-    """Get all allowed users. Admin only."""
-    admin_key = request.args.get('adminKey', '')
-    if admin_key != ADMIN_PASSWORD:
-        return jsonify({'success': False, 'error': 'Admin access required'}), 403
+    """Get all allowed users. Admin only.
 
-    from snapshot_db import get_all_allowed_users, get_allowlist_count
-    users = get_all_allowed_users()
-    return jsonify({
-        'success': True,
-        'users': users,
-        'count': len(users),
-        'enforcing': get_allowlist_count() > 0
-    })
+    sheetLoaded=False in the response means the Google Sheet hydration
+    failed (or no sheet is configured) — the list may be incomplete and,
+    if it is empty, enforcement is OFF for everyone. The UI surfaces that
+    instead of showing a plausible-looking empty list.
+    """
+    if not _check_admin_key(_allowlist_admin_key()):
+        return jsonify({'success': False, 'error': 'Admin access required'}), 403
+    try:
+        import snapshot_db
+        users = snapshot_db.get_all_allowed_users()
+        return jsonify({
+            'success': True,
+            'users': users,
+            'count': len(users),
+            'enforcing': snapshot_db.get_allowlist_count() > 0,
+            'sheetLoaded': bool(getattr(snapshot_db, 'ALLOWLIST_HYDRATED', False)),
+        })
+    except Exception as e:
+        print(f"[ALLOWLIST] GET failed: {e}")
+        return jsonify({'success': False, 'error': 'Failed to load allowlist'}), 500
 
 
 @exam_bp.route('/allowlist/add', methods=['POST'])
@@ -1121,65 +1153,91 @@ def get_allowlist():
 def add_to_allowlist():
     """Add a user to the allowlist. Admin only.
     Auto-adds the current admin if this is the first user being added."""
-    data = request.get_json() or {}
-    admin_key = data.get('adminKey', '')
-    if admin_key != ADMIN_PASSWORD:
+    if not _check_admin_key(_allowlist_admin_key()):
         return jsonify({'success': False, 'error': 'Admin access required'}), 403
 
+    data = request.get_json(silent=True) or {}
     email = (data.get('email') or '').lower().strip()
     name = (data.get('name') or '').strip()
     if not email:
         return jsonify({'success': False, 'error': 'Email is required'}), 400
+    # Loose validation on purpose: allowlist entries include plain Absorb
+    # USERNAMES (e.g. 'chadapi'), not just email addresses — a strict email
+    # regex would reject real accounts. Just reject whitespace/garbage.
+    if ' ' in email or len(email) < 2:
+        return jsonify({'success': False, 'error': 'Invalid email/username'}), 400
 
     admin_email = (g.user.get('email') or g.user.get('username') or '').lower().strip()
 
-    from snapshot_db import get_allowlist_count, add_allowed_user, save_allowlist_to_sheet, get_all_allowed_users
+    try:
+        from snapshot_db import get_allowlist_count, add_allowed_user, save_allowlist_to_sheet, get_all_allowed_users
 
-    was_empty = get_allowlist_count() == 0
-    if was_empty and email != admin_email and admin_email:
-        add_allowed_user(admin_email, name=admin_email.split('@')[0].title(), added_by='system-auto')
-        print(f"[ALLOWLIST] Auto-added admin {admin_email} to prevent lockout")
+        was_empty = get_allowlist_count() == 0
+        if was_empty and email != admin_email and admin_email:
+            add_allowed_user(admin_email, name=admin_email.split('@')[0].title(), added_by='system-auto')
+            print(f"[ALLOWLIST] Auto-added admin {admin_email} to prevent lockout")
 
-    add_allowed_user(email, name=name, added_by=admin_email)
-    print(f"[ALLOWLIST] Added {email} by {admin_email}")
+        add_allowed_user(email, name=name, added_by=admin_email)
+        print(f"[ALLOWLIST] Added {email} by {admin_email}")
 
-    save_allowlist_to_sheet()
+        sheet_saved = save_allowlist_to_sheet()
 
-    return jsonify({
-        'success': True,
-        'email': email,
-        'users': get_all_allowed_users(),
-        'autoAddedAdmin': was_empty and email != admin_email
-    })
+        return jsonify({
+            'success': True,
+            'email': email,
+            'users': get_all_allowed_users(),
+            'autoAddedAdmin': was_empty and email != admin_email,
+            'sheetSaved': bool(sheet_saved),
+            'warning': None if sheet_saved else (
+                'Saved locally but NOT persisted to the Google Sheet — '
+                'this change may be lost on the next deploy.'
+            ),
+        })
+    except Exception as e:
+        print(f"[ALLOWLIST] Add failed for {email}: {e}")
+        return jsonify({'success': False, 'error': 'Failed to add user — try again'}), 500
 
 
 @exam_bp.route('/allowlist/remove', methods=['POST'])
 @login_required
 def remove_from_allowlist():
     """Remove a user from the allowlist. Admin only."""
-    data = request.get_json() or {}
-    admin_key = data.get('adminKey', '')
-    if admin_key != ADMIN_PASSWORD:
+    if not _check_admin_key(_allowlist_admin_key()):
         return jsonify({'success': False, 'error': 'Admin access required'}), 403
 
+    data = request.get_json(silent=True) or {}
     email = (data.get('email') or '').lower().strip()
     if not email:
         return jsonify({'success': False, 'error': 'Email is required'}), 400
 
-    from snapshot_db import remove_allowed_user, save_allowlist_to_sheet, get_all_allowed_users
+    try:
+        from snapshot_db import remove_allowed_user, save_allowlist_to_sheet, get_all_allowed_users
 
-    remove_allowed_user(email)
-    print(f"[ALLOWLIST] Removed {email}")
+        removed = remove_allowed_user(email)
+        print(f"[ALLOWLIST] Removed {email}" if removed
+              else f"[ALLOWLIST] Remove no-op — {email} was not on the active list")
 
-    save_allowlist_to_sheet()
+        sheet_saved = save_allowlist_to_sheet()
 
-    remaining = get_all_allowed_users()
-    return jsonify({
-        'success': True,
-        'email': email,
-        'users': remaining,
-        'enforcing': len(remaining) > 0,
-        'warning': 'Allowlist is now empty. All users can log in.' if len(remaining) == 0 else None
-    })
+        remaining = get_all_allowed_users()
+        warnings = []
+        if not removed:
+            warnings.append(f'{email} was not on the allowlist (nothing removed).')
+        if not sheet_saved:
+            warnings.append('Change NOT persisted to the Google Sheet — it may revert on the next deploy.')
+        if removed and len(remaining) == 0:
+            warnings.append('Allowlist is now empty. All users can log in.')
+        return jsonify({
+            'success': True,
+            'email': email,
+            'removed': bool(removed),
+            'users': remaining,
+            'enforcing': len(remaining) > 0,
+            'sheetSaved': bool(sheet_saved),
+            'warning': ' '.join(warnings) if warnings else None
+        })
+    except Exception as e:
+        print(f"[ALLOWLIST] Remove failed for {email}: {e}")
+        return jsonify({'success': False, 'error': 'Failed to remove user — try again'}), 500
 
 
