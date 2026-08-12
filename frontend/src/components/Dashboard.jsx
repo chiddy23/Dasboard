@@ -62,6 +62,15 @@ function Dashboard({ user, department, onLogout, initialData }) {
   // Generation counter for fetchMultiDeptStudents — a new run (extras changed
   // mid-flight, e.g. Clear All during a load) invalidates in-flight batches.
   const multiFetchGen = useRef(0)
+  // True while a multi-dept batch run owns the screen. Guards the plain
+  // primary-dept fetches (fetchDashboardData / loadFullDataInBackground)
+  // from overwriting the merged multi data if they resolve mid-stream —
+  // without this the student list visibly SHRINKS back to primary-only for
+  // a moment during a cold login.
+  const multiActiveRef = useRef(false)
+  // {loaded, total} while batches stream in — drives the small progress
+  // indicator in the Department Manager header.
+  const [multiProgress, setMultiProgress] = useState(null)
   const [departmentMeta, setDepartmentMeta] = useState([])
   const [studentDeptFilter, setStudentDeptFilter] = useState([])
   const [showDeptDropdown, setShowDeptDropdown] = useState(false)
@@ -315,7 +324,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
           studentsRes.json()
         ])
 
-        if (summaryData.success && studentsData.success) {
+        if (summaryData.success && studentsData.success && !multiActiveRef.current) {
           console.log('[DASHBOARD] Full data loaded, updating...')
           setSummary(summaryData.summary)
           setStudents(studentsData.students)
@@ -357,6 +366,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
 
   const fetchMultiDeptStudents = async () => {
     const gen = ++multiFetchGen.current
+    multiActiveRef.current = true
     setLoading(true)
     setError(null)
 
@@ -405,6 +415,12 @@ function Dashboard({ user, department, onLogout, initialData }) {
       }
       console.log(`[DASHBOARD] Multi-dept: ${extraDepartments.length} dept(s) in ${batches.length} batch(es)`)
 
+      // Paint policy ("loads like the tree button, not one dept at a time"):
+      // batch 1 paints the table immediately so there's no dead spinner; the
+      // remaining batches buffer silently behind a progress counter (only
+      // the dept-chip bar grows per batch — cheap, non-disruptive), and the
+      // table/KPIs settle ONCE at the end. Per-batch full repaints made rows
+      // reshuffle, KPIs bounce, and pagination reset on every wave.
       for (let b = 0; b < batches.length; b++) {
         if (gen !== multiFetchGen.current) return  // superseded by a newer run
         const { auth, data } = await fetchBatch(batches[b])
@@ -412,8 +428,16 @@ function Dashboard({ user, department, onLogout, initialData }) {
         if (gen !== multiFetchGen.current) return
         if (data?.success) {
           mergeBatch(data)
-          pushMerged()
-          if (b === 0) setLoading(false)  // show data as soon as batch 1 lands
+          if (b === 0) {
+            pushMerged()
+            setLoading(false)  // show data as soon as batch 1 lands
+          } else {
+            setDepartmentMeta(Array.from(metaById.values()))
+          }
+          setMultiProgress({
+            loaded: Math.min((b + 1) * MULTI_BATCH_SIZE, extraDepartments.length),
+            total: extraDepartments.length,
+          })
         }
       }
 
@@ -442,6 +466,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
       }
 
       if (gen !== multiFetchGen.current) return
+      pushMerged()  // the single final settle — everything sorted, one repaint
       setLastSynced(new Date())
       const stillFailed = Array.from(metaById.values()).filter(m => m.status === 'error')
       if (stillFailed.length > 0) {
@@ -449,12 +474,17 @@ function Dashboard({ user, department, onLogout, initialData }) {
       }
     } catch (err) {
       if (gen !== multiFetchGen.current) return
-      // Keep whatever batches already rendered — a mid-run failure should
+      // Paint whatever batches accumulated — a mid-run failure should
       // degrade to partial data, not wipe the screen.
+      pushMerged()
       setError('Some departments failed to load. Sync will retry them.')
       console.error('[DASHBOARD] Multi-dept error:', err)
     } finally {
-      if (gen === multiFetchGen.current) setLoading(false)
+      if (gen === multiFetchGen.current) {
+        setLoading(false)
+        setMultiProgress(null)
+        multiActiveRef.current = false
+      }
     }
   }
 
@@ -812,6 +842,12 @@ function Dashboard({ user, department, onLogout, initialData }) {
 
       const summaryData = await summaryRes.json()
       const studentsData = await studentsRes.json()
+
+      // A multi-dept batch run owns the screen while active — this
+      // primary-only result would visibly SHRINK the merged list if it
+      // resolved mid-stream (the server-side cache warm still happened,
+      // which is all this call contributes in that case).
+      if (multiActiveRef.current) return
 
       if (summaryData.success) {
         setSummary(summaryData.summary)
@@ -1679,6 +1715,15 @@ function Dashboard({ user, department, onLogout, initialData }) {
                   }
                 </div>
                 <div className="flex items-center gap-3">
+                  {multiProgress && (
+                    <span className="text-xs text-gray-500 flex items-center gap-1.5">
+                      <svg className="animate-spin w-3 h-3" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
+                      </svg>
+                      Loading departments {multiProgress.loaded}/{multiProgress.total}…
+                    </span>
+                  )}
                   {extraDepartments.length > 0 && (
                     <button
                       onClick={handleClearDepartments}
