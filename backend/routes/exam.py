@@ -159,10 +159,12 @@ def get_exam_students():
         elif is_user_sheet:
             from google_sheets import fetch_user_exam_sheet
             sheet_students = fetch_user_exam_sheet(sheet_settings['sheet_id'], user_email)
-        elif is_admin:
-            sheet_students = fetch_exam_sheet()
         else:
-            # Multi-tenant guard: non-admin without a personal data source returns empty
+            # No personal data source connected → empty Exam tab for EVERYONE,
+            # admins included. The legacy admin Google Sheet (internal exam
+            # tracking) is RETIRED per the owner (2026-08-12): it only served
+            # a stale 400-student list that confused the tab on prod. Admin
+            # mode's remaining purpose is allowlist management, not exam data.
             sheet_students = []
 
         if not sheet_students:
@@ -1063,10 +1065,9 @@ def sync_exam_data():
             from google_sheets import invalidate_user_sheet_cache, fetch_user_exam_sheet
             invalidate_user_sheet_cache(user_email)
             sheet_students = fetch_user_exam_sheet(sheet_settings['sheet_id'], user_email)
-        elif is_admin:
-            invalidate_sheet_cache()
-            sheet_students = fetch_exam_sheet()
         else:
+            # Legacy admin-sheet sync RETIRED (see get_exam_students) — no
+            # personal data source means nothing to sync, admin or not.
             sheet_students = []
 
         return jsonify({
