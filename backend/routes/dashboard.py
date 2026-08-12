@@ -416,6 +416,32 @@ def _refresh_user_absorb_token():
                     pass
 
 
+def _proactive_refresh_if_expiring(threshold_minutes=20):
+    """Mint a fresh token BEFORE a big fan-out when the session token is
+    inside its final minutes of Absorb's 4h TTL.
+
+    A mid-load expiry 401-storms every dept and puts the whole recovery
+    machine on the user's critical path; refreshing up front is one quiet
+    mint with nothing to recover. Returns True if a mint happened (callers
+    count it as the request's single allowed mint). Never raises.
+    """
+    try:
+        user_data = session.get('user') if session else None
+        expires_raw = (user_data or {}).get('tokenExpiresAt')
+        if not expires_raw:
+            return False
+        expires_at = datetime.fromisoformat(str(expires_raw).replace('Z', ''))
+        remaining = (expires_at - datetime.utcnow()).total_seconds()
+        if remaining > threshold_minutes * 60:
+            return False
+        print(f"[TOKEN REFRESH] Proactive: token expires in {max(0, int(remaining // 60))}m "
+              f"(< {threshold_minutes}m) — refreshing before the fan-out")
+        return bool(_refresh_user_absorb_token())
+    except Exception as e:
+        print(f"[TOKEN REFRESH] Proactive check failed ({type(e).__name__}) — continuing with current token")
+        return False
+
+
 def _fetch_depts_collect(dept_ids, token, sequential=False):
     """Fetch several departments and collect (all_formatted, dept_meta).
 
@@ -823,6 +849,12 @@ def get_students_multi():
         # Always include user's own department
         all_dept_ids = [g.department_id] + valid_ids
 
+        # Proactive refresh: if the session token is inside its last 20
+        # minutes, mint ONCE now — before the fan-out — instead of letting
+        # a mid-load expiry 401-storm all depts and put recovery on the
+        # critical path. Users should never see the 4h TTL.
+        _proactively_minted = _proactive_refresh_if_expiring()
+
         # Fetch all departments in parallel. The refresh path inside
         # _fetch_depts_collect is now guarded by an in-process threading
         # lock + cross-process fcntl file lock (see _refresh_user_absorb_token)
@@ -854,7 +886,7 @@ def get_students_multi():
         # request provides the next fresh mint if it comes to that.
         import time as _t_rounds
         import random as _r_rounds
-        _minted = False
+        _minted = _proactively_minted  # a proactive mint counts as this request's one mint
         _rounds_t0 = _t_rounds.monotonic()
         _ROUNDS_BUDGET_SEC = 45  # Zombie fence: an F5 abandons the browser side
         # but this lambda keeps running (Flask can't see the disconnect), and
@@ -1011,6 +1043,10 @@ def sync_data():
         dept_name = g.user.get('departmentName', 'Unknown')
         print(f"[SYNC] Starting sync for {len(all_dept_ids)} department(s): {dept_name} ({g.department_id})")
 
+        # Mint proactively if the token is near its 4h TTL — see
+        # _proactive_refresh_if_expiring; counts as this request's one mint.
+        _sync_proactively_minted = _proactive_refresh_if_expiring()
+
         # Invalidate student caches (not exam cache - that's separate data)
         for dept_id in all_dept_ids:
             invalidate_cache(dept_id)
@@ -1055,7 +1091,7 @@ def sync_data():
         # stragglers or a competing minter, and another mint just amplifies.
         import time as _t_sync
         import random as _r_sync
-        _minted_sync = False
+        _minted_sync = _sync_proactively_minted  # proactive mint = this request's one mint
         _sync_rounds_t0 = _t_sync.monotonic()
         _SYNC_ROUNDS_BUDGET_SEC = 45  # zombie fence — same rationale as /students/multi
         for _round in range(1, 4):

@@ -511,7 +511,48 @@ function Dashboard({ user, department, onLogout, initialData }) {
       setLastSynced(new Date())
       const stillFailed = Array.from(metaById.values()).filter(m => m.status === 'error')
       if (stillFailed.length > 0) {
-        setDeptError(`Could not load ${stillFailed.length} department(s): ${stillFailed.map(d => d.error || d.id).join(', ')}`)
+        const expiredLeft = stillFailed.filter(m => /session expired|authoriz/i.test(m.error || ''))
+        if (expiredLeft.length === stillFailed.length) {
+          // Token-turbulence residue — never show users a "Session expired"
+          // wall. Keep healing quietly in the background (15s/30s/60s) and
+          // only escalate to an actionable message if every pass loses.
+          setDeptError(`${stillFailed.length} department(s) still syncing — retrying automatically…`)
+          ;(async () => {
+            for (const delay of [15000, 30000, 60000]) {
+              await new Promise(r => setTimeout(r, delay))
+              if (gen !== multiFetchGen.current) return
+              const ids = listExpired()
+              if (ids.length === 0) { setDeptError(''); return }
+              try {
+                const { auth, data } = await fetchBatch(ids)
+                if (auth) { onLogout(); return }
+                if (data?.success && gen === multiFetchGen.current) {
+                  for (const m of (data.departments || [])) {
+                    if (m.id) metaById.set(m.id, m)
+                  }
+                  mergeBatch(data)
+                  pushMerged()
+                  const left = listExpired()
+                  if (left.length === 0) {
+                    setDeptError('')
+                    setLastSynced(new Date())
+                    return
+                  }
+                  setDeptError(`${left.length} department(s) still syncing — retrying automatically…`)
+                }
+              } catch (e) {
+                console.error('[DASHBOARD] Background heal pass failed:', e)
+              }
+            }
+            if (gen === multiFetchGen.current && listExpired().length > 0) {
+              setDeptError(`${listExpired().length} department(s) could not load — press Sync to retry.`)
+            }
+          })()
+        } else {
+          // Real (non-token) failures: one concise line, not a repeated wall.
+          const firstErr = stillFailed[0].error || stillFailed[0].id
+          setDeptError(`Could not load ${stillFailed.length} department(s): ${firstErr}${stillFailed.length > 1 ? ` (+${stillFailed.length - 1} more)` : ''}`)
+        }
       }
     } catch (err) {
       if (gen !== multiFetchGen.current) return
