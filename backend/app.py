@@ -122,6 +122,24 @@ def create_app():
         return response
 
     # Error handlers
+    from absorb_api import AbsorbAPIError
+
+    @app.errorhandler(AbsorbAPIError)
+    def absorb_error(error):
+        """Map uncaught AbsorbAPIError to its real status instead of a 500.
+
+        Since data routes stopped minting (single mint authority), a route
+        whose same-token retries fail raises AbsorbAPIError(401) out of the
+        decorator. Routes without their own except-blocks (e.g. /dept-tree)
+        let it reach Flask — which turned it into a generic 500, so the
+        frontend's 401→refresh→retry healing never engaged ("Internal
+        server error" on Load Dept Tree, 2026-08-12).
+        """
+        return jsonify({
+            'success': False,
+            'error': str(getattr(error, 'message', None) or error),
+        }), getattr(error, 'status_code', None) or 500
+
     @app.errorhandler(404)
     def not_found(error):
         return jsonify({

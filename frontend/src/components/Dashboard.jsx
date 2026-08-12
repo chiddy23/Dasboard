@@ -735,7 +735,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
     setTreeLoading(true)
     setDeptError('')
     try {
-      const res = await fetch(`${API_BASE}/dashboard/dept-tree`, { credentials: 'include' })
+      const res = await fetchWithAuthRetry(`${API_BASE}/dashboard/dept-tree`, { credentials: 'include' })
       const data = await res.json()
       if (!data.success) {
         setDeptError(data.error || 'Failed to load department tree')
