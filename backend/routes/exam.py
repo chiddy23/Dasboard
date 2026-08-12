@@ -415,6 +415,12 @@ def get_exam_students():
         })
 
     except AbsorbAPIError as e:
+        # Re-raise 401s so @absorb_retry_on_401's same-token retries run and
+        # an exhausted 401 reaches the client as a REAL 401 (app-level
+        # handler) for the frontend's refresh+retry healing — matches
+        # dashboard.py. Catching it here made the decorator a no-op.
+        if e.status_code == 401:
+            raise
         return jsonify({
             'success': False,
             'error': str(e.message)
@@ -1149,6 +1155,29 @@ def get_allowlist():
         return jsonify({'success': False, 'error': 'Failed to load allowlist'}), 500
 
 
+def _allowlist_sheet_write_safe():
+    """The durable allowlist sheet may only be OVERWRITTEN from a DB that has
+    successfully hydrated FROM it. Otherwise an early-boot admin edit (all
+    workers' hydrations failed) rewrites the sheet with only the local rows,
+    and the next successful hydration's reconcile then deactivates every real
+    client — the 2026-08-12 promotion review's client-lockout NO-GO. Attempts
+    one re-hydration when needed; returns True when the sheet write may
+    proceed. On False the caller keeps the change local (sheetSaved: false —
+    the admin UI already surfaces that honestly)."""
+    import snapshot_db as _sdb
+    if getattr(_sdb, 'ALLOWLIST_HYDRATED', False):
+        return True
+    try:
+        _sdb.load_allowlist_from_sheet()
+    except Exception as e:
+        print(f"[ALLOWLIST] Guard re-hydration failed ({type(e).__name__}: {e})")
+    safe = bool(getattr(_sdb, 'ALLOWLIST_HYDRATED', False))
+    if not safe:
+        print("[ALLOWLIST] Sheet write REFUSED — DB never hydrated from the sheet; "
+              "overwriting now could wipe real users and lock clients out on next hydration")
+    return safe
+
+
 @exam_bp.route('/allowlist/add', methods=['POST'])
 @login_required
 def add_to_allowlist():
@@ -1173,6 +1202,10 @@ def add_to_allowlist():
     try:
         from snapshot_db import get_allowlist_count, add_allowed_user, save_allowlist_to_sheet, get_all_allowed_users
 
+        # Wipe guard — MUST run before the mutation (a re-hydration after
+        # the add would reconcile-deactivate the just-added row).
+        sheet_write_safe = _allowlist_sheet_write_safe()
+
         was_empty = get_allowlist_count() == 0
         if was_empty and email != admin_email and admin_email:
             add_allowed_user(admin_email, name=admin_email.split('@')[0].title(), added_by='system-auto')
@@ -1181,7 +1214,7 @@ def add_to_allowlist():
         add_allowed_user(email, name=name, added_by=admin_email)
         print(f"[ALLOWLIST] Added {email} by {admin_email}")
 
-        sheet_saved = save_allowlist_to_sheet()
+        sheet_saved = save_allowlist_to_sheet() if sheet_write_safe else False
 
         return jsonify({
             'success': True,
@@ -1214,11 +1247,14 @@ def remove_from_allowlist():
     try:
         from snapshot_db import remove_allowed_user, save_allowlist_to_sheet, get_all_allowed_users
 
+        # Wipe guard — before the mutation, same rationale as /allowlist/add.
+        sheet_write_safe = _allowlist_sheet_write_safe()
+
         removed = remove_allowed_user(email)
         print(f"[ALLOWLIST] Removed {email}" if removed
               else f"[ALLOWLIST] Remove no-op — {email} was not on the active list")
 
-        sheet_saved = save_allowlist_to_sheet()
+        sheet_saved = save_allowlist_to_sheet() if sheet_write_safe else False
 
         remaining = get_all_allowed_users()
         warnings = []

@@ -67,7 +67,6 @@ def absorb_retry_on_401(f):
     @wraps(f)
     def wrapper(*args, **kwargs):
         from absorb_api import AbsorbAPIError
-        from routes.dashboard import _refresh_user_absorb_token
 
         # Phase 1: inline retries with same token (no /Authenticate).
         # Jittered exponential: 0.8s, 1.6s (+0-0.4s jitter each) — a transient

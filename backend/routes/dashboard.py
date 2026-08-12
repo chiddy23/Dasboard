@@ -276,21 +276,20 @@ def _refresh_user_absorb_token():
     with _active_logins_lock:
         still_active = uname_key_check in _active_user_logins
     if not still_active:
-        if os.environ.get('SERVERLESS', '').lower() in ('1', 'true', 'yes'):
-            # Serverless: _active_user_logins is per-instance and starts EMPTY
-            # on every fresh instance, so absence proves nothing about whether
-            # the user is logged in. The signed session cookie that carried
-            # this request past @login_required is the real evidence of an
-            # active login. The zombie this guard exists to stop — a retry
-            # loop from a PRIOR session still cycling inside a long-running
-            # process — cannot survive an instance boundary, so the guard's
-            # premise doesn't apply here. Register the user and proceed.
-            with _active_logins_lock:
-                _active_user_logins.add(uname_key_check)
-            print(f'[TOKEN REFRESH] Serverless — registering {uname_key_check} as active on this instance (cookie session is proof of login)')
-        else:
-            print(f'[TOKEN REFRESH] Skipping refresh — user {uname_key_check} is no longer logged in (zombie request)')
-            return False
+        # _active_user_logins is PER-PROCESS: on multi-worker Render only the
+        # worker that served /login has the entry (a refresh landing on any of
+        # the other 3 workers would be refused — the 2026-08-12 promotion
+        # review's NO-GO finding), and on serverless every fresh instance
+        # starts empty. Absence proves nothing. The session that carried this
+        # request past @login_required is the real evidence of an active
+        # login. The zombie this guard existed to stop — a data-request retry
+        # loop minting after logout — is structurally gone: data routes
+        # cannot mint at all (single mint authority), and logout clears the
+        # session so true zombies fail @login_required at the door.
+        # Register and proceed, in every environment.
+        with _active_logins_lock:
+            _active_user_logins.add(uname_key_check)
+        print(f'[TOKEN REFRESH] Registering {uname_key_check} as active on this process (session is proof of login)')
 
     lock_path = _refresh_lock_path(username)
     lock_file = None
@@ -313,6 +312,38 @@ def _refresh_user_absorb_token():
                 lock_file = None
 
         try:
+            # CROSS-PROCESS CAS (authoritative): a shared per-user state file
+            # written under this same flock. Per-process dicts and the
+            # request-scoped session can never see another WORKER's mint
+            # (Flask-Session saves at end-of-request, after the flock is
+            # released — re-reading the session store here has a timing hole,
+            # per the 2026-08-12 promotion review). The state file is written
+            # inside the locked region, so whatever we read here under the
+            # lock is the newest mint across all workers. Adopt it instead of
+            # minting again — the mint that follows would revoke it.
+            import json as _json
+            import time as _t_cas
+            _cas_path = _refresh_lock_path(username) + '.state'
+            try:
+                with open(_cas_path, 'r', encoding='utf-8') as _cf:
+                    _cas = _json.load(_cf) or {}
+                _cas_token = _cas.get('token')
+                _cas_age = _t_cas.time() - float(_cas.get('mintedAt') or 0)
+                if (_cas_token and _cas_token != entry_token
+                        and 0 <= _cas_age < 3.5 * 3600):
+                    current_user_data = session.get('user') or {}
+                    current_user_data['token'] = _cas_token
+                    session['user'] = current_user_data
+                    session.modified = True
+                    g.absorb_token = _cas_token
+                    _latest_user_tokens[(username or '').lower().strip()] = _cas_token
+                    print(f'[TOKEN REFRESH] CAS hit (cross-process state file, age {int(_cas_age)}s) — adopting sibling worker\'s token')
+                    return True
+            except FileNotFoundError:
+                pass
+            except Exception as _cas_e:
+                print(f'[TOKEN REFRESH] CAS state file read failed ({type(_cas_e).__name__}) — continuing')
+
             # CAS: re-read the session inside the lock. If another worker
             # already refreshed while we waited, the session token has
             # changed — reuse it without minting another.
@@ -411,6 +442,15 @@ def _refresh_user_absorb_token():
             # Stamp the mint time for the debounce arm above. Use monotonic so
             # NTP jumps can't accidentally suppress refreshes.
             _last_mint_at[(username or '').lower().strip()] = _t_dbnc.monotonic()
+            # Publish to the CROSS-PROCESS state file while still holding the
+            # flock — this is what lets the other gunicorn workers adopt this
+            # token instead of minting their own and revoking it (see the CAS
+            # read at the top of this locked region).
+            try:
+                with open(_cas_path, 'w', encoding='utf-8') as _cf:
+                    _json.dump({'token': new_token, 'mintedAt': _t_cas.time()}, _cf)
+            except Exception as _cas_we:
+                print(f'[TOKEN REFRESH] CAS state file write failed ({type(_cas_we).__name__}) — cross-process reuse degraded')
             print(f'[TOKEN REFRESH] Refreshed Absorb token for {username} (locked)')
             return True
         finally:

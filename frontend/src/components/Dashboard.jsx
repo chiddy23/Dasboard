@@ -1080,7 +1080,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
       const exportUrl = extraDepartments.length > 0
         ? `${API_BASE}/dashboard/export?departments=${encodeURIComponent(extraDepartments.join(','))}`
         : `${API_BASE}/dashboard/export`
-      const response = await fetch(exportUrl, {
+      const response = await fetchWithAuthRetry(exportUrl, {
         credentials: 'include'
       })
 
@@ -1292,7 +1292,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
 
   const handleUpdateResult = async (email, result) => {
     try {
-      const res = await fetch(`${API_BASE}/exam/update-result`, {
+      const res = await fetchWithAuthRetry(`${API_BASE}/exam/update-result`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -1325,7 +1325,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
 
   const handleUpdateExamDate = async (email, newDate, newTime) => {
     try {
-      const res = await fetch(`${API_BASE}/exam/update-date`, {
+      const res = await fetchWithAuthRetry(`${API_BASE}/exam/update-date`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -1374,7 +1374,7 @@ function Dashboard({ user, department, onLogout, initialData }) {
 
   const handleUpdateStudentContact = async (studentId, contactData) => {
     try {
-      const res = await fetch(`${API_BASE}/students/${studentId}`, {
+      const res = await fetchWithAuthRetry(`${API_BASE}/students/${studentId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
