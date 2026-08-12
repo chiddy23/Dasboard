@@ -133,12 +133,18 @@ def get_cached_students(department_id, token):
             reverse=False
         )
 
-        # Store in cache
-        _student_cache[department_id] = {
-            'data': students,
-            'formatted': formatted_students,
-            'timestamp': datetime.utcnow()
-        }
+        # Store in cache — but NEVER cache a PARTIAL fetch (bucket 401'd past
+        # the paced retry during a token war). A cached partial serves a huge
+        # dept as ~0 students for 5 minutes; leaving it uncached lets the next
+        # request (sweep/Sync/reload) refetch the full set instead.
+        if getattr(client, 'last_fetch_partial', False):
+            print(f"[CACHE] PARTIAL fetch for {department_id} — returning uncached so the next request refetches")
+        else:
+            _student_cache[department_id] = {
+                'data': students,
+                'formatted': formatted_students,
+                'timestamp': datetime.utcnow()
+            }
 
         return students, formatted_students
     finally:
@@ -1009,6 +1015,19 @@ def sync_data():
         for dept_id in all_dept_ids:
             invalidate_cache(dept_id)
 
+        # Serverless-scale Sync: a 70-dept sequential sync in ONE lambda
+        # outlives every router ceiling on Vercel, and the orphaned lambda
+        # then wars over the account token with every subsequent reload
+        # (2026-08-12: user hit Sync at 70 depts → next reload lost 40
+        # depts to the sync zombie's mint). With invalidateOnly the server
+        # clears EVERY dept cache but fetches only the primary; the
+        # frontend re-streams the extras through the batched multi loader —
+        # bounded requests, zombie-fenced, war-resistant.
+        if data.get('invalidateOnly') and len(all_dept_ids) > 1:
+            print(f"[SYNC] invalidateOnly: cleared {len(all_dept_ids)} dept cache(s); "
+                  f"fetching primary only — frontend re-streams extras batched")
+            all_dept_ids = [g.department_id]
+
         # Sync forces sequential dept fetching. Unlike /students/multi (which
         # has cache hits for most depts and only cold-fetches the new ones),
         # Sync invalidates ALL caches at once and forces a full re-fetch of
@@ -1037,9 +1056,14 @@ def sync_data():
         import time as _t_sync
         import random as _r_sync
         _minted_sync = False
+        _sync_rounds_t0 = _t_sync.monotonic()
+        _SYNC_ROUNDS_BUDGET_SEC = 45  # zombie fence — same rationale as /students/multi
         for _round in range(1, 4):
             expired_ids = _expired_dept_ids(dept_meta)
             if not expired_ids:
+                break
+            if _t_sync.monotonic() - _sync_rounds_t0 > _SYNC_ROUNDS_BUDGET_SEC:
+                print(f"[SYNC DIAG] Rounds budget ({_SYNC_ROUNDS_BUDGET_SEC}s) exhausted — returning {len(expired_ids)} dept(s) as expired")
                 break
             _all_dead = len(expired_ids) >= len(all_dept_ids)
             if not _minted_sync and (_all_dead or _round >= 2):

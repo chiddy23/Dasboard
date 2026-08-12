@@ -915,8 +915,13 @@ function Dashboard({ user, department, onLogout, initialData }) {
     setError(null)
 
     try {
+      // With extras, Sync asks the server to invalidate every dept cache but
+      // fetch only the primary — a 70-dept sequential sync in one request
+      // outlives Vercel's router and its orphaned lambda then wars over the
+      // account token with the next reload. The extras re-stream through the
+      // batched loader below (bounded, zombie-fenced).
       const body = extraDepartments.length > 0
-        ? JSON.stringify({ extraDepartments })
+        ? JSON.stringify({ extraDepartments, invalidateOnly: true })
         : undefined
 
       const response = await fetch(`${API_BASE}/dashboard/sync`, {
@@ -938,6 +943,18 @@ function Dashboard({ user, department, onLogout, initialData }) {
       const data = await response.json()
 
       if (data.success) {
+        if (extraDepartments.length > 0) {
+          // invalidateOnly path: server cleared all dept caches + refreshed
+          // the primary. Re-stream everything through the batched loader —
+          // it owns the merge, the progress counter, and the sweep retries.
+          setLastSynced(new Date())
+          if (examLoaded) {
+            setExamLoaded(false)
+            if (activeTab === 'exam') fetchExamData()
+          }
+          fetchMultiDeptStudents()
+          return
+        }
         // Silent auto-retry on PARTIAL failures only — see fetchMultiDeptStudents.
         // Same gate: at least one dept ok AND at least one expired-error AND
         // we haven't retried. NOT on count==0 (legitimate empty).
