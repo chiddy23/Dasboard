@@ -538,6 +538,10 @@ def update_student_contact(student_id):
         })
 
     except AbsorbAPIError as e:
+        # Re-raise 401s so the decorator's same-token retries run and an
+        # exhausted 401 reaches the client as a real 401 for authFetch healing.
+        if e.status_code == 401:
+            raise
         return jsonify({
             'success': False,
             'error': str(e.message)
