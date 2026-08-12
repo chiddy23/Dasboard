@@ -198,24 +198,40 @@ function Dashboard({ user, department, onLogout, initialData }) {
     if (!user?.email) return
     const lsKey = `ji_extra_depts_${(user.email || '').toLowerCase()}`
     const loadDeptPrefs = async () => {
-      let loaded = []
+      // UNION the server list with the localStorage mirror. The server copy
+      // lives in per-instance storage on Vercel — different instances hold
+      // different stale versions, so "server wins" let whichever instance
+      // answered SHRINK the list and then the save-back effect overwrote
+      // the good mirror with the stale copy (the 853/860/1094-student
+      // roulette of 2026-08-12: each login adopted a different partial
+      // list, loaded it fully, and honestly said "done"). Union never
+      // loses entries and the save-back heals the answering instance.
+      // Clear All still empties both copies — that's an explicit save of
+      // [], not this login-time merge.
+      let serverList = []
       try {
         const res = await fetch(`${API_BASE}/dashboard/dept-prefs`, { credentials: 'include' })
         if (res.ok) {
           const data = await res.json()
-          if (data.success && data.departmentIds?.length > 0) {
-            loaded = data.departmentIds
+          if (data.success && Array.isArray(data.departmentIds)) {
+            serverList = data.departmentIds
           }
         }
       } catch (err) { console.error('[DEPT] Failed to load dept prefs:', err) }
-      if (loaded.length === 0) {
-        try {
-          const cached = JSON.parse(localStorage.getItem(lsKey) || '[]')
-          if (Array.isArray(cached) && cached.length > 0) {
-            loaded = cached
-            console.log(`[DEPT] Restored ${cached.length} dept(s) from localStorage (backend prefs empty)`)
-          }
-        } catch { /* corrupted localStorage — ignore */ }
+      let mirror = []
+      try {
+        const cached = JSON.parse(localStorage.getItem(lsKey) || '[]')
+        if (Array.isArray(cached)) mirror = cached
+      } catch { /* corrupted localStorage — ignore */ }
+      const seenIds = new Set()
+      let loaded = []
+      for (const id of [...serverList, ...mirror]) {
+        const k = (typeof id === 'string' ? id : '').toLowerCase()
+        if (k && !seenIds.has(k)) { seenIds.add(k); loaded.push(id) }
+      }
+      loaded = loaded.slice(0, MAX_EXTRA_DEPTS)
+      if (mirror.length > serverList.length) {
+        console.log(`[DEPT] Union restored ${loaded.length} dept(s) (server had ${serverList.length}, mirror had ${mirror.length})`)
       }
       deptPrefsLoaded.current = true
       if (loaded.length > 0) {
