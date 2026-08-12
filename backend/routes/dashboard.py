@@ -834,16 +834,27 @@ def get_students_multi():
         # settles once the big fetches finish. Up to 3 rounds, each with a
         # jittered pause so a competing minter can finish first; each round
         # only refetches the still-failed depts (sequential, cheap).
+        import time as _t_rounds
+        import random as _r_rounds
         for _round in range(1, 4):
             expired_ids = _expired_dept_ids(dept_meta)
             if not expired_ids:
                 break
-            if not _refresh_user_absorb_token():
-                break
-            import time as _t_rounds
-            import random as _r_rounds
-            _t_rounds.sleep(0.6 + _r_rounds.uniform(0, 0.4))
-            print(f"[MULTI-DEPT] Retry round {_round}: {len(expired_ids)} dept(s) after token refresh")
+            if _round == 1:
+                # Round 1 retries with the SAME token — no mint. Transient
+                # throttle-401s clear within ~1s (the gateway bucket refills
+                # every second), and minting on the first failure REVOKES a
+                # healthy token, manufacturing the next round's failures
+                # (mint amplification — the Absorb guide's "refresh only on
+                # a 401, never request a new token per call" warning). Only
+                # rounds 2+ mint, once the token has provably stopped working.
+                _t_rounds.sleep(0.8 + _r_rounds.uniform(0, 0.4))
+                print(f"[MULTI-DEPT] Round 1: retrying {len(expired_ids)} dept(s) with the SAME token (no mint)")
+            else:
+                if not _refresh_user_absorb_token():
+                    break
+                _t_rounds.sleep(0.6 + _r_rounds.uniform(0, 0.4))
+                print(f"[MULTI-DEPT] Round {_round}: retrying {len(expired_ids)} dept(s) after token refresh")
             for dept_id in expired_ids:
                 invalidate_cache(dept_id)
             dept_meta = [m for m in dept_meta if m.get('id') not in expired_ids]
@@ -993,29 +1004,43 @@ def sync_data():
         # not.
         all_formatted, dept_meta = _fetch_depts_collect(all_dept_ids, g.absorb_token, sequential=True)
 
-        expired_ids = _expired_dept_ids(dept_meta)
         _ok_ids = [m.get('id') for m in dept_meta if m.get('status') == 'ok']
-        print(f"[SYNC DIAG] Initial fan-out done: {len(_ok_ids)} ok, {len(expired_ids)} expired → expired_ids={expired_ids}")
-        if expired_ids:
-            _refresh_ok = _refresh_user_absorb_token()
-            print(f"[SYNC DIAG] Refresh attempt returned: {_refresh_ok}")
-            if _refresh_ok:
-                print(f"[SYNC] Retrying {len(expired_ids)} dept(s) after token refresh — new g.absorb_token prefix={(g.absorb_token or '')[:8]}")
-                # Invalidate any caches touched by the failed attempts
-                for dept_id in expired_ids:
-                    invalidate_cache(dept_id)
-                # Drop the expired error entries, keep successful ones
-                dept_meta = [m for m in dept_meta if m.get('id') not in expired_ids]
-                retry_formatted, retry_meta = _fetch_depts_collect(expired_ids, g.absorb_token, sequential=True)
-                all_formatted.extend(retry_formatted)
-                dept_meta.extend(retry_meta)
-                # Post-retry counts so we can see if the retry round itself
-                # recovered everything, partially, or not at all.
-                _retry_ok = sum(1 for m in retry_meta if m.get('status') == 'ok')
-                _retry_err = sum(1 for m in retry_meta if m.get('status') == 'error')
-                print(f"[SYNC DIAG] Retry results: {_retry_ok} ok, {_retry_err} still failed")
+        print(f"[SYNC DIAG] Initial fan-out done: {len(_ok_ids)} ok, "
+              f"{len(_expired_dept_ids(dept_meta))} expired → expired_ids={_expired_dept_ids(dept_meta)}")
+
+        # Retry rounds — round 1 with the SAME token (no mint), rounds 2-3
+        # with a refresh. Transient throttle-401s clear within ~1s; minting
+        # on the first failure revokes a healthy token and manufactures the
+        # next round's failures (mint amplification). Mirrors the
+        # /students/multi rounds.
+        import time as _t_sync
+        import random as _r_sync
+        for _round in range(1, 4):
+            expired_ids = _expired_dept_ids(dept_meta)
+            if not expired_ids:
+                break
+            if _round == 1:
+                _t_sync.sleep(0.8 + _r_sync.uniform(0, 0.4))
+                print(f"[SYNC DIAG] Round 1: retrying {len(expired_ids)} dept(s) with the SAME token (no mint)")
             else:
-                print(f"[SYNC DIAG] Refresh failed — keeping the {len(expired_ids)} expired entries as errors. Check earlier [TOKEN REFRESH] lines for cause (no creds / zombie / Absorb rejected).")
+                _refresh_ok = _refresh_user_absorb_token()
+                print(f"[SYNC DIAG] Round {_round}: refresh attempt returned: {_refresh_ok}")
+                if not _refresh_ok:
+                    print(f"[SYNC DIAG] Refresh failed — keeping the {len(expired_ids)} expired entries as errors. Check earlier [TOKEN REFRESH] lines for cause (no creds / zombie / Absorb rejected).")
+                    break
+                _t_sync.sleep(0.6 + _r_sync.uniform(0, 0.4))
+                print(f"[SYNC] Retrying {len(expired_ids)} dept(s) after token refresh — new g.absorb_token prefix={(g.absorb_token or '')[:8]}")
+            # Invalidate any caches touched by the failed attempts
+            for dept_id in expired_ids:
+                invalidate_cache(dept_id)
+            # Drop the expired error entries, keep successful ones
+            dept_meta = [m for m in dept_meta if m.get('id') not in expired_ids]
+            retry_formatted, retry_meta = _fetch_depts_collect(expired_ids, g.absorb_token, sequential=True)
+            all_formatted.extend(retry_formatted)
+            dept_meta.extend(retry_meta)
+            _retry_ok = sum(1 for m in retry_meta if m.get('status') == 'ok')
+            _retry_err = sum(1 for m in retry_meta if m.get('status') == 'error')
+            print(f"[SYNC DIAG] Round {_round} results: {_retry_ok} ok, {_retry_err} still failed")
 
         # Sort
         all_formatted.sort(
