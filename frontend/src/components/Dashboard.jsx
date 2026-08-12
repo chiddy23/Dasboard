@@ -122,11 +122,17 @@ function Dashboard({ user, department, onLogout, initialData }) {
   const [examReadinessFilter, setExamReadinessFilter] = useState('all')
   const [examDaysFilter, setExamDaysFilter] = useState('all')
 
-  // Fetch data on mount only if no initial data provided
+  // On mount WITHOUT initialData (page reload with a live session), do NOT
+  // fetch here — the dept-prefs loader below drives the initial fetch after
+  // prefs resolve, picking exactly ONE path: batched multi when extras
+  // exist, primary-only otherwise. Firing the primary fetch here as well
+  // duplicated it (the dept-length effect's initial run fires it too) and
+  // raced it against the batch stream on a cold instance — the slowest
+  // loser timed out and threw "Failed to load dashboard data" over a
+  // healthy batch load.
   useEffect(() => {
     if (!initialData) {
-      console.log('[DASHBOARD] Component mounted, fetching data...')
-      fetchDashboardData()
+      console.log('[DASHBOARD] Mounted without initial data — waiting for dept prefs to pick the load path')
     } else {
       console.log('[DASHBOARD] Using pre-fetched data')
       // If we got quick data, load full data in background
@@ -168,8 +174,16 @@ function Dashboard({ user, department, onLogout, initialData }) {
           }
         } catch { /* corrupted localStorage — ignore */ }
       }
-      if (loaded.length > 0) setExtraDepartments(loaded)
       deptPrefsLoaded.current = true
+      if (loaded.length > 0) {
+        // Setting extras triggers the dept-length effect → batched multi
+        // load (batch 1 includes the primary dept, so nothing is missed).
+        setExtraDepartments(loaded)
+      } else if (!initialData) {
+        // No extras and no login-time prefetch — this is the one path where
+        // the primary-only fetch is the right (and only) loader.
+        fetchDashboardData()
+      }
     }
     loadDeptPrefs()
   }, [user?.email])
@@ -253,6 +267,17 @@ function Dashboard({ user, department, onLogout, initialData }) {
     if (extraDepartments.length > 0) {
       fetchMultiDeptStudents()
     } else {
+      // This effect also runs once on mount with length 0 — before the
+      // dept prefs have resolved. Firing the primary fetch then would race
+      // (and duplicate) whichever loader the prefs loader picks. Only act
+      // on a REAL transition back to single-dept (e.g. Clear All).
+      if (!deptPrefsLoaded.current) return
+      // Cancel any in-flight batch run and release its screen ownership —
+      // a superseded run's finally skips the reset, so without this the
+      // primary fetch below would be blocked from writing state forever.
+      multiFetchGen.current++
+      multiActiveRef.current = false
+      setMultiProgress(null)
       // Reset department meta and filter when going back to single dept
       setDepartmentMeta([])
       setStudentDeptFilter([])
@@ -859,6 +884,9 @@ function Dashboard({ user, department, onLogout, initialData }) {
 
       setLastSynced(new Date())
     } catch (err) {
+      // Never paint this banner over an active batch run — its data is
+      // healthy; this primary-only call failing is irrelevant to the user.
+      if (multiActiveRef.current) return
       setError('Failed to load dashboard data. Please try again.')
       console.error('Dashboard error:', err)
     } finally {
